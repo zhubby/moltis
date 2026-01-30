@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
 <script>
 tailwind.config = {
   theme: {
@@ -28,32 +29,6 @@ tailwind.config = {
   },
 }
 </script>
-<style>
-  body { background: #0a0a0f; }
-  /* Gradient mesh hero background */
-  .hero-bg {
-    background:
-      radial-gradient(ellipse 60% 50% at 50% 0%, rgba(124,110,240,0.12) 0%, transparent 70%),
-      radial-gradient(ellipse 40% 40% at 20% 20%, rgba(91,82,196,0.08) 0%, transparent 60%),
-      radial-gradient(ellipse 40% 40% at 80% 30%, rgba(52,211,153,0.06) 0%, transparent 60%);
-  }
-  /* Subtle glow on feature cards */
-  .card-glow:hover {
-    box-shadow: 0 0 24px rgba(124,110,240,0.08), 0 1px 3px rgba(0,0,0,0.3);
-  }
-  /* Animated gradient border on hero CTA */
-  .gradient-border {
-    background: linear-gradient(135deg, #7c6ef0, #34d399, #7c6ef0);
-    background-size: 200% 200%;
-    animation: shimmer 4s ease infinite;
-  }
-  @keyframes shimmer {
-    0%, 100% { background-position: 0% 50%; }
-    50% { background-position: 100% 50%; }
-  }
-  /* Smooth table row highlight */
-  .roadmap-row:hover td { background: rgba(124,110,240,0.04); }
-</style>
 </head>
 <body class="font-sans text-txt antialiased">
 
@@ -66,7 +41,7 @@ tailwind.config = {
       <a href="#providers" class="text-sm font-medium text-txt-muted hover:text-txt-strong transition-colors">Providers</a>
       <a href="#architecture" class="text-sm font-medium text-txt-muted hover:text-txt-strong transition-colors">Architecture</a>
       <a href="#roadmap" class="text-sm font-medium text-txt-muted hover:text-txt-strong transition-colors">Roadmap</a>
-      <a href="https://github.com/nichochar/moltis" class="text-sm font-medium text-txt-muted hover:text-txt-strong transition-colors flex items-center gap-1.5">
+      <a href="https://github.com/penso/moltis" class="text-sm font-medium text-txt-muted hover:text-txt-strong transition-colors flex items-center gap-1.5">
         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .3a12 12 0 00-3.8 23.38c.6.1.83-.26.83-.57v-2.23c-3.34.73-4.04-1.42-4.04-1.42a3.18 3.18 0 00-1.33-1.76c-1.09-.74.08-.73.08-.73a2.52 2.52 0 011.84 1.24 2.56 2.56 0 003.49 1 2.56 2.56 0 01.76-1.61c-2.67-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 011.24-3.22 4.3 4.3 0 01.12-3.18s1-.32 3.3 1.23a11.38 11.38 0 016 0c2.28-1.55 3.29-1.23 3.29-1.23a4.3 4.3 0 01.12 3.18 4.64 4.64 0 011.23 3.22c0 4.61-2.81 5.63-5.48 5.92a2.86 2.86 0 01.82 2.23v3.29c0 .31.22.68.83.56A12 12 0 0012 .3"/></svg>
         GitHub
       </a>
@@ -427,7 +402,7 @@ tailwind.config = {
 <footer class="border-t border-bdr py-10">
   <div class="max-w-5xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
     <span class="text-sm text-txt-muted">moltis &mdash; built with Rust</span>
-    <a href="https://github.com/nichochar/moltis" class="text-sm text-txt-muted hover:text-txt-strong transition-colors flex items-center gap-1.5">
+    <a href="https://github.com/penso/moltis" class="text-sm text-txt-muted hover:text-txt-strong transition-colors flex items-center gap-1.5">
       <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .3a12 12 0 00-3.8 23.38c.6.1.83-.26.83-.57v-2.23c-3.34.73-4.04-1.42-4.04-1.42a3.18 3.18 0 00-1.33-1.76c-1.09-.74.08-.73.08-.73a2.52 2.52 0 011.84 1.24 2.56 2.56 0 003.49 1 2.56 2.56 0 01.76-1.61c-2.67-.3-5.47-1.33-5.47-5.93a4.64 4.64 0 011.24-3.22 4.3 4.3 0 01.12-3.18s1-.32 3.3 1.23a11.38 11.38 0 016 0c2.28-1.55 3.29-1.23 3.29-1.23a4.3 4.3 0 01.12 3.18 4.64 4.64 0 011.23 3.22c0 4.61-2.81 5.63-5.48 5.92a2.86 2.86 0 01.82 2.23v3.29c0 .31.22.68.83.56A12 12 0 0012 .3"/></svg>
       GitHub
     </a>
