@@ -26,6 +26,22 @@
   // Session token usage tracking (cumulative for the current session)
   var sessionTokens = { input: 0, output: 0 };
 
+  // ── Shared icons ─────────────────────────────────────────────
+  function makeTelegramIcon() {
+    var ns = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.5");
+    var path = document.createElementNS(ns, "path");
+    path.setAttribute("d", "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z");
+    svg.appendChild(path);
+    return svg;
+  }
+
   // ── Theme ────────────────────────────────────────────────────
   function getSystemTheme() {
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -453,7 +469,27 @@
 
       var label = document.createElement("div");
       label.className = "session-label";
-      label.textContent = s.label || s.key;
+      label.style.display = "flex";
+      label.style.alignItems = "center";
+      label.style.gap = "5px";
+      if (s.channelBinding) {
+        try {
+          var binding = JSON.parse(s.channelBinding);
+          if (binding.channel_type === "telegram") {
+            var iconWrap = document.createElement("span");
+            iconWrap.style.display = "inline-flex";
+            iconWrap.style.alignItems = "center";
+            iconWrap.style.color = s.activeChannel ? "var(--accent)" : "var(--muted)";
+            iconWrap.style.opacity = s.activeChannel ? "1" : "0.5";
+            iconWrap.title = s.activeChannel ? "Active Telegram session" : "Telegram session (inactive)";
+            iconWrap.appendChild(makeTelegramIcon());
+            label.appendChild(iconWrap);
+          }
+        } catch (e) { /* ignore bad JSON */ }
+      }
+      var labelText = document.createElement("span");
+      labelText.textContent = s.label || s.key;
+      label.appendChild(labelText);
       info.appendChild(label);
 
       var meta = document.createElement("div");
@@ -3061,21 +3097,6 @@
   var channelModalBody = $("channelModalBody");
   var channelModalClose = $("channelModalClose");
 
-  function makeTelegramIcon() {
-    var ns = "http://www.w3.org/2000/svg";
-    var svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("width", "16");
-    svg.setAttribute("height", "16");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("fill", "none");
-    svg.setAttribute("stroke", "currentColor");
-    svg.setAttribute("stroke-width", "1.5");
-    var path = document.createElementNS(ns, "path");
-    path.setAttribute("d", "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z");
-    svg.appendChild(path);
-    return svg;
-  }
-
   function openChannelModal(onAdded) {
     channelModal.classList.remove("hidden");
     channelModalTitle.textContent = "Add Telegram Bot";
@@ -3647,10 +3668,10 @@
           }
 
           if (ch.sessions && ch.sessions.length > 0) {
-            var sessionLine = ch.sessions.map(function(s) {
-              var label = s.label || s.key;
-              return (s.active ? "● " : "○ ") + label + " (" + s.messageCount + " msgs)";
-            }).join(", ");
+            var active = ch.sessions.filter(function(s) { return s.active; });
+            var sessionLine = active.length > 0
+              ? active.map(function(s) { return (s.label || s.key) + " (" + s.messageCount + " msgs)"; }).join(", ")
+              : "No active session";
             info.appendChild(createEl("span", {
               className: "text-xs text-[var(--muted)]",
               textContent: sessionLine
@@ -3721,6 +3742,11 @@
       }
     };
   }
+
+  // ── Session events (refresh list on channel-originated changes) ──
+  onEvent("session", function () {
+    fetchSessions();
+  });
 
   // ── Logs page ──────────────────────────────────────────────
   var logsEventHandler = null;

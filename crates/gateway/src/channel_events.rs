@@ -244,6 +244,22 @@ impl ChannelEventSink for GatewayChannelEventSink {
                     new_session = %new_key,
                     "channel /new: created new session"
                 );
+
+                // Notify web UI so the session list refreshes.
+                broadcast(
+                    state,
+                    "session",
+                    serde_json::json!({
+                        "kind": "created",
+                        "sessionKey": &new_key,
+                    }),
+                    BroadcastOpts {
+                        drop_if_slow: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
+
                 Ok("New session started.".to_string())
             },
             "clear" => {
@@ -344,6 +360,21 @@ impl ChannelEventSink for GatewayChannelEventSink {
                         session = %target_session.key,
                         "channel /sessions: switched session"
                     );
+
+                    broadcast(
+                        state,
+                        "session",
+                        serde_json::json!({
+                            "kind": "switched",
+                            "sessionKey": &target_session.key,
+                        }),
+                        BroadcastOpts {
+                            drop_if_slow: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+
                     Ok(format!("Switched to: {label}"))
                 }
             },
