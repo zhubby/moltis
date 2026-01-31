@@ -490,6 +490,15 @@
       var labelText = document.createElement("span");
       labelText.textContent = s.label || s.key;
       label.appendChild(labelText);
+      var dots = document.createElement("span");
+      dots.className = "session-dots";
+      var ping = document.createElement("span");
+      ping.className = "dot-ping";
+      var core = document.createElement("span");
+      core.className = "dot-core";
+      dots.appendChild(ping);
+      dots.appendChild(core);
+      label.appendChild(dots);
       info.appendChild(label);
 
       var meta = document.createElement("div");
