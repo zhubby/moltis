@@ -802,14 +802,24 @@
   .session-delete:hover {
     color: var(--error);
   }
+  .session-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
   .session-spinner {
     display: none;
-    margin-left: 6px;
     color: var(--warn);
     font-family: monospace;
-    font-size: 0.75rem;
+    font-size: 0.85rem;
+    line-height: 16px;
     user-select: none;
-    flex-shrink: 0;
+  }
+  .session-item.replying .session-icon > svg {
+    display: none;
   }
   .session-item.replying .session-spinner {
     display: inline;
