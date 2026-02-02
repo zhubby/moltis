@@ -450,9 +450,17 @@ function EnabledSkillsTable() {
 
 	function onDisable(skill) {
 		var source = map[skill.name] || skill.source;
-		if (!(source && S.connected)) return;
+		if (!source) {
+			showToast("Cannot disable: unknown source for skill.", "error");
+			return;
+		}
 		sendRpc("skills.skill.disable", { source: source, skill: skill.name }).then((res) => {
-			if (res?.ok) fetchAll();
+			if (res?.ok) {
+				showToast(`Disabled ${skill.name}`, "success");
+				fetchAll();
+			} else {
+				showToast(`Failed to disable: ${res?.error?.message || "unknown error"}`, "error");
+			}
 		});
 	}
 
@@ -479,10 +487,9 @@ function EnabledSkillsTable() {
               <td style="padding:8px 12px;font-weight:500;color:var(--text-strong);font-family:var(--font-mono)">${skill.name}</td>
               <td style="padding:8px 12px;color:var(--text)">${skill.description || "\u2014"}</td>
               <td style="padding:8px 12px;text-align:right">
-                <button onClick=${() => {
+                <button class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${() => {
 									onDisable(skill);
-								}}
-                  style="background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.72rem;padding:2px 8px;cursor:pointer;color:var(--muted)">Disable</button>
+								}}>Disable</button>
               </td>
             </tr>`,
 					)}
