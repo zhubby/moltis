@@ -2,6 +2,18 @@
 
 [![CI](https://github.com/penso/moltis/actions/workflows/ci.yml/badge.svg)](https://github.com/penso/moltis/actions/workflows/ci.yml)
 
+## Installation
+
+```bash
+# Using cargo-binstall (recommended — downloads a pre-built binary)
+cargo binstall moltis-cli
+
+# Or build from source
+cargo install moltis-cli --git https://github.com/penso/moltis
+```
+
+## Overview
+
 A personal AI gateway written in Rust. Moltis provides a unified interface to
 multiple LLM providers and communication channels, inspired by
 [OpenClaw](https://docs.openclaw.ai).
