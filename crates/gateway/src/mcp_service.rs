@@ -2,18 +2,117 @@
 
 use std::sync::Arc;
 
-use {async_trait::async_trait, serde_json::Value, tracing::info};
+use {
+    anyhow::Result, async_trait::async_trait, serde_json::Value, tokio::sync::RwLock, tracing::info,
+};
+
+use {
+    moltis_agents::tool_registry::{AgentTool, ToolRegistry},
+    moltis_mcp::tool_bridge::{McpAgentTool, McpToolBridge},
+};
 
 use crate::services::{McpService, ServiceResult};
+
+// ── McpToolAdapter: bridge McpAgentTool → AgentTool ─────────────────────────
+
+/// Thin adapter that implements `AgentTool` (agents crate) by delegating to
+/// `McpToolBridge` which implements `McpAgentTool` (mcp crate).
+struct McpToolAdapter(McpToolBridge);
+
+#[async_trait]
+impl AgentTool for McpToolAdapter {
+    fn name(&self) -> &str {
+        McpAgentTool::name(&self.0)
+    }
+
+    fn description(&self) -> &str {
+        McpAgentTool::description(&self.0)
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        McpAgentTool::parameters_schema(&self.0)
+    }
+
+    async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        McpAgentTool::execute(&self.0, params).await
+    }
+}
+
+// ── Sync helper ─────────────────────────────────────────────────────────────
+
+/// Synchronize MCP tool bridges into the shared `ToolRegistry`.
+///
+/// Removes all existing `mcp__*` tools and re-registers current bridges.
+pub async fn sync_mcp_tools(
+    manager: &moltis_mcp::McpManager,
+    registry: &Arc<RwLock<ToolRegistry>>,
+) {
+    let bridges = manager.tool_bridges().await;
+
+    let mut reg = registry.write().await;
+
+    // Remove stale MCP tools.
+    let mcp_names: Vec<String> = reg
+        .list_schemas()
+        .iter()
+        .filter_map(|s| s.get("name").and_then(|v| v.as_str()).map(String::from))
+        .filter(|n| n.starts_with("mcp__"))
+        .collect();
+    for name in &mcp_names {
+        reg.unregister(name);
+    }
+
+    // Register current bridges.
+    let count = bridges.len();
+    for bridge in bridges {
+        reg.register(Box::new(McpToolAdapter(bridge)));
+    }
+
+    if count > 0 {
+        info!(tools = count, "MCP tools synced into tool registry");
+    }
+}
+
+// ── LiveMcpService ──────────────────────────────────────────────────────────
 
 /// Live MCP service delegating to `McpManager`.
 pub struct LiveMcpService {
     manager: Arc<moltis_mcp::McpManager>,
+    /// Shared tool registry for syncing MCP tools into the agent loop.
+    /// Set after construction via `set_tool_registry`.
+    tool_registry: RwLock<Option<Arc<RwLock<ToolRegistry>>>>,
 }
 
 impl LiveMcpService {
     pub fn new(manager: Arc<moltis_mcp::McpManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            tool_registry: RwLock::new(None),
+        }
+    }
+
+    /// Store a reference to the shared tool registry so MCP mutations
+    /// can automatically sync tools.
+    pub async fn set_tool_registry(&self, registry: Arc<RwLock<ToolRegistry>>) {
+        *self.tool_registry.write().await = Some(registry);
+    }
+
+    /// Sync MCP tools into the shared tool registry (if set).
+    async fn sync_tools(&self) {
+        let maybe_reg = self.tool_registry.read().await.clone();
+        if let Some(reg) = maybe_reg {
+            sync_mcp_tools(&self.manager, &reg).await;
+        }
+    }
+
+    /// Public version of `sync_tools` for use from background tasks.
+    pub async fn sync_tools_if_ready(&self) {
+        self.sync_tools().await;
+    }
+
+    /// Access the underlying manager.
+    pub fn manager(&self) -> &Arc<moltis_mcp::McpManager> {
+        &self.manager
     }
 }
 
@@ -71,6 +170,8 @@ impl McpService for LiveMcpService {
             .await
             .map_err(|e| e.to_string())?;
 
+        self.sync_tools().await;
+
         Ok(serde_json::json!({ "ok": true, "name": final_name }))
     }
 
@@ -86,6 +187,8 @@ impl McpService for LiveMcpService {
             .await
             .map_err(|e| e.to_string())?;
 
+        self.sync_tools().await;
+
         Ok(serde_json::json!({ "removed": removed }))
     }
 
@@ -99,6 +202,8 @@ impl McpService for LiveMcpService {
             .enable_server(name)
             .await
             .map_err(|e| e.to_string())?;
+
+        self.sync_tools().await;
 
         Ok(serde_json::json!({ "enabled": true }))
     }
@@ -114,6 +219,8 @@ impl McpService for LiveMcpService {
             .disable_server(name)
             .await
             .map_err(|e| e.to_string())?;
+
+        self.sync_tools().await;
 
         Ok(serde_json::json!({ "disabled": ok }))
     }
@@ -153,6 +260,80 @@ impl McpService for LiveMcpService {
             .await
             .map_err(|e| e.to_string())?;
 
+        self.sync_tools().await;
+
         Ok(serde_json::json!({ "ok": true }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use {super::*, moltis_mcp::McpRegistry};
+
+    #[tokio::test]
+    async fn test_sync_mcp_tools_empty_manager() {
+        let manager = moltis_mcp::McpManager::new(McpRegistry::new());
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+
+        sync_mcp_tools(&manager, &registry).await;
+
+        let reg = registry.read().await;
+        assert!(reg.list_schemas().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_sync_mcp_tools_removes_stale_tools() {
+        let manager = moltis_mcp::McpManager::new(McpRegistry::new());
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+
+        // Manually register a fake mcp__ tool to simulate a stale entry.
+        {
+            let mut reg = registry.write().await;
+            reg.register(Box::new(FakeTool("mcp__old__tool".into())));
+        }
+
+        // Sync should remove it since there are no running MCP servers.
+        sync_mcp_tools(&manager, &registry).await;
+
+        let reg = registry.read().await;
+        assert!(reg.get("mcp__old__tool").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sync_preserves_non_mcp_tools() {
+        let manager = moltis_mcp::McpManager::new(McpRegistry::new());
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+
+        {
+            let mut reg = registry.write().await;
+            reg.register(Box::new(FakeTool("exec".into())));
+        }
+
+        sync_mcp_tools(&manager, &registry).await;
+
+        let reg = registry.read().await;
+        assert!(reg.get("exec").is_some());
+    }
+
+    /// Minimal AgentTool implementation for testing.
+    struct FakeTool(String);
+
+    #[async_trait]
+    impl AgentTool for FakeTool {
+        fn name(&self) -> &str {
+            &self.0
+        }
+
+        fn description(&self) -> &str {
+            "fake"
+        }
+
+        fn parameters_schema(&self) -> serde_json::Value {
+            serde_json::json!({})
+        }
+
+        async fn execute(&self, _params: serde_json::Value) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
     }
 }

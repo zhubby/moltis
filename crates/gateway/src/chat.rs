@@ -71,7 +71,7 @@ pub struct LiveChatService {
     providers: Arc<RwLock<ProviderRegistry>>,
     state: Arc<GatewayState>,
     active_runs: Arc<RwLock<HashMap<String, AbortHandle>>>,
-    tool_registry: Arc<ToolRegistry>,
+    tool_registry: Arc<RwLock<ToolRegistry>>,
     session_store: Arc<SessionStore>,
     session_metadata: Arc<SqliteSessionMetadata>,
 }
@@ -87,19 +87,24 @@ impl LiveChatService {
             providers,
             state,
             active_runs: Arc::new(RwLock::new(HashMap::new())),
-            tool_registry: Arc::new(ToolRegistry::new()),
+            tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
             session_store,
             session_metadata,
         }
     }
 
-    pub fn with_tools(mut self, registry: ToolRegistry) -> Self {
-        self.tool_registry = Arc::new(registry);
+    pub fn with_tools(mut self, registry: Arc<RwLock<ToolRegistry>>) -> Self {
+        self.tool_registry = registry;
         self
     }
 
-    fn has_tools(&self) -> bool {
-        !self.tool_registry.list_schemas().is_empty()
+    fn has_tools_sync(&self) -> bool {
+        // Best-effort check: try_read avoids blocking. If the lock is held,
+        // assume tools are present (conservative — enables tool mode).
+        self.tool_registry
+            .try_read()
+            .map(|r| !r.list_schemas().is_empty())
+            .unwrap_or(true)
     }
 
     /// Resolve the active session key for a connection.
@@ -133,7 +138,7 @@ impl ChatService for LiveChatService {
             .get("stream_only")
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
-            || !self.has_tools();
+            || !self.has_tools_sync();
 
         // Resolve session key: explicit override (used by cron callbacks) or
         // connection-scoped lookup.
@@ -764,8 +769,8 @@ impl ChatService for LiveChatService {
         };
 
         // Tools
-        let tool_schemas = self.tool_registry.list_schemas();
-        let tools: Vec<_> = tool_schemas
+        let tool_schemas = self.tool_registry.read().await.list_schemas();
+        let tools: Vec<serde_json::Value> = tool_schemas
             .iter()
             .map(|s| {
                 serde_json::json!({
@@ -878,7 +883,7 @@ async fn run_with_tools(
     state: &Arc<GatewayState>,
     run_id: &str,
     provider: Arc<dyn moltis_agents::model::LlmProvider>,
-    tool_registry: &Arc<ToolRegistry>,
+    tool_registry: &Arc<RwLock<ToolRegistry>>,
     text: &str,
     provider_name: &str,
     history: &[serde_json::Value],
@@ -892,8 +897,9 @@ async fn run_with_tools(
     let config = moltis_config::discover_and_load();
 
     let native_tools = provider.supports_tools();
+    let registry_guard = tool_registry.read().await;
     let system_prompt = build_system_prompt_with_session(
-        tool_registry,
+        &registry_guard,
         native_tools,
         project_context,
         session_context,
@@ -901,6 +907,7 @@ async fn run_with_tools(
         Some(&config.identity),
         Some(&config.user),
     );
+    drop(registry_guard);
 
     // Broadcast tool events to the UI as they happen.
     let state_for_events = Arc::clone(state);
@@ -1005,9 +1012,10 @@ async fn run_with_tools(
     let tool_context = serde_json::json!({ "_session_key": session_key });
 
     let provider_ref = provider.clone();
+    let registry_guard = tool_registry.read().await;
     match run_agent_loop_with_context(
         provider,
-        tool_registry,
+        &registry_guard,
         &system_prompt,
         text,
         Some(&on_event),

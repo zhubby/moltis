@@ -193,6 +193,7 @@ pub async fn start_gateway(
 
     // Wire live MCP service.
     let mcp_configured_count;
+    let live_mcp: Arc<crate::mcp_service::LiveMcpService>;
     {
         let mcp_registry_path = moltis_config::data_dir().join("mcp-servers.json");
         let mcp_reg = moltis_mcp::McpRegistry::load(&mcp_registry_path).unwrap_or_default();
@@ -212,15 +213,21 @@ pub async fn start_gateway(
         }
         mcp_configured_count = merged.servers.values().filter(|s| s.enabled).count();
         let mcp_manager = Arc::new(moltis_mcp::McpManager::new(merged));
-        // Start enabled servers in the background.
+        live_mcp = Arc::new(crate::mcp_service::LiveMcpService::new(Arc::clone(
+            &mcp_manager,
+        )));
+        // Start enabled servers in the background; sync tools once done.
         let mgr = Arc::clone(&mcp_manager);
+        let mcp_for_sync = Arc::clone(&live_mcp);
         tokio::spawn(async move {
             let started = mgr.start_enabled().await;
             if !started.is_empty() {
                 tracing::info!(servers = ?started, "MCP servers started");
             }
+            // Sync newly started tools into the agent tool registry.
+            mcp_for_sync.sync_tools_if_ready().await;
         });
-        services.mcp = Arc::new(crate::mcp_service::LiveMcpService::new(mcp_manager));
+        services.mcp = live_mcp.clone() as Arc<dyn crate::services::McpService>;
     }
 
     // Initialize data directory and SQLite database.
@@ -586,6 +593,7 @@ pub async fn start_gateway(
         let mut tool_registry = moltis_agents::tool_registry::ToolRegistry::new();
         tool_registry.register(Box::new(exec_tool));
         tool_registry.register(Box::new(cron_tool));
+        let shared_tool_registry = Arc::new(tokio::sync::RwLock::new(tool_registry));
         let live_chat = Arc::new(
             LiveChatService::new(
                 Arc::clone(&registry),
@@ -593,9 +601,16 @@ pub async fn start_gateway(
                 Arc::clone(&session_store),
                 Arc::clone(&session_metadata),
             )
-            .with_tools(tool_registry),
+            .with_tools(Arc::clone(&shared_tool_registry)),
         );
         state.set_chat(live_chat).await;
+
+        // Store registry in the MCP service so runtime mutations auto-sync,
+        // and do an initial sync for any servers that already started.
+        live_mcp
+            .set_tool_registry(Arc::clone(&shared_tool_registry))
+            .await;
+        crate::mcp_service::sync_mcp_tools(live_mcp.manager(), &shared_tool_registry).await;
     }
 
     let methods = Arc::new(MethodRegistry::new());
