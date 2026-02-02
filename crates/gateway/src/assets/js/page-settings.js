@@ -1259,7 +1259,7 @@ function TailscaleSection() {
 	useEffect(() => {
 		var container = ref.current;
 		if (!container) return;
-		while (container.children.length > 3) container.removeChild(container.lastChild);
+		while (container.children.length > 2) container.removeChild(container.lastChild);
 
 		if (tsLoading) {
 			var loadEl = document.createElement("div");
@@ -1284,10 +1284,6 @@ function TailscaleSection() {
 			(public HTTPS). The gateway stays bound to localhost; Tailscale proxies
 			traffic to it.
 		</p>
-		<div class="alert-warning-text max-w-form">
-			<span class="alert-label-warn">Warning:</span>${" "}
-			Enabling Funnel exposes moltis to the public internet. This code has not been security-audited. Use at your own risk.
-		</div>
 	</div>`;
 }
 
