@@ -726,6 +726,7 @@
 
   /* Simple text alerts (no icon) */
   .alert-warning-text,
+  .alert-info-text,
   .alert-error-text {
     padding: 10px 14px;
     border-radius: var(--radius-sm);
