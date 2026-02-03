@@ -187,6 +187,10 @@ pub struct GatewayState {
     pub setup_code: RwLock<Option<secrecy::Secret<String>>>,
     /// Whether the server is bound to a loopback address (localhost/127.0.0.1/::1).
     pub localhost_only: bool,
+    /// Whether TLS is active on the gateway listener.
+    pub tls_active: bool,
+    /// The port the gateway is bound to.
+    pub port: u16,
 }
 
 impl GatewayState {
@@ -204,8 +208,10 @@ impl GatewayState {
             None,
             None,
             false,
+            false,
             None,
             None,
+            18789,
         )
     }
 
@@ -224,8 +230,10 @@ impl GatewayState {
             None,
             None,
             false,
+            false,
             None,
             None,
+            18789,
         )
     }
 
@@ -239,8 +247,10 @@ impl GatewayState {
         webauthn_state: Option<Arc<crate::auth_webauthn::WebAuthnState>>,
         domain_approval: Option<Arc<DomainApprovalManager>>,
         localhost_only: bool,
+        tls_active: bool,
         hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
         memory_manager: Option<Arc<moltis_memory::manager::MemoryManager>>,
+        port: u16,
     ) -> Arc<Self> {
         let hostname = hostname::get()
             .ok()
@@ -271,6 +281,8 @@ impl GatewayState {
             memory_manager,
             setup_code: RwLock::new(None),
             localhost_only,
+            tls_active,
+            port,
         })
     }
 

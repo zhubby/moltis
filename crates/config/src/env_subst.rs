@@ -2,6 +2,14 @@
 ///
 /// Unresolvable variables are left as-is.
 pub fn substitute_env(input: &str) -> String {
+    substitute_env_with(input, |name| std::env::var(name).ok())
+}
+
+/// Replace `${ENV_VAR}` placeholders using a custom lookup function.
+///
+/// This is the implementation used by [`substitute_env`]; the separate
+/// signature makes it testable without mutating the process environment.
+fn substitute_env_with(input: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
@@ -18,9 +26,9 @@ pub fn substitute_env(input: &str) -> String {
                 var_name.push(c);
             }
             if closed && !var_name.is_empty() {
-                match std::env::var(&var_name) {
-                    Ok(val) => result.push_str(&val),
-                    Err(_) => {
+                match lookup(&var_name) {
+                    Some(val) => result.push_str(&val),
+                    None => {
                         // Leave unresolved placeholder as-is.
                         result.push_str("${");
                         result.push_str(&var_name);
@@ -46,15 +54,21 @@ mod tests {
 
     #[test]
     fn substitutes_known_var() {
-        unsafe { std::env::set_var("MOLTIS_TEST_VAR", "hello") };
-        assert_eq!(substitute_env("key=${MOLTIS_TEST_VAR}"), "key=hello");
-        unsafe { std::env::remove_var("MOLTIS_TEST_VAR") };
+        let lookup = |name: &str| match name {
+            "MOLTIS_TEST_VAR" => Some("hello".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            substitute_env_with("key=${MOLTIS_TEST_VAR}", lookup),
+            "key=hello"
+        );
     }
 
     #[test]
     fn leaves_unknown_var() {
+        let lookup = |_: &str| None;
         assert_eq!(
-            substitute_env("${MOLTIS_NONEXISTENT_XYZ}"),
+            substitute_env_with("${MOLTIS_NONEXISTENT_XYZ}", lookup),
             "${MOLTIS_NONEXISTENT_XYZ}"
         );
     }

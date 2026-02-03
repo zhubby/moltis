@@ -22,7 +22,10 @@ pub mod channel_store;
 pub mod chat;
 pub mod chat_error;
 pub mod cron;
+pub mod env_routes;
 pub mod logs;
+pub mod mcp_health;
+pub mod mcp_service;
 pub mod message_log_store;
 pub mod methods;
 pub mod nodes;
@@ -34,6 +37,10 @@ pub mod server;
 pub mod services;
 pub mod session;
 pub mod state;
+#[cfg(feature = "tailscale")]
+pub mod tailscale;
+#[cfg(feature = "tailscale")]
+pub mod tailscale_routes;
 #[cfg(feature = "tls")]
 pub mod tls;
 pub mod ws;

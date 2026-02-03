@@ -351,21 +351,13 @@ impl ProviderSetupService for LiveProviderSetupService {
             .ok_or_else(|| "missing 'apiKey' parameter".to_string())?;
 
         // Validate provider name
-        let known = KNOWN_PROVIDERS
+        KNOWN_PROVIDERS
             .iter()
             .find(|p| p.name == provider_name && p.auth_type == "api-key")
             .ok_or_else(|| format!("unknown api-key provider: {provider_name}"))?;
 
         // Persist to disk so the key survives restarts.
         self.key_store.save(provider_name, api_key)?;
-
-        // Also set the environment variable so the provider registry picks it
-        // up during rebuild (it reads env vars for key discovery).
-        if let Some(env_key) = known.env_key {
-            // Safety: called from a single async context; env var mutation is
-            // unavoidable here since providers read from env at registration time.
-            unsafe { std::env::set_var(env_key, api_key) };
-        }
 
         // Rebuild the provider registry with saved keys merged into config.
         let effective = self.effective_config();
@@ -469,10 +461,6 @@ impl ProviderSetupService for LiveProviderSetupService {
         // Remove persisted API key
         if known.auth_type == "api-key" {
             self.key_store.remove(provider_name)?;
-            // Unset the environment variable so the registry rebuild no longer finds it.
-            if let Some(env_key) = known.env_key {
-                unsafe { std::env::remove_var(env_key) };
-            }
         }
 
         // Remove OAuth tokens

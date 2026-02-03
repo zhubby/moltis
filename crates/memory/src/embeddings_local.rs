@@ -24,8 +24,21 @@ const DEFAULT_MODEL_FILENAME: &str = "embeddinggemma-300M-Q8_0.gguf";
 const DEFAULT_MODEL_URL: &str = "https://huggingface.co/lmstudio-community/EmbeddingGemma-300M-GGUF/resolve/main/EmbeddingGemma-300M-Q8_0.gguf";
 const DEFAULT_DIMS: usize = 768;
 
+/// Wrapper around `LlamaBackend` that opts into `Send + Sync`.
+///
+/// `LlamaBackend` is `!Send` because `llama-cpp-2` doesn't mark its FFI
+/// handle as thread-safe. In practice the backend is an opaque init token
+/// with no mutable state after construction, so sharing across threads is
+/// safe. Wrapping it in a newtype keeps the `unsafe` declaration localised
+/// rather than applying `unsafe impl` to the entire provider struct.
+struct SendSyncBackend(LlamaBackend);
+
+// SAFETY: LlamaBackend is an immutable init handle with no thread-local state.
+unsafe impl Send for SendSyncBackend {}
+unsafe impl Sync for SendSyncBackend {}
+
 pub struct LocalGgufEmbeddingProvider {
-    backend: LlamaBackend,
+    backend: SendSyncBackend,
     model: Mutex<LlamaModel>,
     dims: usize,
 }
@@ -43,7 +56,7 @@ impl LocalGgufEmbeddingProvider {
         info!(path = %model_path.display(), dims, "loaded local GGUF embedding model");
 
         Ok(Self {
-            backend,
+            backend: SendSyncBackend(backend),
             model: Mutex::new(model),
             dims,
         })
@@ -131,18 +144,13 @@ fn embed_sync(backend: &LlamaBackend, model: &LlamaModel, text: &str) -> Result<
     Ok(embeddings.to_vec())
 }
 
-// SAFETY: LlamaBackend and LlamaModel are thread-safe behind a Mutex.
-// llama-cpp-2 states the model can be shared across threads.
-unsafe impl Send for LocalGgufEmbeddingProvider {}
-unsafe impl Sync for LocalGgufEmbeddingProvider {}
-
 #[async_trait]
 impl EmbeddingProvider for LocalGgufEmbeddingProvider {
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let model = self.model.lock().await;
         let text = text.to_string();
         // llama-cpp-2 is CPU-bound; use block_in_place to avoid starving the async runtime
-        let backend = &self.backend;
+        let backend = &self.backend.0;
         let model_ref = &*model;
         let result = tokio::task::block_in_place(move || embed_sync(backend, model_ref, &text))?;
         Ok(result)
