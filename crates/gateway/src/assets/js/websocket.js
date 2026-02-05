@@ -378,7 +378,7 @@ function handleCrossSessionSend(payload) {
 	card.querySelector("[data-target]").textContent = payload.targetSession;
 
 	var preview = payload.messagePreview || "";
-	if (preview.length > 100) preview = preview.substring(0, 100) + "...";
+	if (preview.length > 100) preview = `${preview.substring(0, 100)}...`;
 	card.querySelector("[data-preview]").textContent = preview;
 
 	var statusText = payload.waitForReply ? "Waiting for reply..." : "Message sent";

@@ -108,33 +108,47 @@ function applyModels(models) {
 	}
 }
 
+function applyBootstrapChannels(boot) {
+	if (boot.channels) S.setCachedChannels(boot.channels.channels || boot.channels || []);
+}
+
+function applyBootstrapSessions(boot) {
+	if (boot.sessions) {
+		S.setSessions(boot.sessions || []);
+		renderSessionList();
+	}
+}
+
+function applyBootstrapProjects(boot) {
+	if (boot.projects) {
+		S.setProjects(boot.projects || []);
+		renderProjectSelect();
+		renderSessionProjectSelect();
+	}
+}
+
+function handleBootstrapData(boot) {
+	if (boot.onboarded === false) {
+		showOnboardingBanner();
+		if (location.pathname === "/" || location.pathname === "/chats") {
+			navigate("/settings");
+			return;
+		}
+	}
+	applyBootstrapChannels(boot);
+	applyBootstrapSessions(boot);
+	if (boot.models) applyModels(boot.models);
+	applyBootstrapProjects(boot);
+	S.setSandboxInfo(boot.sandbox || null);
+	if (boot.counts) updateNavCounts(boot.counts);
+}
+
 function fetchBootstrap() {
 	// Fetch bootstrap data asynchronously — populates sidebar, models, projects
 	// as soon as the data arrives, without blocking the initial page render.
 	fetch("/api/bootstrap")
 		.then((r) => r.json())
-		.then((boot) => {
-			if (boot.onboarded === false) {
-				showOnboardingBanner();
-				if (location.pathname === "/" || location.pathname === "/chats") {
-					navigate("/settings");
-					return;
-				}
-			}
-			if (boot.channels) S.setCachedChannels(boot.channels.channels || boot.channels || []);
-			if (boot.sessions) {
-				S.setSessions(boot.sessions || []);
-				renderSessionList();
-			}
-			if (boot.models) applyModels(boot.models);
-			if (boot.projects) {
-				S.setProjects(boot.projects || []);
-				renderProjectSelect();
-				renderSessionProjectSelect();
-			}
-			S.setSandboxInfo(boot.sandbox || null);
-			if (boot.counts) updateNavCounts(boot.counts);
-		})
+		.then(handleBootstrapData)
 		.catch(() => {
 			/* WS connect will fetch this data anyway */
 		});

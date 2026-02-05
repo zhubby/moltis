@@ -21,25 +21,28 @@ function SetupPage() {
 				if (data.setup_code_required) setCodeRequired(true);
 				if (data.localhost_only) setLocalhostOnly(true);
 			})
-			.catch(() => {});
+			.catch(() => {
+				/* ignore auth status fetch error */
+			});
 	}, []);
+
+	function validatePassword() {
+		if (password.length > 0 || !localhostOnly) {
+			if (password.length < 8) return "Password must be at least 8 characters.";
+			if (password !== confirm) return "Passwords do not match.";
+		}
+		if (codeRequired && setupCode.trim().length === 0) {
+			return "Enter the setup code shown in the terminal.";
+		}
+		return null;
+	}
 
 	function onSubmit(e) {
 		e.preventDefault();
 		setError(null);
-		// On localhost, password is optional
-		if (password.length > 0 || !localhostOnly) {
-			if (password.length < 8) {
-				setError("Password must be at least 8 characters.");
-				return;
-			}
-			if (password !== confirm) {
-				setError("Passwords do not match.");
-				return;
-			}
-		}
-		if (codeRequired && setupCode.trim().length === 0) {
-			setError("Enter the setup code shown in the terminal.");
+		var validationError = validatePassword();
+		if (validationError) {
+			setError(validationError);
 			return;
 		}
 		setSaving(true);

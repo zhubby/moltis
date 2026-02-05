@@ -413,33 +413,41 @@ export function switchSession(key, searchContext, projectId) {
 	var switchParams = { key: key };
 	if (projectId) switchParams.project_id = projectId;
 	sendRpc("sessions.switch", switchParams).then((res) => {
-		if (res?.ok && res.payload) {
-			var entry = res.payload.entry || {};
-			restoreSessionState(entry, projectId);
-			var history = res.payload.history || [];
-			var msgEls = [];
-			S.setSessionTokens({ input: 0, output: 0 });
-			S.setChatBatchLoading(true);
-			history.forEach((msg) => {
-				if (msg.role === "user") {
-					msgEls.push(renderHistoryUserMessage(msg));
-				} else if (msg.role === "assistant") {
-					msgEls.push(renderHistoryAssistantMessage(msg));
-				} else {
-					msgEls.push(null);
-				}
-			});
-			S.setChatBatchLoading(false);
-			S.setLastHistoryIndex(history.length > 0 ? history.length - 1 : -1);
-			if (history.length > 0) {
-				var lastMsg = history[history.length - 1];
-				var ts = lastMsg.created_at;
-				if (ts) appendLastMessageTimestamp(ts);
-			}
+		if (!(res?.ok && res.payload)) {
 			S.setSessionSwitchInProgress(false);
-			postHistoryLoadActions(key, searchContext, msgEls, sessionList);
+			return;
+		}
+		var entry = res.payload.entry || {};
+		restoreSessionState(entry, projectId);
+		var history = res.payload.history || [];
+		var msgEls = renderHistoryMessages(history);
+		S.setLastHistoryIndex(history.length > 0 ? history.length - 1 : -1);
+		appendLastTimestampIfPresent(history);
+		S.setSessionSwitchInProgress(false);
+		postHistoryLoadActions(key, searchContext, msgEls, sessionList);
+	});
+}
+
+function renderHistoryMessages(history) {
+	var msgEls = [];
+	S.setSessionTokens({ input: 0, output: 0 });
+	S.setChatBatchLoading(true);
+	history.forEach((msg) => {
+		if (msg.role === "user") {
+			msgEls.push(renderHistoryUserMessage(msg));
+		} else if (msg.role === "assistant") {
+			msgEls.push(renderHistoryAssistantMessage(msg));
 		} else {
-			S.setSessionSwitchInProgress(false);
+			msgEls.push(null);
 		}
 	});
+	S.setChatBatchLoading(false);
+	return msgEls;
+}
+
+function appendLastTimestampIfPresent(history) {
+	if (history.length === 0) return;
+	var lastMsg = history[history.length - 1];
+	var ts = lastMsg.created_at;
+	if (ts) appendLastMessageTimestamp(ts);
 }
