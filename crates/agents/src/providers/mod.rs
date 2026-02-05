@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod gemini;
 pub mod openai;
 
 #[cfg(feature = "provider-genai")]
@@ -105,6 +106,17 @@ const OPENAI_MODELS: &[(&str, &str)] = &[
     ("o3", "o3"),
     ("o3-mini", "o3-mini"),
     ("o4-mini", "o4-mini"),
+];
+
+/// Known Google Gemini models (model_id, display_name).
+/// Models ordered by capability (most capable first).
+const GEMINI_MODELS: &[(&str, &str)] = &[
+    ("gemini-2.5-pro-preview-06-05", "Gemini 2.5 Pro"),
+    ("gemini-2.5-flash-preview-05-20", "Gemini 2.5 Flash"),
+    ("gemini-2.0-flash", "Gemini 2.0 Flash"),
+    ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite"),
+    ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+    ("gemini-1.5-flash", "Gemini 1.5 Flash"),
 ];
 
 /// Known Mistral models.
@@ -619,6 +631,59 @@ impl ProviderRegistry {
                 }
             }
         }
+
+        // Google Gemini — register all known Gemini models when API key is available.
+        if config.is_enabled("gemini")
+            && let Some(key) = resolve_api_key(config, "gemini", "GEMINI_API_KEY")
+        {
+            let base_url = config
+                .get("gemini")
+                .and_then(|e| e.base_url.clone())
+                .or_else(|| std::env::var("GEMINI_BASE_URL").ok())
+                .unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
+
+            if let Some(model_id) = config.get("gemini").and_then(|e| e.model.as_deref()) {
+                if !self.providers.contains_key(model_id) {
+                    let display = GEMINI_MODELS
+                        .iter()
+                        .find(|(id, _)| *id == model_id)
+                        .map(|(_, name)| name.to_string())
+                        .unwrap_or_else(|| model_id.to_string());
+                    let provider = Arc::new(gemini::GeminiProvider::new(
+                        key.clone(),
+                        model_id.into(),
+                        base_url.clone(),
+                    ));
+                    self.register(
+                        ModelInfo {
+                            id: model_id.into(),
+                            provider: "gemini".into(),
+                            display_name: display,
+                        },
+                        provider,
+                    );
+                }
+            } else {
+                for &(model_id, display_name) in GEMINI_MODELS {
+                    if self.providers.contains_key(model_id) {
+                        continue;
+                    }
+                    let provider = Arc::new(gemini::GeminiProvider::new(
+                        key.clone(),
+                        model_id.into(),
+                        base_url.clone(),
+                    ));
+                    self.register(
+                        ModelInfo {
+                            id: model_id.into(),
+                            provider: "gemini".into(),
+                            display_name: display_name.into(),
+                        },
+                        provider,
+                    );
+                }
+            }
+        }
     }
 
     fn register_openai_compatible_providers(&mut self, config: &ProvidersConfig) {
@@ -881,6 +946,7 @@ mod tests {
     fn model_lists_not_empty() {
         assert!(!ANTHROPIC_MODELS.is_empty());
         assert!(!OPENAI_MODELS.is_empty());
+        assert!(!GEMINI_MODELS.is_empty());
         assert!(!MISTRAL_MODELS.is_empty());
         assert!(!CEREBRAS_MODELS.is_empty());
         assert!(!MINIMAX_MODELS.is_empty());
@@ -892,6 +958,7 @@ mod tests {
         for models in [
             ANTHROPIC_MODELS,
             OPENAI_MODELS,
+            GEMINI_MODELS,
             MISTRAL_MODELS,
             CEREBRAS_MODELS,
             MINIMAX_MODELS,
@@ -1047,6 +1114,67 @@ mod tests {
 
         let reg = ProviderRegistry::from_env_with_config(&config);
         assert!(reg.list_models().iter().any(|m| m.provider == "moonshot"));
+    }
+
+    #[test]
+    fn gemini_registers_with_api_key() {
+        let mut config = ProvidersConfig::default();
+        config
+            .providers
+            .insert("gemini".into(), moltis_config::schema::ProviderEntry {
+                api_key: Some(secrecy::Secret::new("test-gemini-key".into())),
+                ..Default::default()
+            });
+
+        let reg = ProviderRegistry::from_env_with_config(&config);
+        let gemini_models: Vec<_> = reg
+            .list_models()
+            .iter()
+            .filter(|m| m.provider == "gemini")
+            .collect();
+        assert!(
+            !gemini_models.is_empty(),
+            "expected Gemini models to be registered"
+        );
+        for m in &gemini_models {
+            assert!(reg.get(&m.id).is_some());
+            assert_eq!(reg.get(&m.id).unwrap().name(), "gemini");
+            assert!(reg.get(&m.id).unwrap().supports_tools());
+        }
+    }
+
+    #[test]
+    fn gemini_registers_specific_model() {
+        let mut config = ProvidersConfig::default();
+        config
+            .providers
+            .insert("gemini".into(), moltis_config::schema::ProviderEntry {
+                api_key: Some(secrecy::Secret::new("test-gemini-key".into())),
+                model: Some("gemini-1.5-pro".into()),
+                ..Default::default()
+            });
+
+        let reg = ProviderRegistry::from_env_with_config(&config);
+        let gemini_models: Vec<_> = reg
+            .list_models()
+            .iter()
+            .filter(|m| m.provider == "gemini")
+            .collect();
+        assert_eq!(gemini_models.len(), 1);
+        assert_eq!(gemini_models[0].id, "gemini-1.5-pro");
+    }
+
+    #[test]
+    fn gemini_context_window() {
+        assert_eq!(
+            super::context_window_for_model("gemini-2.0-flash"),
+            1_000_000
+        );
+        assert_eq!(super::context_window_for_model("gemini-1.5-pro"), 1_000_000);
+        assert_eq!(
+            super::context_window_for_model("gemini-2.5-pro-preview-06-05"),
+            1_000_000
+        );
     }
 
     #[test]
