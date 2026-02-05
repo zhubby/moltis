@@ -2,13 +2,16 @@
 
 use std::sync::Arc;
 
-use {anyhow::Result, async_trait::async_trait, tracing::info};
+use {anyhow::Result, async_trait::async_trait, tokio::sync::RwLock, tracing::info};
 
-use moltis_agents::{
-    model::LlmProvider,
-    providers::ProviderRegistry,
-    runner::{RunnerEvent, run_agent_loop_with_context},
-    tool_registry::{AgentTool, ToolRegistry},
+use {
+    moltis_agents::{
+        model::LlmProvider,
+        providers::ProviderRegistry,
+        runner::{RunnerEvent, run_agent_loop_with_context},
+        tool_registry::{AgentTool, ToolRegistry},
+    },
+    moltis_config::schema::AgentsConfig,
 };
 
 /// Maximum nesting depth for sub-agents (prevents infinite recursion).
@@ -23,26 +26,33 @@ const SPAWN_DEPTH_KEY: &str = "_spawn_depth";
 /// is returned as the tool output. Sub-agents get a filtered copy of the
 /// parent's tool registry (without the `spawn_agent` tool itself) and a
 /// focused system prompt.
+///
+/// When a preset is specified, the sub-agent uses that preset's model,
+/// tool policies, and system prompt additions.
+///
 /// Callback for emitting events from the sub-agent back to the parent UI.
 pub type OnSpawnEvent = Arc<dyn Fn(RunnerEvent) + Send + Sync>;
 
 pub struct SpawnAgentTool {
-    provider_registry: Arc<tokio::sync::RwLock<ProviderRegistry>>,
+    provider_registry: Arc<RwLock<ProviderRegistry>>,
     default_provider: Arc<dyn LlmProvider>,
     tool_registry: Arc<ToolRegistry>,
+    agents_config: Arc<RwLock<AgentsConfig>>,
     on_event: Option<OnSpawnEvent>,
 }
 
 impl SpawnAgentTool {
     pub fn new(
-        provider_registry: Arc<tokio::sync::RwLock<ProviderRegistry>>,
+        provider_registry: Arc<RwLock<ProviderRegistry>>,
         default_provider: Arc<dyn LlmProvider>,
         tool_registry: Arc<ToolRegistry>,
+        agents_config: Arc<RwLock<AgentsConfig>>,
     ) -> Self {
         Self {
             provider_registry,
             default_provider,
             tool_registry,
+            agents_config,
             on_event: None,
         }
     }
@@ -87,7 +97,11 @@ impl AgentTool for SpawnAgentTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Model ID to use (e.g. a cheaper model). If not specified, uses the parent's current model."
+                    "description": "Model ID to use (e.g. a cheaper model). If not specified, uses preset model or parent's model."
+                },
+                "preset": {
+                    "type": "string",
+                    "description": "Agent preset name (e.g. 'researcher', 'coder', 'reviewer'). Presets define model, tool policies, and behavior."
                 }
             },
             "required": ["task"]
@@ -99,7 +113,8 @@ impl AgentTool for SpawnAgentTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing required parameter: task"))?;
         let context = params["context"].as_str().unwrap_or("");
-        let model_id = params["model"].as_str();
+        let explicit_model_id = params["model"].as_str();
+        let preset_name = params["preset"].as_str();
 
         // Check nesting depth.
         let depth = params
@@ -110,8 +125,27 @@ impl AgentTool for SpawnAgentTool {
             anyhow::bail!("maximum sub-agent nesting depth ({MAX_SPAWN_DEPTH}) exceeded");
         }
 
+        // Load preset configuration if specified.
+        let agents_config = self.agents_config.read().await;
+        let preset = preset_name.and_then(|name| agents_config.get_preset(name));
+
+        // Warn if preset was requested but not found.
+        if let Some(name) = preset_name
+            && preset.is_none()
+        {
+            info!(
+                preset = name,
+                "preset not found, using default configuration"
+            );
+        }
+
+        // Determine model: explicit > preset > default.
+        let model_id_to_use = explicit_model_id
+            .map(String::from)
+            .or_else(|| preset.and_then(|p| p.model.clone()));
+
         // Resolve provider.
-        let provider = if let Some(id) = model_id {
+        let provider = if let Some(ref id) = model_id_to_use {
             let reg = self.provider_registry.read().await;
             reg.get(id)
                 .ok_or_else(|| anyhow::anyhow!("unknown model: {id}"))?
@@ -122,10 +156,17 @@ impl AgentTool for SpawnAgentTool {
         // Capture model ID before provider is moved into the sub-agent loop.
         let model_id = provider.id().to_string();
 
+        // Build identity info for logging/events.
+        let preset_identity_name = preset
+            .and_then(|p| p.identity.name.as_ref())
+            .map(String::as_str);
+
         info!(
             task = %task,
             depth = depth,
             model = %model_id,
+            preset = ?preset_name,
+            identity = ?preset_identity_name,
             "spawning sub-agent"
         );
 
@@ -135,23 +176,20 @@ impl AgentTool for SpawnAgentTool {
             depth,
         });
 
-        // Build filtered tool registry (no spawn_agent to prevent recursive spawning).
-        let sub_tools = self.tool_registry.clone_without(&["spawn_agent"]);
-
-        // Build system prompt.
-        let system_prompt = if context.is_empty() {
-            format!(
-                "You are a sub-agent spawned to handle a specific task. \
-                 Complete the task thoroughly and return a clear result.\n\n\
-                 Task: {task}"
+        // Build filtered tool registry based on preset policy.
+        let sub_tools = if let Some(p) = preset {
+            self.tool_registry.clone_with_policy(
+                &p.tools.allow,
+                &p.tools.deny,
+                &["spawn_agent"], // Always exclude spawn_agent
             )
         } else {
-            format!(
-                "You are a sub-agent spawned to handle a specific task. \
-                 Complete the task thoroughly and return a clear result.\n\n\
-                 Task: {task}\n\nContext: {context}"
-            )
+            // Default: exclude only spawn_agent to prevent recursive spawning.
+            self.tool_registry.clone_without(&["spawn_agent"])
         };
+
+        // Build system prompt with preset customizations.
+        let system_prompt = build_sub_agent_prompt(task, context, preset);
 
         // Build tool context with incremented depth and propagated session key.
         let mut tool_context = serde_json::json!({
@@ -160,6 +198,9 @@ impl AgentTool for SpawnAgentTool {
         if let Some(session_key) = params.get("_session_key") {
             tool_context["_session_key"] = session_key.clone();
         }
+
+        // Drop the read lock before running the agent loop.
+        drop(agents_config);
 
         // Run the sub-agent loop (no event forwarding, no hooks, no history).
         let result = run_agent_loop_with_context(
@@ -194,6 +235,7 @@ impl AgentTool for SpawnAgentTool {
             depth = depth,
             iterations = result.iterations,
             tool_calls = result.tool_calls_made,
+            preset = ?preset_name,
             "sub-agent completed"
         );
 
@@ -202,8 +244,60 @@ impl AgentTool for SpawnAgentTool {
             "iterations": result.iterations,
             "tool_calls_made": result.tool_calls_made,
             "model": model_id,
+            "preset": preset_name,
         }))
     }
+}
+
+/// Build the system prompt for a sub-agent, incorporating preset customizations.
+fn build_sub_agent_prompt(
+    task: &str,
+    context: &str,
+    preset: Option<&moltis_config::schema::AgentPreset>,
+) -> String {
+    let mut prompt = String::new();
+
+    // Add preset identity if available.
+    if let Some(p) = preset {
+        if let Some(ref name) = p.identity.name {
+            prompt.push_str(&format!("You are {name}"));
+            if let Some(ref creature) = p.identity.creature {
+                prompt.push_str(&format!(", a {creature}"));
+            }
+            prompt.push_str(". ");
+        }
+        if let Some(ref vibe) = p.identity.vibe {
+            prompt.push_str(&format!("Your style is {vibe}. "));
+        }
+        if let Some(ref soul) = p.identity.soul {
+            prompt.push_str(soul);
+            prompt.push(' ');
+        }
+    }
+
+    // Add base instruction.
+    if prompt.is_empty() {
+        prompt.push_str("You are a sub-agent spawned to handle a specific task. ");
+    }
+    prompt.push_str("Complete the task thoroughly and return a clear result.\n\n");
+
+    // Add task.
+    prompt.push_str(&format!("Task: {task}"));
+
+    // Add context if provided.
+    if !context.is_empty() {
+        prompt.push_str(&format!("\n\nContext: {context}"));
+    }
+
+    // Add preset system prompt suffix.
+    if let Some(p) = preset
+        && let Some(ref suffix) = p.system_prompt_suffix
+    {
+        prompt.push_str("\n\n");
+        prompt.push_str(suffix);
+    }
+
+    prompt
 }
 
 #[cfg(test)]
@@ -211,7 +305,8 @@ mod tests {
     use {
         super::*,
         moltis_agents::model::{CompletionResponse, StreamEvent, Usage},
-        std::pin::Pin,
+        moltis_config::schema::{AgentIdentity, AgentPreset, PresetToolPolicy},
+        std::{collections::HashMap, pin::Pin},
         tokio_stream::Stream,
     };
 
@@ -254,10 +349,26 @@ mod tests {
         }
     }
 
-    fn make_empty_provider_registry() -> Arc<tokio::sync::RwLock<ProviderRegistry>> {
-        Arc::new(tokio::sync::RwLock::new(
-            ProviderRegistry::from_env_with_config(&Default::default()),
-        ))
+    fn make_empty_provider_registry() -> Arc<RwLock<ProviderRegistry>> {
+        Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &Default::default(),
+        )))
+    }
+
+    fn make_empty_agents_config() -> Arc<RwLock<AgentsConfig>> {
+        Arc::new(RwLock::new(AgentsConfig::default()))
+    }
+
+    fn make_spawn_tool(
+        provider: Arc<dyn LlmProvider>,
+        tool_registry: Arc<ToolRegistry>,
+    ) -> SpawnAgentTool {
+        SpawnAgentTool::new(
+            make_empty_provider_registry(),
+            provider,
+            tool_registry,
+            make_empty_agents_config(),
+        )
     }
 
     #[tokio::test]
@@ -267,11 +378,7 @@ mod tests {
             model_id: "mock-model".into(),
         });
         let tool_registry = Arc::new(ToolRegistry::new());
-        let spawn_tool = SpawnAgentTool::new(
-            make_empty_provider_registry(),
-            Arc::clone(&provider),
-            tool_registry,
-        );
+        let spawn_tool = make_spawn_tool(Arc::clone(&provider), tool_registry);
 
         let params = serde_json::json!({ "task": "do something" });
         let result = spawn_tool.execute(params).await.unwrap();
@@ -289,8 +396,7 @@ mod tests {
             model_id: "mock".into(),
         });
         let tool_registry = Arc::new(ToolRegistry::new());
-        let spawn_tool =
-            SpawnAgentTool::new(make_empty_provider_registry(), provider, tool_registry);
+        let spawn_tool = make_spawn_tool(provider, tool_registry);
 
         let params = serde_json::json!({
             "task": "do something",
@@ -367,8 +473,7 @@ mod tests {
         assert!(registry.get("spawn_agent").is_some());
 
         // The SpawnAgentTool itself should work with the filtered registry.
-        let spawn_tool =
-            SpawnAgentTool::new(make_empty_provider_registry(), provider, Arc::new(registry));
+        let spawn_tool = make_spawn_tool(provider, Arc::new(registry));
         let result = spawn_tool
             .execute(serde_json::json!({ "task": "test" }))
             .await
@@ -382,11 +487,7 @@ mod tests {
             response: "done with context".into(),
             model_id: "mock".into(),
         });
-        let spawn_tool = SpawnAgentTool::new(
-            make_empty_provider_registry(),
-            provider,
-            Arc::new(ToolRegistry::new()),
-        );
+        let spawn_tool = make_spawn_tool(provider, Arc::new(ToolRegistry::new()));
 
         let params = serde_json::json!({
             "task": "analyze code",
@@ -402,14 +503,136 @@ mod tests {
             response: "nope".into(),
             model_id: "mock".into(),
         });
-        let spawn_tool = SpawnAgentTool::new(
-            make_empty_provider_registry(),
-            provider,
-            Arc::new(ToolRegistry::new()),
-        );
+        let spawn_tool = make_spawn_tool(provider, Arc::new(ToolRegistry::new()));
 
         let result = spawn_tool.execute(serde_json::json!({})).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("task"));
+    }
+
+    #[tokio::test]
+    async fn test_preset_applies_tool_policy() {
+        // Create a registry with multiple tools.
+        let mut registry = ToolRegistry::new();
+
+        struct ReadTool;
+        #[async_trait]
+        impl AgentTool for ReadTool {
+            fn name(&self) -> &str {
+                "read_file"
+            }
+
+            fn description(&self) -> &str {
+                "read"
+            }
+
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({})
+            }
+
+            async fn execute(&self, _: serde_json::Value) -> Result<serde_json::Value> {
+                Ok(serde_json::json!("read"))
+            }
+        }
+
+        struct ExecTool;
+        #[async_trait]
+        impl AgentTool for ExecTool {
+            fn name(&self) -> &str {
+                "exec"
+            }
+
+            fn description(&self) -> &str {
+                "exec"
+            }
+
+            fn parameters_schema(&self) -> serde_json::Value {
+                serde_json::json!({})
+            }
+
+            async fn execute(&self, _: serde_json::Value) -> Result<serde_json::Value> {
+                Ok(serde_json::json!("exec"))
+            }
+        }
+
+        registry.register(Box::new(ReadTool));
+        registry.register(Box::new(ExecTool));
+
+        // Test clone_with_policy with allow list.
+        let filtered = registry.clone_with_policy(&["read_file".into()], &[], &["spawn_agent"]);
+        assert!(filtered.get("read_file").is_some());
+        assert!(filtered.get("exec").is_none());
+
+        // Test clone_with_policy with deny list.
+        let filtered2 = registry.clone_with_policy(&[], &["exec".into()], &["spawn_agent"]);
+        assert!(filtered2.get("read_file").is_some());
+        assert!(filtered2.get("exec").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_preset_with_identity_builds_correct_prompt() {
+        let preset = AgentPreset {
+            identity: AgentIdentity {
+                name: Some("scout".into()),
+                creature: Some("helpful owl".into()),
+                vibe: Some("focused and efficient".into()),
+                soul: Some("I love finding information.".into()),
+                ..Default::default()
+            },
+            system_prompt_suffix: Some("Focus on accuracy over speed.".into()),
+            ..Default::default()
+        };
+
+        let prompt = build_sub_agent_prompt("find bugs", "in main.rs", Some(&preset));
+
+        assert!(prompt.contains("You are scout"));
+        assert!(prompt.contains("a helpful owl"));
+        assert!(prompt.contains("focused and efficient"));
+        assert!(prompt.contains("I love finding information"));
+        assert!(prompt.contains("Task: find bugs"));
+        assert!(prompt.contains("Context: in main.rs"));
+        assert!(prompt.contains("Focus on accuracy over speed"));
+    }
+
+    #[tokio::test]
+    async fn test_preset_returns_in_result() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
+            response: "researched".into(),
+            model_id: "mock".into(),
+        });
+
+        // Create agents config with a preset.
+        let mut presets = HashMap::new();
+        presets.insert("researcher".into(), AgentPreset {
+            identity: AgentIdentity {
+                name: Some("scout".into()),
+                ..Default::default()
+            },
+            tools: PresetToolPolicy {
+                allow: vec![],
+                deny: vec!["exec".into()],
+            },
+            ..Default::default()
+        });
+        let agents_config = Arc::new(RwLock::new(AgentsConfig {
+            presets,
+            ..Default::default()
+        }));
+
+        let spawn_tool = SpawnAgentTool::new(
+            make_empty_provider_registry(),
+            provider,
+            Arc::new(ToolRegistry::new()),
+            agents_config,
+        );
+
+        let params = serde_json::json!({
+            "task": "find patterns",
+            "preset": "researcher",
+        });
+        let result = spawn_tool.execute(params).await.unwrap();
+
+        assert_eq!(result["text"], "researched");
+        assert_eq!(result["preset"], "researcher");
     }
 }

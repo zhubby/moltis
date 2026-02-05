@@ -70,4 +70,44 @@ impl ToolRegistry {
             .collect();
         ToolRegistry { tools }
     }
+
+    /// Clone the registry, filtering tools based on allow/deny lists.
+    ///
+    /// - If `allow` is non-empty, only tools in `allow` are included.
+    /// - Tools in `deny` are always excluded (applied after allow).
+    /// - Tools in `always_exclude` are always excluded (e.g., spawn_agent).
+    pub fn clone_with_policy(
+        &self,
+        allow: &[String],
+        deny: &[String],
+        always_exclude: &[&str],
+    ) -> ToolRegistry {
+        let tools = self
+            .tools
+            .iter()
+            .filter(|(name, _)| {
+                // Always exclude certain tools
+                if always_exclude.contains(&name.as_str()) {
+                    return false;
+                }
+                // Check deny list
+                if deny.contains(name) {
+                    return false;
+                }
+                // If allow list is empty, allow all (minus deny/excluded)
+                if allow.is_empty() {
+                    return true;
+                }
+                // If allow list is specified, tool must be in it
+                allow.contains(name)
+            })
+            .map(|(name, tool)| (name.clone(), Arc::clone(tool)))
+            .collect();
+        ToolRegistry { tools }
+    }
+
+    /// Get the list of tool names.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.keys().cloned().collect()
+    }
 }
