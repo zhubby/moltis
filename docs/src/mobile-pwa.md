@@ -38,9 +38,26 @@ Push notifications allow you to receive alerts when the LLM responds, even when 
 
 ### Enabling Push Notifications
 
-1. Open the moltis app or website
-2. When prompted, allow notification permissions
-3. Subscribe to push notifications via the settings panel
+1. Open the moltis app (must be installed as PWA on Safari/iOS)
+2. Go to **Settings > Notifications**
+3. Click **Enable** to subscribe to push notifications
+4. When prompted, allow notification permissions
+
+**Safari/iOS Note**: Push notifications only work when the app is installed as a PWA. If you see "Installation required", add moltis to your Dock first:
+- **macOS**: File → Add to Dock
+- **iOS**: Share → Add to Home Screen
+
+### Managing Subscriptions
+
+The Settings > Notifications page shows all subscribed devices:
+
+- **Device name**: Parsed from user agent (e.g., "Safari on macOS", "iPhone")
+- **IP address**: Client IP at subscription time (supports proxies via X-Forwarded-For)
+- **Subscription date**: When the device subscribed
+
+You can remove any subscription by clicking the **Remove** button. This works from any device - useful for revoking access to old devices.
+
+Subscription changes are broadcast in real-time via WebSocket, so all connected clients see updates immediately.
 
 ### How It Works
 
@@ -60,7 +77,7 @@ The gateway exposes these API endpoints for push notifications:
 | `/api/push/vapid-key` | GET | Get the VAPID public key for subscription |
 | `/api/push/subscribe` | POST | Register a push subscription |
 | `/api/push/unsubscribe` | POST | Remove a push subscription |
-| `/api/push/status` | GET | Get push service status |
+| `/api/push/status` | GET | Get push service status and subscription list |
 
 ### Subscribe Request
 
@@ -71,6 +88,23 @@ The gateway exposes these API endpoints for push notifications:
     "p256dh": "base64url-encoded-key",
     "auth": "base64url-encoded-auth"
   }
+}
+```
+
+### Status Response
+
+```json
+{
+  "enabled": true,
+  "subscription_count": 2,
+  "subscriptions": [
+    {
+      "endpoint": "https://fcm.googleapis.com/...",
+      "device": "Safari on macOS",
+      "ip": "192.168.1.100",
+      "created_at": "2025-02-05T23:30:00Z"
+    }
+  ]
 }
 ```
 
@@ -146,9 +180,13 @@ Note: iOS push notifications require iOS 16.4 or later and the app must be insta
 ### Notifications Not Working
 
 1. **Check permissions**: Ensure notifications are allowed in browser/OS settings
-2. **Check subscription**: Verify the push subscription exists in the browser
-3. **Check server logs**: Look for push delivery errors
-4. **iOS specific**: Ensure you're on iOS 16.4+ and app is installed to home screen
+2. **Check subscription**: Go to Settings > Notifications to see if your device is listed
+3. **Check server logs**: Look for `push:` prefixed log messages for delivery status
+4. **Safari/iOS specific**:
+   - Must be installed as PWA (Add to Dock/Home Screen)
+   - iOS requires version 16.4 or later
+   - The Enable button is disabled until installed as PWA
+5. **Behind a proxy**: Ensure your proxy forwards `X-Forwarded-For` or `X-Real-IP` headers
 
 ### PWA Not Installing
 
