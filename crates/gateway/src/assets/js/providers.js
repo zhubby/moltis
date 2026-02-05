@@ -412,6 +412,7 @@ function renderLocalModelSelection(provider, sysInfo, modelsData) {
 		var backendCards = document.createElement("div");
 		backendCards.className = "flex flex-col gap-2";
 
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: backend card rendering with many conditions
 		backends.forEach((b) => {
 			var card = document.createElement("div");
 			card.className = "backend-card";
@@ -589,8 +590,8 @@ function renderLocalModelSelection(provider, sysInfo, modelsData) {
 			searchResults.innerHTML = '<div class="text-xs text-[var(--muted)] py-2">No results found</div>';
 			return;
 		}
-		res.payload.results.forEach((m) => {
-			var card = createHfSearchResultCard(m, provider);
+		res.payload.results.forEach((result) => {
+			var card = createHfSearchResultCard(result, provider);
 			searchResults.appendChild(card);
 		});
 	};
@@ -707,7 +708,7 @@ function renderLocalModelSelection(provider, sysInfo, modelsData) {
 }
 
 // Create a card for HuggingFace search result
-function createHfSearchResultCard(model, provider) {
+function createHfSearchResultCard(model, _provider) {
 	var card = document.createElement("div");
 	card.className = "model-card";
 
@@ -786,8 +787,8 @@ function createHfSearchResultCard(model, provider) {
 
 // Format download count (e.g., 1234567 -> "1.2M")
 function formatDownloads(n) {
-	if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-	if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+	if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+	if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
 	return n.toString();
 }
 
@@ -859,6 +860,7 @@ function selectLocalModel(model, provider) {
 	m.body.appendChild(wrapper);
 
 	// Subscribe to download progress events
+	// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: download progress handler with many states
 	var off = onEvent("local-llm.download", (payload) => {
 		if (payload.modelId !== model.id) return;
 
@@ -928,6 +930,7 @@ function pollLocalStatus(model, _provider, statusEl, progressEl, offEvent) {
 			return;
 		}
 
+		// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: status polling with many state transitions
 		sendRpc("providers.local.status", {}).then((res) => {
 			if (!res?.ok) return;
 			var st = res.payload;
