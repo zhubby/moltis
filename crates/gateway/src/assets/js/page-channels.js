@@ -51,7 +51,7 @@ function loadSenders() {
 	});
 }
 
-// ── Telegram icon (inline SVG via htm) ──────────────────────
+// ── Channel icons (inline SVG via htm) ───────────────────────
 function TelegramIcon() {
 	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
     stroke="currentColor" stroke-width="1.5">
@@ -59,14 +59,28 @@ function TelegramIcon() {
   </svg>`;
 }
 
+function WhatsAppIcon() {
+	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.5">
+    <path d="M3 21l1.65-3.8a9 9 0 1 1 3.4 2.9L3 21" />
+    <path d="M9 10a.5.5 0 0 0 1 0V9a.5.5 0 0 0-1 0v1Zm0 0a5 5 0 0 0 5 5m0 0a.5.5 0 0 0 0-1h-1a.5.5 0 0 0 0 1h1Z" />
+  </svg>`;
+}
+
+function ChannelIcon({ type }) {
+	if (type === "whatsapp") return html`<${WhatsAppIcon} />`;
+	return html`<${TelegramIcon} />`;
+}
+
 // ── Channel card ─────────────────────────────────────────────
 function ChannelCard(props) {
 	var ch = props.channel;
+	var channelType = ch.type || "telegram";
 
 	function onRemove() {
 		requestConfirm(`Remove ${ch.name || ch.account_id}?`).then((yes) => {
 			if (!yes) return;
-			sendRpc("channels.remove", { account_id: ch.account_id }).then((r) => {
+			sendRpc("channels.remove", { account_id: ch.account_id, type: channelType }).then((r) => {
 				if (r?.ok) loadChannels();
 			});
 		});
@@ -82,13 +96,15 @@ function ChannelCard(props) {
 				: "No active session";
 	}
 
+	var displayName = ch.name || ch.account_id || (channelType === "whatsapp" ? "WhatsApp" : "Telegram");
+
 	return html`<div class="provider-card" style="padding:12px 14px;border-radius:8px;margin-bottom:8px;">
     <div style="display:flex;align-items:center;gap:10px;">
       <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--surface2);">
-        <${TelegramIcon} />
+        <${ChannelIcon} type=${channelType} />
       </span>
       <div style="display:flex;flex-direction:column;gap:2px;">
-        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || "Telegram"}</span>
+        <span class="text-sm text-[var(--text-strong)]">${displayName}</span>
         ${ch.details && html`<span class="text-xs text-[var(--muted)]">${ch.details}</span>`}
         ${sessionLine && html`<span class="text-xs text-[var(--muted)]">${sessionLine}</span>`}
       </div>
@@ -109,8 +125,8 @@ function ChannelCard(props) {
 function ChannelsTab() {
 	if (channels.value.length === 0) {
 		return html`<div style="text-align:center;padding:40px 0;">
-      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No Telegram bots connected.</div>
-      <div class="text-xs text-[var(--muted)]">Click "+ Add Telegram Bot" to connect one using a token from @BotFather.</div>
+      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No messaging channels connected.</div>
+      <div class="text-xs text-[var(--muted)]">Click "+ Add Channel" to connect a Telegram bot or WhatsApp Business account.</div>
     </div>`;
 	}
 	return html`${channels.value.map((ch) => html`<${ChannelCard} key=${ch.account_id} channel=${ch} />`)}`;
@@ -193,41 +209,77 @@ function AddChannelModal() {
 	var error = useSignal("");
 	var saving = useSignal(false);
 	var addModel = useSignal("");
+	var channelType = useSignal("telegram");
 
 	function onSubmit(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
 		var accountId = form.querySelector("[data-field=accountId]").value.trim();
-		var token = form.querySelector("[data-field=token]").value.trim();
+		var type = channelType.value;
+
 		if (!accountId) {
-			error.value = "Bot username is required.";
+			error.value = type === "whatsapp" ? "Account ID is required." : "Bot username is required.";
 			return;
 		}
-		if (!token) {
-			error.value = "Bot token is required.";
-			return;
+
+		var addConfig = {};
+
+		if (type === "telegram") {
+			var token = form.querySelector("[data-field=token]").value.trim();
+			if (!token) {
+				error.value = "Bot token is required.";
+				return;
+			}
+			addConfig.token = token;
+			addConfig.mention_mode = form.querySelector("[data-field=mentionMode]").value;
+		} else if (type === "whatsapp") {
+			var phoneNumberId = form.querySelector("[data-field=phoneNumberId]").value.trim();
+			var accessToken = form.querySelector("[data-field=accessToken]").value.trim();
+			var appSecret = form.querySelector("[data-field=appSecret]").value.trim();
+			var verifyToken = form.querySelector("[data-field=verifyToken]").value.trim();
+			if (!phoneNumberId) {
+				error.value = "Phone Number ID is required.";
+				return;
+			}
+			if (!accessToken) {
+				error.value = "Access Token is required.";
+				return;
+			}
+			if (!appSecret) {
+				error.value = "App Secret is required.";
+				return;
+			}
+			if (!verifyToken) {
+				error.value = "Verify Token is required.";
+				return;
+			}
+			addConfig.phone_number_id = phoneNumberId;
+			addConfig.access_token = accessToken;
+			addConfig.app_secret = appSecret;
+			addConfig.verify_token = verifyToken;
 		}
+
+		addConfig.dm_policy = form.querySelector("[data-field=dmPolicy]").value;
+
 		var allowlist = form
 			.querySelector("[data-field=allowlist]")
 			.value.trim()
 			.split(/\n/)
 			.map((s) => s.trim())
 			.filter(Boolean);
-		error.value = "";
-		saving.value = true;
-		var addConfig = {
-			token: token,
-			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
-			mention_mode: form.querySelector("[data-field=mentionMode]").value,
-			allowlist: allowlist,
-		};
+		addConfig.allowlist = allowlist;
+
 		if (addModel.value) {
 			addConfig.model = addModel.value;
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
+
+		error.value = "";
+		saving.value = true;
+
 		sendRpc("channels.add", {
-			type: "telegram",
+			type: type,
 			account_id: accountId,
 			config: addConfig,
 		}).then((res) => {
@@ -235,9 +287,10 @@ function AddChannelModal() {
 			if (res?.ok) {
 				showAddModal.value = false;
 				addModel.value = "";
+				channelType.value = "telegram";
 				loadChannels();
 			} else {
-				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect bot.";
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
 			}
 		});
 	}
@@ -252,46 +305,95 @@ function AddChannelModal() {
 	var inputStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
 
+	var type = channelType.value;
+	var title = type === "whatsapp" ? "Add WhatsApp Business" : "Add Telegram Bot";
+
 	return html`<${Modal} show=${showAddModal.value} onClose=${() => {
 		showAddModal.value = false;
-	}} title="Add Telegram Bot">
+		channelType.value = "telegram";
+	}} title=${title}>
     <div class="channel-form">
-      <div class="channel-card">
-        <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
-        <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
-        <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
-        <div class="text-xs text-[var(--muted)]">3. Copy the bot token (looks like 123456:ABC-DEF...) and paste it below</div>
-        <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://core.telegram.org/bots/tutorial" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Telegram Bot Tutorial</a> for more details.</div>
-      </div>
-      <label class="text-xs text-[var(--muted)]">Bot username</label>
-      <input data-field="accountId" type="text" placeholder="e.g. my_assistant_bot" style=${inputStyle} />
-      <label class="text-xs text-[var(--muted)]">Bot Token (from @BotFather)</label>
-      <input data-field="token" type="password" placeholder="123456:ABC-DEF..." style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">Channel Type</label>
+      <select data-field="channelType" style=${selectStyle} value=${type}
+        onChange=${(e) => {
+					channelType.value = e.target.value;
+				}}>
+        <option value="telegram">Telegram</option>
+        <option value="whatsapp">WhatsApp Business</option>
+      </select>
+
+      ${
+				type === "telegram" &&
+				html`
+        <div class="channel-card">
+          <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
+          <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
+          <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
+          <div class="text-xs text-[var(--muted)]">3. Copy the bot token (looks like 123456:ABC-DEF...) and paste it below</div>
+          <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://core.telegram.org/bots/tutorial" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Telegram Bot Tutorial</a> for more details.</div>
+        </div>
+        <label class="text-xs text-[var(--muted)]">Bot username</label>
+        <input data-field="accountId" type="text" placeholder="e.g. my_assistant_bot" style=${inputStyle} />
+        <label class="text-xs text-[var(--muted)]">Bot Token (from @BotFather)</label>
+        <input data-field="token" type="password" placeholder="123456:ABC-DEF..." style=${inputStyle} />
+      `
+			}
+
+      ${
+				type === "whatsapp" &&
+				html`
+        <div class="channel-card">
+          <span class="text-xs font-medium text-[var(--text-strong)]">How to set up WhatsApp Business API</span>
+          <div class="text-xs text-[var(--muted)] channel-help">1. Create a Meta Business account and set up a WhatsApp Business app</div>
+          <div class="text-xs text-[var(--muted)]">2. Get your Phone Number ID, Access Token, and App Secret from the Meta Developer Console</div>
+          <div class="text-xs text-[var(--muted)]">3. Configure a webhook URL pointing to: <code class="text-[var(--accent)]">/api/webhooks/whatsapp/[account_id]</code></div>
+          <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://developers.facebook.com/docs/whatsapp/cloud-api/get-started" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">WhatsApp Cloud API Guide</a> for details.</div>
+        </div>
+        <label class="text-xs text-[var(--muted)]">Account ID (unique identifier for this channel)</label>
+        <input data-field="accountId" type="text" placeholder="e.g. my_business" style=${inputStyle} />
+        <label class="text-xs text-[var(--muted)]">Phone Number ID (from Meta Business Suite)</label>
+        <input data-field="phoneNumberId" type="text" placeholder="e.g. 123456789012345" style=${inputStyle} />
+        <label class="text-xs text-[var(--muted)]">Access Token</label>
+        <input data-field="accessToken" type="password" placeholder="EAAxxxx..." style=${inputStyle} />
+        <label class="text-xs text-[var(--muted)]">App Secret (for webhook verification)</label>
+        <input data-field="appSecret" type="password" placeholder="App secret from Meta Developer Console" style=${inputStyle} />
+        <label class="text-xs text-[var(--muted)]">Verify Token (you choose this, use it when configuring the webhook)</label>
+        <input data-field="verifyToken" type="text" placeholder="e.g. my_verify_token_123" style=${inputStyle} />
+      `
+			}
+
       <label class="text-xs text-[var(--muted)]">DM Policy</label>
       <select data-field="dmPolicy" style=${selectStyle}>
         <option value="open">Open (anyone)</option>
         <option value="allowlist">Allowlist only</option>
         <option value="disabled">Disabled</option>
       </select>
-      <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
-      <select data-field="mentionMode" style=${selectStyle}>
-        <option value="mention">Must @mention bot</option>
-        <option value="always">Always respond</option>
-        <option value="none">Don't respond in groups</option>
-      </select>
+
+      ${
+				type === "telegram" &&
+				html`
+        <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
+        <select data-field="mentionMode" style=${selectStyle}>
+          <option value="mention">Must @mention bot</option>
+          <option value="always">Always respond</option>
+          <option value="none">Don't respond in groups</option>
+        </select>
+      `
+			}
+
       <label class="text-xs text-[var(--muted)]">Default Model</label>
       <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
         onChange=${(v) => {
 					addModel.value = v;
 				}}
         placeholder=${defaultPlaceholder} />
-      <label class="text-xs text-[var(--muted)]">DM Allowlist (one username per line)</label>
-      <textarea data-field="allowlist" placeholder="user1\nuser2" rows="3"
+      <label class="text-xs text-[var(--muted)]">DM Allowlist (one ${type === "whatsapp" ? "phone number" : "username"} per line)</label>
+      <textarea data-field="allowlist" placeholder=${type === "whatsapp" ? "+15551234567\n+15559876543" : "user1\nuser2"} rows="3"
         style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;" />
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
       <button class="provider-btn"
         onClick=${onSubmit} disabled=${saving.value}>
-        ${saving.value ? "Connecting\u2026" : "Connect Bot"}
+        ${saving.value ? "Connecting\u2026" : "Connect Channel"}
       </button>
     </div>
   </${Modal}>`;
@@ -308,6 +410,7 @@ function EditChannelModal() {
 	}, [ch]);
 	if (!ch) return null;
 	var cfg = ch.config || {};
+	var type = ch.type || "telegram";
 
 	function onSave(e) {
 		e.preventDefault();
@@ -320,18 +423,29 @@ function EditChannelModal() {
 			.filter(Boolean);
 		error.value = "";
 		saving.value = true;
+
 		var updateConfig = {
-			token: cfg.token || "",
 			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
-			mention_mode: form.querySelector("[data-field=mentionMode]").value,
 			allowlist: allowlist,
 		};
+
+		if (type === "telegram") {
+			updateConfig.token = cfg.token || "";
+			updateConfig.mention_mode = form.querySelector("[data-field=mentionMode]").value;
+		} else if (type === "whatsapp") {
+			updateConfig.phone_number_id = cfg.phone_number_id || "";
+			updateConfig.access_token = cfg.access_token || "";
+			updateConfig.app_secret = cfg.app_secret || "";
+			updateConfig.verify_token = cfg.verify_token || "";
+		}
+
 		if (editModel.value) {
 			updateConfig.model = editModel.value;
 			var found = modelsSig.value.find((x) => x.id === editModel.value);
 			if (found?.provider) updateConfig.model_provider = found.provider;
 		}
 		sendRpc("channels.update", {
+			type: type,
 			account_id: ch.account_id,
 			config: updateConfig,
 		}).then((res) => {
@@ -340,7 +454,7 @@ function EditChannelModal() {
 				editingChannel.value = null;
 				loadChannels();
 			} else {
-				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update bot.";
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update channel.";
 			}
 		});
 	}
@@ -353,30 +467,40 @@ function EditChannelModal() {
 	var selectStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
 
+	var title = type === "whatsapp" ? "Edit WhatsApp Business" : "Edit Telegram Bot";
+	var displayName = ch.name || ch.account_id || (type === "whatsapp" ? "WhatsApp" : "Telegram");
+
 	return html`<${Modal} show=${true} onClose=${() => {
 		editingChannel.value = null;
-	}} title="Edit Telegram Bot">
+	}} title=${title}>
     <div class="channel-form">
-      <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
+      <div class="text-sm text-[var(--text-strong)]">${displayName}</div>
       <label class="text-xs text-[var(--muted)]">DM Policy</label>
       <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "open"}>
         <option value="open">Open (anyone)</option>
         <option value="allowlist">Allowlist only</option>
         <option value="disabled">Disabled</option>
       </select>
-      <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
-      <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
-        <option value="mention">Must @mention bot</option>
-        <option value="always">Always respond</option>
-        <option value="none">Don't respond in groups</option>
-      </select>
+
+      ${
+				type === "telegram" &&
+				html`
+        <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
+        <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
+          <option value="mention">Must @mention bot</option>
+          <option value="always">Always respond</option>
+          <option value="none">Don't respond in groups</option>
+        </select>
+      `
+			}
+
       <label class="text-xs text-[var(--muted)]">Default Model</label>
       <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
         onChange=${(v) => {
 					editModel.value = v;
 				}}
         placeholder=${defaultPlaceholder} />
-      <label class="text-xs text-[var(--muted)]">DM Allowlist (one username per line)</label>
+      <label class="text-xs text-[var(--muted)]">DM Allowlist (one ${type === "whatsapp" ? "phone number" : "username"} per line)</label>
       <textarea data-field="allowlist" rows="3"
         style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;">${(cfg.allowlist || []).join("\n")}</textarea>
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
@@ -428,7 +552,7 @@ function ChannelsPage() {
           <button class="provider-btn"
             onClick=${() => {
 							if (connected.value) showAddModal.value = true;
-						}}>+ Add Telegram Bot</button>
+						}}>+ Add Channel</button>
         `
 				}
       </div>
