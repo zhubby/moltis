@@ -6,8 +6,14 @@
 pub mod config;
 pub mod outbound;
 pub mod plugin;
+pub mod process;
 pub mod sidecar;
 pub mod state;
 pub mod types;
 
-pub use {config::WhatsAppConfig, plugin::WhatsAppPlugin, sidecar::DEFAULT_SIDECAR_PORT};
+pub use {
+    config::WhatsAppConfig,
+    plugin::WhatsAppPlugin,
+    process::{SidecarConfig, SidecarProcess, find_sidecar_dir, start_sidecar},
+    sidecar::DEFAULT_SIDECAR_PORT,
+};

@@ -16,6 +16,9 @@ tokio-tungstenite = { workspace = true }
 tracing           = { workspace = true }
 uuid              = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+nix = { features = ["signal"], version = "0.29" }
+
 [dev-dependencies]
 tokio = { workspace = true }
 

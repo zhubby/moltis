@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, RwLock as StdRwLock},
 };
 
@@ -24,7 +25,8 @@ use moltis_channels::{
 use crate::{
     config::WhatsAppConfig,
     outbound::WhatsAppOutbound,
-    sidecar::{DEFAULT_SIDECAR_PORT, MessageCallback, SidecarHandle, connect_to_sidecar},
+    process::{SidecarConfig, SidecarProcess, find_sidecar_dir, start_sidecar},
+    sidecar::{DEFAULT_SIDECAR_PORT, MessageCallback, SidecarHandle, connect_with_retry},
     state::{AccountState, AccountStateMap},
     types::{ConnectionState, GatewayMessage, SidecarMessage},
 };
@@ -34,9 +36,13 @@ pub struct WhatsAppPlugin {
     accounts: AccountStateMap,
     outbound: WhatsAppOutbound,
     sidecar: Arc<RwLock<Option<SidecarHandle>>>,
+    sidecar_process: Arc<RwLock<Option<SidecarProcess>>>,
     message_log: Option<Arc<dyn MessageLog>>,
     event_sink: Option<Arc<dyn ChannelEventSink>>,
     sidecar_port: u16,
+    sidecar_dir: Option<PathBuf>,
+    auth_base_dir: Option<PathBuf>,
+    auto_start_sidecar: bool,
 }
 
 impl WhatsAppPlugin {
@@ -47,9 +53,13 @@ impl WhatsAppPlugin {
             accounts: Arc::new(StdRwLock::new(HashMap::new())),
             outbound,
             sidecar,
+            sidecar_process: Arc::new(RwLock::new(None)),
             message_log: None,
             event_sink: None,
             sidecar_port: DEFAULT_SIDECAR_PORT,
+            sidecar_dir: None,
+            auth_base_dir: None,
+            auto_start_sidecar: true,
         }
     }
 
@@ -65,6 +75,25 @@ impl WhatsAppPlugin {
 
     pub fn with_sidecar_port(mut self, port: u16) -> Self {
         self.sidecar_port = port;
+        self
+    }
+
+    /// Set the directory containing the sidecar code.
+    pub fn with_sidecar_dir(mut self, dir: PathBuf) -> Self {
+        self.sidecar_dir = Some(dir);
+        self
+    }
+
+    /// Set the base directory for WhatsApp auth files.
+    pub fn with_auth_base_dir(mut self, dir: PathBuf) -> Self {
+        self.auth_base_dir = Some(dir);
+        self
+    }
+
+    /// Disable automatic sidecar process management.
+    /// Use this if you want to run the sidecar manually.
+    pub fn without_auto_start(mut self) -> Self {
+        self.auto_start_sidecar = false;
         self
     }
 
@@ -116,10 +145,30 @@ impl WhatsAppPlugin {
         })
     }
 
-    /// Connect to the sidecar process.
+    /// Ensure the sidecar process is running and we're connected to it.
     async fn ensure_sidecar_connected(&self) -> Result<()> {
+        // Check if already connected.
+        {
+            let sidecar = self.sidecar.read().await;
+            if let Some(handle) = sidecar.as_ref()
+                && handle.is_connected().await
+            {
+                return Ok(());
+            }
+        }
+
+        // Start the sidecar process if needed.
+        if self.auto_start_sidecar {
+            self.ensure_sidecar_process_running().await?;
+        }
+
+        // Connect to the sidecar.
         let mut sidecar = self.sidecar.write().await;
-        if sidecar.is_some() {
+
+        // Double-check after acquiring write lock.
+        if let Some(handle) = sidecar.as_ref()
+            && handle.is_connected().await
+        {
             return Ok(());
         }
 
@@ -136,8 +185,51 @@ impl WhatsAppPlugin {
             );
         });
 
-        let (handle, _disconnect_rx) = connect_to_sidecar(self.sidecar_port, callback).await?;
+        // Use retry logic since the process might still be starting.
+        let (handle, _disconnect_rx) = connect_with_retry(self.sidecar_port, callback, 10).await?;
         *sidecar = Some(handle);
+
+        Ok(())
+    }
+
+    /// Ensure the sidecar process is running.
+    async fn ensure_sidecar_process_running(&self) -> Result<()> {
+        let mut process = self.sidecar_process.write().await;
+
+        // Check if already running.
+        if let Some(ref mut proc) = *process {
+            if proc.is_running() {
+                return Ok(());
+            }
+            warn!("sidecar process died, restarting");
+        }
+
+        // Find sidecar directory.
+        let sidecar_dir = find_sidecar_dir(self.sidecar_dir.as_deref())?;
+
+        let config = SidecarConfig {
+            sidecar_dir,
+            port: self.sidecar_port,
+            auth_dir: self.auth_base_dir.clone(),
+        };
+
+        let proc = start_sidecar(config).await?;
+        *process = Some(proc);
+
+        Ok(())
+    }
+
+    /// Stop the sidecar process.
+    pub async fn stop_sidecar(&self) -> Result<()> {
+        let mut process = self.sidecar_process.write().await;
+        if let Some(ref mut proc) = *process {
+            proc.stop().await?;
+        }
+        *process = None;
+
+        // Also clear the connection handle.
+        let mut sidecar = self.sidecar.write().await;
+        *sidecar = None;
 
         Ok(())
     }
@@ -365,9 +457,7 @@ fn handle_sidecar_message(
             }
 
             // Dispatch to chat if access granted.
-            if access_granted
-                && let Some(sink) = sink
-            {
+            if access_granted && let Some(sink) = sink {
                 let reply_target = ChannelReplyTarget {
                     channel_type: "whatsapp-web".to_string(),
                     account_id: account_id.clone(),
