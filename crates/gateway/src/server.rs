@@ -369,8 +369,8 @@ pub async fn start_gateway(
             services.with_local_llm(Arc::clone(&svc) as Arc<dyn crate::services::LocalLlmService>);
         Some(svc)
     };
-    #[cfg(not(feature = "local-llm"))]
-    let local_llm_service: Option<Arc<crate::local_llm_setup::LiveLocalLlmService>> = None;
+    // When local-llm feature is disabled, this variable is not needed since
+    // the only usage is also feature-gated.
 
     if !registry.read().await.is_empty() {
         services = services.with_model(Arc::new(LiveModelService::new(Arc::clone(&registry))));
@@ -651,8 +651,54 @@ pub async fn start_gateway(
         })
     });
 
-    let cron_service =
-        moltis_cron::service::CronService::new(cron_store, on_system_event, on_agent_turn);
+    // Build cron notification callback that broadcasts job changes.
+    let deferred_for_cron = Arc::clone(&deferred_state);
+    let on_cron_notify: moltis_cron::service::NotifyFn =
+        Arc::new(move |notification: moltis_cron::types::CronNotification| {
+            let state_opt = deferred_for_cron.get();
+            let Some(state) = state_opt else {
+                return;
+            };
+            let (event, payload) = match &notification {
+                moltis_cron::types::CronNotification::Created { job } => {
+                    ("cron.job.created", serde_json::json!({ "job": job }))
+                },
+                moltis_cron::types::CronNotification::Updated { job } => {
+                    ("cron.job.updated", serde_json::json!({ "job": job }))
+                },
+                moltis_cron::types::CronNotification::Removed { job_id } => {
+                    ("cron.job.removed", serde_json::json!({ "jobId": job_id }))
+                },
+            };
+            // Spawn async broadcast in a background task since we're in a sync callback.
+            let state = Arc::clone(state);
+            tokio::spawn(async move {
+                crate::broadcast::broadcast(
+                    &state,
+                    event,
+                    payload,
+                    crate::broadcast::BroadcastOpts {
+                        drop_if_slow: true,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            });
+        });
+
+    // Build rate limit config from moltis config.
+    let rate_limit_config = moltis_cron::service::RateLimitConfig {
+        max_per_window: config.cron.rate_limit_max,
+        window_ms: config.cron.rate_limit_window_secs * 1000,
+    };
+
+    let cron_service = moltis_cron::service::CronService::with_config(
+        cron_store,
+        on_system_event,
+        on_agent_turn,
+        Some(on_cron_notify),
+        rate_limit_config,
+    );
 
     // Wire cron into gateway services.
     let live_cron = Arc::new(crate::cron::LiveCronService::new(Arc::clone(&cron_service)));
@@ -2140,7 +2186,6 @@ struct NavCounts {
     skills: usize,
     mcp: usize,
     crons: usize,
-    images: usize,
 }
 
 #[cfg(feature = "web-ui")]
@@ -2191,16 +2236,12 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
 
 #[cfg(feature = "web-ui")]
 async fn build_nav_counts(gw: &GatewayState) -> NavCounts {
-    let (projects, models, channels, mcp, crons, images) = tokio::join!(
+    let (projects, models, channels, mcp, crons) = tokio::join!(
         gw.services.project.list(),
         gw.services.model.list(),
         gw.services.channel.status(),
         gw.services.mcp.list(),
         gw.services.cron.list(),
-        async {
-            let builder = moltis_tools::image_cache::DockerImageBuilder::new();
-            builder.list_cached().await.ok()
-        },
     );
 
     let projects = projects
@@ -2287,8 +2328,6 @@ async fn build_nav_counts(gw: &GatewayState) -> NavCounts {
         })
         .unwrap_or(0);
 
-    let images = images.map(|imgs| imgs.len()).unwrap_or(0);
-
     NavCounts {
         projects,
         providers,
@@ -2297,7 +2336,6 @@ async fn build_nav_counts(gw: &GatewayState) -> NavCounts {
         skills,
         mcp,
         crons,
-        images,
     }
 }
 
