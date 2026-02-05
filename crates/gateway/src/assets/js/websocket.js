@@ -249,6 +249,45 @@ function handleChatError(p, isActive, isChatPage, eventSession) {
 	S.setStreamText("");
 }
 
+// ── Sub-agent event handlers ──────────────────────────────────
+
+function handleSubAgentStart(p, isActive, isChatPage) {
+	if (!(isActive && isChatPage)) return;
+	removeThinking();
+	var tpl = document.getElementById("tpl-sub-agent-card");
+	var frag = tpl.content.cloneNode(true);
+	var card = frag.firstElementChild;
+	card.id = `sub-agent-${p.depth}-${Date.now()}`;
+	card.dataset.depth = p.depth;
+	card.querySelector("[data-model]").textContent = p.model;
+	card.querySelector("[data-task]").textContent = p.task;
+	S.chatMsgBox.appendChild(card);
+	S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
+}
+
+function handleSubAgentEnd(p, isActive, isChatPage) {
+	if (!(isActive && isChatPage)) return;
+	// Find the most recent running sub-agent card at this depth.
+	var cards = S.chatMsgBox.querySelectorAll(`.sub-agent-card.running[data-depth="${p.depth}"]`);
+	var card = cards[cards.length - 1];
+	if (!card) return;
+
+	card.classList.remove("running");
+	card.classList.add("completed");
+
+	var status = card.querySelector(".sub-agent-status");
+	if (status) status.style.display = "none";
+
+	var result = card.querySelector(".sub-agent-result");
+	if (result) {
+		result.style.display = "block";
+		var stats = result.querySelector("[data-stats]");
+		if (stats) {
+			stats.textContent = `${p.iterations} iteration${p.iterations !== 1 ? "s" : ""} · ${p.tool_calls_made} tool call${p.tool_calls_made !== 1 ? "s" : ""}`;
+		}
+	}
+}
+
 var chatHandlers = {
 	thinking: handleChatThinking,
 	thinking_text: handleChatThinkingText,
@@ -260,6 +299,8 @@ var chatHandlers = {
 	final: handleChatFinal,
 	auto_compact: handleChatAutoCompact,
 	error: handleChatError,
+	sub_agent_start: handleSubAgentStart,
+	sub_agent_end: handleSubAgentEnd,
 };
 
 function handleChatEvent(p) {
@@ -324,12 +365,36 @@ function handleSandboxImageProvision(payload) {
 	}
 }
 
+function handleCrossSessionSend(payload) {
+	var isChatPage = currentPrefix === "/chats";
+	if (!(isChatPage && S.chatMsgBox)) return;
+
+	var tpl = document.getElementById("tpl-cross-session-card");
+	if (!tpl) return;
+
+	var frag = tpl.content.cloneNode(true);
+	var card = frag.firstElementChild;
+	card.id = `cross-session-${Date.now()}`;
+	card.querySelector("[data-target]").textContent = payload.targetSession;
+
+	var preview = payload.messagePreview || "";
+	if (preview.length > 100) preview = preview.substring(0, 100) + "...";
+	card.querySelector("[data-preview]").textContent = preview;
+
+	var statusText = payload.waitForReply ? "Waiting for reply..." : "Message sent";
+	card.querySelector("[data-status]").textContent = statusText;
+
+	S.chatMsgBox.appendChild(card);
+	S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
+}
+
 var eventHandlers = {
 	chat: handleChatEvent,
 	"exec.approval.requested": handleApprovalEvent,
 	"logs.entry": handleLogEntry,
 	"sandbox.image.build": handleSandboxImageBuild,
 	"sandbox.image.provision": handleSandboxImageProvision,
+	cross_session_send: handleCrossSessionSend,
 };
 
 function dispatchFrame(frame) {

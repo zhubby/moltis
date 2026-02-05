@@ -44,6 +44,11 @@ var sections = [
 		icon: html`<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"/></svg>`,
 	},
 	{
+		id: "agents",
+		label: "Agent Presets",
+		icon: html`<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z"/></svg>`,
+	},
+	{
 		id: "environment",
 		label: "Environment",
 		icon: html`<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>`,
@@ -1289,6 +1294,142 @@ function TailscaleSection() {
 	</div>`;
 }
 
+// ── Agent Presets Section ────────────────────────────────────
+
+var agentPresets = signal({});
+var presetsLoading = signal(true);
+
+function fetchPresets() {
+	sendRpc("config.get", { path: "agents.presets" }).then((res) => {
+		presetsLoading.value = false;
+		if (res?.ok && res.payload?.value) {
+			agentPresets.value = res.payload.value;
+		} else {
+			agentPresets.value = {};
+		}
+		rerender();
+	});
+}
+
+function PresetCard({ name, preset }) {
+	var emoji = preset?.identity?.emoji || "\u{1f916}";
+	var displayName = preset?.identity?.name || name;
+	var model = preset?.model || "default";
+	var allowedTools = preset?.tools?.allow || [];
+	var deniedTools = preset?.tools?.deny || [];
+
+	return html`<div class="preset-card">
+		<div class="preset-header">
+			<span class="preset-emoji">${emoji}</span>
+			<span class="preset-name">${displayName}</span>
+			<span class="preset-model">${model}</span>
+		</div>
+
+		${
+			preset?.identity?.vibe
+				? html`<div class="preset-section">
+					<div class="preset-section-title">Personality</div>
+					<div class="text-xs text-[var(--text)]">${preset.identity.vibe}</div>
+				</div>`
+				: null
+		}
+
+		${
+			allowedTools.length > 0 || deniedTools.length > 0
+				? html`<div class="preset-section">
+					<div class="preset-section-title">Tool Policy</div>
+					<div class="preset-tools">
+						${allowedTools.map((t) => html`<span class="preset-tool allowed" key=${t}>${t}</span>`)}
+						${deniedTools.map((t) => html`<span class="preset-tool denied" key=${t}>${t}</span>`)}
+					</div>
+				</div>`
+				: null
+		}
+
+		${
+			preset?.sessions
+				? html`<div class="preset-section">
+					<div class="preset-section-title">Session Access</div>
+					<div class="text-xs text-[var(--muted)]">
+						${preset.sessions.key_prefix ? html`Prefix: <code class="font-mono">${preset.sessions.key_prefix}</code>` : null}
+						${preset.sessions.can_send === false ? html`<span class="text-[var(--warn)]"> (read-only)</span>` : null}
+					</div>
+				</div>`
+				: null
+		}
+
+		${
+			preset?.system_prompt_suffix
+				? html`<div class="preset-section">
+					<div class="preset-section-title">System Prompt</div>
+					<div class="text-xs text-[var(--muted)] max-h-[60px] overflow-hidden">${preset.system_prompt_suffix.substring(0, 150)}${preset.system_prompt_suffix.length > 150 ? "..." : ""}</div>
+				</div>`
+				: null
+		}
+	</div>`;
+}
+
+function AgentsSection() {
+	useEffect(() => {
+		fetchPresets();
+	}, []);
+
+	var presets = agentPresets.value;
+	var presetKeys = Object.keys(presets);
+
+	return html`<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
+		<h2 class="text-lg font-medium text-[var(--text-strong)]">Agent Presets</h2>
+		<p class="text-xs text-[var(--muted)] leading-relaxed max-w-form" style="margin:0;">
+			Configure specialized agent presets for different tasks. Presets define
+			identity, model, tool policies, and session access rules. Use presets with
+			the <code class="font-mono">spawn_agent</code> tool to delegate tasks to
+			specialized sub-agents.
+		</p>
+
+		${presetsLoading.value ? html`<div class="text-xs text-[var(--muted)]">Loading...</div>` : null}
+
+		${
+			!presetsLoading.value && presetKeys.length === 0
+				? html`<div class="max-w-form">
+					<div class="preset-card">
+						<div class="text-xs text-[var(--muted)] leading-relaxed">
+							<p style="margin:0 0 12px">No agent presets configured yet.</p>
+							<p style="margin:0 0 12px">
+								Add presets to <code class="font-mono">moltis.toml</code> to enable
+								specialized sub-agents:
+							</p>
+							<pre
+								class="text-[0.7rem] bg-[var(--surface2)] p-3 rounded-[var(--radius-sm)] overflow-x-auto"
+							>[agents.presets.researcher]
+identity.name = "scout"
+identity.emoji = "\u{1f50d}"
+model = "anthropic/claude-haiku-3-5-20241022"
+tools.allow = ["read_file", "glob", "grep"]</pre>
+						</div>
+					</div>
+				</div>`
+				: null
+		}
+
+		${
+			presetKeys.length > 0
+				? html`<div class="max-w-form">
+					${presetKeys.map((name) => html`<${PresetCard} key=${name} name=${name} preset=${presets[name]} />`)}
+				</div>`
+				: null
+		}
+
+		<div class="max-w-form mt-4">
+			<h3 class="text-sm font-medium text-[var(--text-strong)] mb-2">Documentation</h3>
+			<p class="text-xs text-[var(--muted)] leading-relaxed">
+				See <a href="https://github.com/penso/moltis/blob/main/docs/agent-presets.md" target="_blank" rel="noopener" class="text-[var(--accent)] no-underline hover:underline">Agent Presets</a> and
+				<a href="https://github.com/penso/moltis/blob/main/docs/session-tools.md" target="_blank" rel="noopener" class="text-[var(--accent)] no-underline hover:underline">Session Tools</a>
+				for detailed configuration options.
+			</p>
+		</div>
+	</div>`;
+}
+
 // ── Main layout ──────────────────────────────────────────────
 
 function SettingsPage() {
@@ -1301,6 +1442,7 @@ function SettingsPage() {
 	return html`<div class="settings-layout">
 		<${SettingsSidebar} />
 		${section === "identity" ? html`<${IdentitySection} />` : null}
+		${section === "agents" ? html`<${AgentsSection} />` : null}
 		${section === "environment" ? html`<${EnvironmentSection} />` : null}
 		${section === "security" ? html`<${SecuritySection} />` : null}
 		${section === "tailscale" ? html`<${TailscaleSection} />` : null}

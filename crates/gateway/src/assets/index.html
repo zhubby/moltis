@@ -317,6 +317,40 @@
   </div>
 </template>
 
+<template id="tpl-sub-agent-card">
+  <div class="msg sub-agent-card running">
+    <div class="sub-agent-header">
+      <span class="sub-agent-icon">🤖</span>
+      <span class="sub-agent-title">Sub-agent</span>
+      <span class="sub-agent-model" data-model></span>
+    </div>
+    <div class="sub-agent-task" data-task></div>
+    <div class="sub-agent-status">
+      <span class="thinking-dots"><span></span><span></span><span></span></span>
+      <span class="sub-agent-status-text">working...</span>
+    </div>
+    <div class="sub-agent-result" style="display:none">
+      <div class="sub-agent-result-header">Result</div>
+      <div class="sub-agent-result-stats" data-stats></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-cross-session-card">
+  <div class="msg cross-session-card">
+    <div class="cross-session-header">
+      <span class="cross-session-icon">📡</span>
+      <span class="cross-session-title">Cross-session message</span>
+    </div>
+    <div class="cross-session-target">
+      <span class="cross-session-label">To:</span>
+      <span class="cross-session-key" data-target></span>
+    </div>
+    <div class="cross-session-preview" data-preview></div>
+    <div class="cross-session-status" data-status></div>
+  </div>
+</template>
+
 <script type="module" src="/assets/js/app.js"></script>
 </body>
 </html>

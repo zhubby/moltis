@@ -1043,3 +1043,243 @@
   font-size: 0.72rem;
   color: var(--muted);
 }
+
+/* ── Sub-agent cards ── */
+
+.sub-agent-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  animation: 0.2s ease-out msg-in;
+}
+
+.sub-agent-card.running {
+  border-left: 3px solid var(--accent);
+}
+
+.sub-agent-card.completed {
+  border-left: 3px solid var(--ok);
+}
+
+.sub-agent-card.failed {
+  border-left: 3px solid var(--error);
+}
+
+.sub-agent-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sub-agent-icon {
+  font-size: 1rem;
+}
+
+.sub-agent-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-strong);
+}
+
+.sub-agent-model {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-left: auto;
+  background: var(--surface2);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.sub-agent-task {
+  font-size: 0.8rem;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius-sm);
+}
+
+.sub-agent-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.sub-agent-status-text {
+  font-style: italic;
+}
+
+.sub-agent-result {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sub-agent-result-header {
+  font-weight: 500;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.sub-agent-result-stats {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text);
+  display: flex;
+  gap: 16px;
+}
+
+/* ── Cross-session cards ── */
+
+.cross-session-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid #818cf8;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  animation: 0.2s ease-out msg-in;
+}
+
+.cross-session-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cross-session-icon {
+  font-size: 1rem;
+}
+
+.cross-session-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-strong);
+}
+
+.cross-session-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  margin-bottom: 8px;
+}
+
+.cross-session-label {
+  color: var(--muted);
+}
+
+.cross-session-key {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: var(--surface2);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.cross-session-preview {
+  font-size: 0.8rem;
+  color: var(--text);
+  line-height: 1.5;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius-sm);
+  max-height: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cross-session-status {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── Agent presets ── */
+
+.preset-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.preset-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.preset-emoji {
+  font-size: 1.5rem;
+}
+
+.preset-name {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--text-strong);
+}
+
+.preset-model {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.preset-section {
+  margin-bottom: 12px;
+}
+
+.preset-section:last-child {
+  margin-bottom: 0;
+}
+
+.preset-section-title {
+  font-weight: 500;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.preset-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-tool {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text);
+  background: var(--surface2);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.preset-tool.allowed {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.preset-tool.denied {
+  border-color: var(--error);
+  color: var(--error);
+  text-decoration: line-through;
+}
