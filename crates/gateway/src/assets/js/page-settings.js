@@ -1511,8 +1511,7 @@ function NotificationsSection() {
 					Installation required
 				</p>
 				<p class="text-xs text-[var(--muted)]" style="margin:8px 0 0;">
-					On Safari, push notifications are only available for installed apps. Add moltis to your Dock using
-					<strong>File → Add to Dock</strong> (or Share → Add to Dock on iOS), then open it from there.
+					On Safari, push notifications are only available for installed apps. Add moltis to your Dock using <strong>File → Add to Dock</strong> (or Share → Add to Dock on iOS), then open it from there.
 				</p>
 			</div>
 		`
