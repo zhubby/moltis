@@ -203,6 +203,15 @@ const OPENAI_COMPAT_PROVIDERS: &[OpenAiCompatDef] = &[
         default_base_url: "https://api.x.ai/v1",
         models: GROK_MODELS,
     },
+    // Generic OpenAI-compatible provider for any endpoint.
+    // Requires both base_url and model to be configured explicitly.
+    OpenAiCompatDef {
+        config_name: "openai-compatible",
+        env_key: "OPENAI_COMPATIBLE_API_KEY",
+        env_base_url_key: "OPENAI_COMPATIBLE_BASE_URL",
+        default_base_url: "",
+        models: &[],
+    },
 ];
 
 /// Registry of available LLM providers, keyed by model ID.
@@ -665,7 +674,18 @@ impl ProviderRegistry {
                 .get(def.config_name)
                 .and_then(|e| e.base_url.clone())
                 .or_else(|| std::env::var(def.env_base_url_key).ok())
-                .unwrap_or_else(|| def.default_base_url.into());
+                .or_else(|| {
+                    if def.default_base_url.is_empty() {
+                        None
+                    } else {
+                        Some(def.default_base_url.into())
+                    }
+                });
+
+            // Providers with no default base_url require explicit configuration.
+            let Some(base_url) = base_url else {
+                continue;
+            };
 
             // If user configured a specific model, register only that one.
             if let Some(model_id) = config.get(def.config_name).and_then(|e| e.model.as_deref()) {
@@ -944,6 +964,10 @@ mod tests {
     #[test]
     fn openai_compat_providers_have_valid_urls() {
         for def in OPENAI_COMPAT_PROVIDERS {
+            // Empty base_url is valid for providers that require explicit config.
+            if def.default_base_url.is_empty() {
+                continue;
+            }
             assert!(
                 def.default_base_url.starts_with("http://")
                     || def.default_base_url.starts_with("https://"),
@@ -1138,6 +1162,53 @@ mod tests {
 
         let reg = ProviderRegistry::from_env_with_config(&config);
         assert!(reg.list_models().iter().any(|m| m.provider == "xai"));
+    }
+
+    #[test]
+    fn openai_compatible_requires_base_url_and_model() {
+        // Without base_url, should not register.
+        let mut config = ProvidersConfig::default();
+        config.providers.insert(
+            "openai-compatible".into(),
+            moltis_config::schema::ProviderEntry {
+                api_key: Some(secrecy::Secret::new("sk-test".into())),
+                model: Some("custom-model".into()),
+                ..Default::default()
+            },
+        );
+
+        let reg = ProviderRegistry::from_env_with_config(&config);
+        assert!(
+            !reg.list_models()
+                .iter()
+                .any(|m| m.provider == "openai-compatible"),
+            "should not register without base_url"
+        );
+    }
+
+    #[test]
+    fn openai_compatible_registers_with_full_config() {
+        let mut config = ProvidersConfig::default();
+        config.providers.insert(
+            "openai-compatible".into(),
+            moltis_config::schema::ProviderEntry {
+                api_key: Some(secrecy::Secret::new("sk-test".into())),
+                base_url: Some("https://my-custom-llm.example.com/v1".into()),
+                model: Some("my-custom-model".into()),
+                ..Default::default()
+            },
+        );
+
+        let reg = ProviderRegistry::from_env_with_config(&config);
+        let compat_models: Vec<_> = reg
+            .list_models()
+            .iter()
+            .filter(|m| m.provider == "openai-compatible")
+            .collect();
+        assert_eq!(compat_models.len(), 1);
+        assert_eq!(compat_models[0].id, "my-custom-model");
+        // Should support tools (OpenAI-compatible)
+        assert!(reg.get("my-custom-model").unwrap().supports_tools());
     }
 
     #[test]
