@@ -26,6 +26,7 @@ moltis-cron           = { workspace = true }
 moltis-mcp            = { workspace = true }
 moltis-media          = { workspace = true }
 moltis-memory         = { workspace = true }
+moltis-metrics        = { optional = true, workspace = true }
 moltis-oauth          = { workspace = true }
 moltis-onboarding     = { workspace = true }
 moltis-plugins        = { workspace = true }
@@ -65,13 +66,23 @@ webauthn-rs-proto     = "0.5"
 openssl = { workspace = true }
 
 [features]
-default            = ["file-watcher", "push-notifications", "tailscale", "tls", "web-ui"]
-file-watcher       = ["moltis-memory/file-watcher"]
-local-embeddings   = ["moltis-memory/local-embeddings"]
+default = [
+  "file-watcher",
+  "metrics",
+  "prometheus",
+  "push-notifications",
+  "tailscale",
+  "tls",
+  "web-ui",
+]
+file-watcher = ["moltis-memory/file-watcher"]
+local-embeddings = ["moltis-memory/local-embeddings"]
+metrics = ["dep:moltis-metrics", "moltis-metrics/sqlite"]
+prometheus = ["metrics", "moltis-metrics/prometheus"]
 push-notifications = ["dep:chrono", "dep:p256", "dep:web-push"]
-tailscale          = []
-tls                = ["dep:axum-server", "dep:rcgen", "dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
-web-ui             = ["dep:include_dir"]
+tailscale = []
+tls = ["dep:axum-server", "dep:rcgen", "dep:rustls", "dep:rustls-pemfile", "dep:tokio-rustls"]
+web-ui = ["dep:include_dir"]
 
 [dev-dependencies]
 reqwest           = { workspace = true }
