@@ -25,7 +25,7 @@ export function prefetchChannels() {
 }
 var senders = signal([]);
 var activeTab = signal("channels");
-var showAddModal = signal(false);
+var showAddModal = signal(null); // null, "telegram", "slack", or "discord"
 var editingChannel = signal(null);
 var sendersAccount = signal("");
 
@@ -51,7 +51,7 @@ function loadSenders() {
 	});
 }
 
-// ── Telegram icon (inline SVG via htm) ──────────────────────
+// ── Channel icons (inline SVG via htm) ───────────────────────
 function TelegramIcon() {
 	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
     stroke="currentColor" stroke-width="1.5">
@@ -59,14 +59,47 @@ function TelegramIcon() {
   </svg>`;
 }
 
+function SlackIcon() {
+	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.5">
+    <path d="M14.5 10c-.83 0-1.5-.67-1.5-1.5v-5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5z" />
+    <path d="M20.5 10H19V8.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z" />
+    <path d="M9.5 14c.83 0 1.5.67 1.5 1.5v5c0 .83-.67 1.5-1.5 1.5S8 21.33 8 20.5v-5c0-.83.67-1.5 1.5-1.5z" />
+    <path d="M3.5 14H5v1.5c0 .83-.67 1.5-1.5 1.5S2 16.33 2 15.5 2.67 14 3.5 14z" />
+    <path d="M14 14.5c0-.83.67-1.5 1.5-1.5h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-5c-.83 0-1.5-.67-1.5-1.5z" />
+    <path d="M15.5 19H14v1.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5-.67-1.5-1.5-1.5z" />
+    <path d="M10 9.5C10 8.67 9.33 8 8.5 8h-5C2.67 8 2 8.67 2 9.5S2.67 11 3.5 11h5c.83 0 1.5-.67 1.5-1.5z" />
+    <path d="M8.5 5H10V3.5C10 2.67 9.33 2 8.5 2S7 2.67 7 3.5 7.67 5 8.5 5z" />
+  </svg>`;
+}
+
+function DiscordIcon() {
+	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.5">
+    <path d="M9 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" />
+    <path d="M15 11.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z" />
+    <path d="M7.5 4.5C5.5 5.5 4 7 3.5 9c-.5 2-.5 4 0 6 .5 2 2 3.5 4 4.5l1-2" />
+    <path d="M16.5 4.5c2 1 3.5 2.5 4 4.5.5 2 .5 4 0 6-.5 2-2 3.5-4 4.5l-1-2" />
+    <path d="M8.5 4.5c1-.5 2.3-.5 3.5-.5s2.5 0 3.5.5" />
+    <path d="M8.5 17.5c1 .5 2.3.5 3.5.5s2.5 0 3.5-.5" />
+  </svg>`;
+}
+
+function ChannelIcon({ type }) {
+	if (type === "slack") return html`<${SlackIcon} />`;
+	if (type === "discord") return html`<${DiscordIcon} />`;
+	return html`<${TelegramIcon} />`;
+}
+
 // ── Channel card ─────────────────────────────────────────────
 function ChannelCard(props) {
 	var ch = props.channel;
+	var channelType = ch.type || "telegram";
 
 	function onRemove() {
 		requestConfirm(`Remove ${ch.name || ch.account_id}?`).then((yes) => {
 			if (!yes) return;
-			sendRpc("channels.remove", { account_id: ch.account_id }).then((r) => {
+			sendRpc("channels.remove", { account_id: ch.account_id, type: channelType }).then((r) => {
 				if (r?.ok) loadChannels();
 			});
 		});
@@ -82,13 +115,15 @@ function ChannelCard(props) {
 				: "No active session";
 	}
 
+	var typeLabel = channelType.charAt(0).toUpperCase() + channelType.slice(1);
+
 	return html`<div class="provider-card" style="padding:12px 14px;border-radius:8px;margin-bottom:8px;">
     <div style="display:flex;align-items:center;gap:10px;">
       <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--surface2);">
-        <${TelegramIcon} />
+        <${ChannelIcon} type=${channelType} />
       </span>
       <div style="display:flex;flex-direction:column;gap:2px;">
-        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || "Telegram"}</span>
+        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || typeLabel}</span>
         ${ch.details && html`<span class="text-xs text-[var(--muted)]">${ch.details}</span>`}
         ${sessionLine && html`<span class="text-xs text-[var(--muted)]">${sessionLine}</span>`}
       </div>
@@ -109,8 +144,8 @@ function ChannelCard(props) {
 function ChannelsTab() {
 	if (channels.value.length === 0) {
 		return html`<div style="text-align:center;padding:40px 0;">
-      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No Telegram bots connected.</div>
-      <div class="text-xs text-[var(--muted)]">Click "+ Add Telegram Bot" to connect one using a token from @BotFather.</div>
+      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No channels connected.</div>
+      <div class="text-xs text-[var(--muted)]">Click "Connect Channel" to add Telegram, Slack, or Discord.</div>
     </div>`;
 	}
 	return html`${channels.value.map((ch) => html`<${ChannelCard} key=${ch.account_id} channel=${ch} />`)}`;
@@ -188,8 +223,62 @@ function SendersTab() {
   </div>`;
 }
 
-// ── Add channel modal ────────────────────────────────────────
-function AddChannelModal() {
+// ── Connect channel dropdown ─────────────────────────────────
+function ConnectChannelDropdown() {
+	var showMenu = useSignal(false);
+
+	function selectChannel(type) {
+		showMenu.value = false;
+		showAddModal.value = type;
+	}
+
+	return html`<div style="position:relative;">
+    <button class="provider-btn"
+      onClick=${() => {
+				if (connected.value) showMenu.value = !showMenu.value;
+			}}>
+      + Connect Channel
+    </button>
+    ${
+			showMenu.value &&
+			html`<div class="dropdown-menu" style="position:absolute;top:100%;left:0;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:100;min-width:180px;">
+        <button class="dropdown-item" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;border:none;background:none;color:var(--text);cursor:pointer;text-align:left;font-size:14px;"
+          onClick=${() => selectChannel("telegram")}
+          onMouseOver=${(e) => {
+						e.currentTarget.style.background = "var(--surface2)";
+					}}
+          onMouseOut=${(e) => {
+						e.currentTarget.style.background = "none";
+					}}>
+          <${TelegramIcon} /> Telegram
+        </button>
+        <button class="dropdown-item" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;border:none;background:none;color:var(--text);cursor:pointer;text-align:left;font-size:14px;"
+          onClick=${() => selectChannel("slack")}
+          onMouseOver=${(e) => {
+						e.currentTarget.style.background = "var(--surface2)";
+					}}
+          onMouseOut=${(e) => {
+						e.currentTarget.style.background = "none";
+					}}>
+          <${SlackIcon} /> Slack
+        </button>
+        <button class="dropdown-item" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;border:none;background:none;color:var(--text);cursor:pointer;text-align:left;font-size:14px;"
+          onClick=${() => selectChannel("discord")}
+          onMouseOver=${(e) => {
+						e.currentTarget.style.background = "var(--surface2)";
+					}}
+          onMouseOut=${(e) => {
+						e.currentTarget.style.background = "none";
+					}}>
+          <${DiscordIcon} /> Discord
+        </button>
+      </div>`
+		}
+  </div>`;
+}
+
+// ── Add Telegram modal ───────────────────────────────────────
+function AddTelegramModal() {
 	var error = useSignal("");
 	var saving = useSignal(false);
 	var addModel = useSignal("");
@@ -233,7 +322,7 @@ function AddChannelModal() {
 		}).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
-				showAddModal.value = false;
+				showAddModal.value = null;
 				addModel.value = "";
 				loadChannels();
 			} else {
@@ -252,9 +341,9 @@ function AddChannelModal() {
 	var inputStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
 
-	return html`<${Modal} show=${showAddModal.value} onClose=${() => {
-		showAddModal.value = false;
-	}} title="Add Telegram Bot">
+	return html`<${Modal} show=${showAddModal.value === "telegram"} onClose=${() => {
+		showAddModal.value = null;
+	}} title="Connect Telegram Bot">
     <div class="channel-form">
       <div class="channel-card">
         <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
@@ -297,6 +386,248 @@ function AddChannelModal() {
   </${Modal}>`;
 }
 
+// ── Add Slack modal ──────────────────────────────────────────
+function AddSlackModal() {
+	var error = useSignal("");
+	var saving = useSignal(false);
+	var addModel = useSignal("");
+
+	function onSubmit(e) {
+		e.preventDefault();
+		var form = e.target.closest(".channel-form");
+		var accountId = form.querySelector("[data-field=accountId]").value.trim();
+		var botToken = form.querySelector("[data-field=botToken]").value.trim();
+		var appToken = form.querySelector("[data-field=appToken]").value.trim();
+		if (!accountId) {
+			error.value = "Workspace name is required.";
+			return;
+		}
+		if (!botToken) {
+			error.value = "Bot token is required.";
+			return;
+		}
+		if (!appToken) {
+			error.value = "App-level token is required for Socket Mode.";
+			return;
+		}
+		var userAllowlist = form
+			.querySelector("[data-field=userAllowlist]")
+			.value.trim()
+			.split(/\n/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+		error.value = "";
+		saving.value = true;
+		var addConfig = {
+			bot_token: botToken,
+			app_token: appToken,
+			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+			channel_policy: form.querySelector("[data-field=channelPolicy]").value,
+			activation_mode: form.querySelector("[data-field=activationMode]").value,
+			user_allowlist: userAllowlist,
+		};
+		if (addModel.value) {
+			addConfig.model = addModel.value;
+			var found = modelsSig.value.find((x) => x.id === addModel.value);
+			if (found?.provider) addConfig.model_provider = found.provider;
+		}
+		sendRpc("channels.add", {
+			type: "slack",
+			account_id: accountId,
+			config: addConfig,
+		}).then((res) => {
+			saving.value = false;
+			if (res?.ok) {
+				showAddModal.value = null;
+				addModel.value = "";
+				loadChannels();
+			} else {
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect Slack.";
+			}
+		});
+	}
+
+	var defaultPlaceholder =
+		modelsSig.value.length > 0
+			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
+			: "(server default)";
+
+	var selectStyle =
+		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
+	var inputStyle =
+		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
+
+	return html`<${Modal} show=${showAddModal.value === "slack"} onClose=${() => {
+		showAddModal.value = null;
+	}} title="Connect Slack Workspace">
+    <div class="channel-form">
+      <div class="channel-card">
+        <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Slack app</span>
+        <div class="text-xs text-[var(--muted)] channel-help">1. Go to <a href="https://api.slack.com/apps" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">api.slack.com/apps</a> and create a new app</div>
+        <div class="text-xs text-[var(--muted)]">2. Enable Socket Mode and create an app-level token with connections:write</div>
+        <div class="text-xs text-[var(--muted)]">3. Add Bot Token Scopes: app_mentions:read, chat:write, im:history, im:read, im:write, users:read</div>
+        <div class="text-xs text-[var(--muted)]">4. Install to workspace and copy both tokens below</div>
+        <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://api.slack.com/apis/socket-mode" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Socket Mode docs</a> for more details.</div>
+      </div>
+      <label class="text-xs text-[var(--muted)]">Workspace name (identifier)</label>
+      <input data-field="accountId" type="text" placeholder="e.g. my-company" style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">Bot Token (xoxb-...)</label>
+      <input data-field="botToken" type="password" placeholder="xoxb-..." style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">App-Level Token (xapp-...)</label>
+      <input data-field="appToken" type="password" placeholder="xapp-..." style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+      <select data-field="dmPolicy" style=${selectStyle}>
+        <option value="open">Open (anyone)</option>
+        <option value="allowlist">Allowlist only</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Channel Policy</label>
+      <select data-field="channelPolicy" style=${selectStyle}>
+        <option value="open">Open (all channels)</option>
+        <option value="allowlist">Allowlist only</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Activation Mode</label>
+      <select data-field="activationMode" style=${selectStyle}>
+        <option value="mention">Must @mention bot</option>
+        <option value="always">Always respond</option>
+        <option value="thread_only">Thread only</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Default Model</label>
+      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
+        onChange=${(v) => {
+					addModel.value = v;
+				}}
+        placeholder=${defaultPlaceholder} />
+      <label class="text-xs text-[var(--muted)]">User Allowlist (one Slack user ID per line)</label>
+      <textarea data-field="userAllowlist" placeholder="U01234567\nU98765432" rows="3"
+        style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;" />
+      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+      <button class="provider-btn"
+        onClick=${onSubmit} disabled=${saving.value}>
+        ${saving.value ? "Connecting\u2026" : "Connect Workspace"}
+      </button>
+    </div>
+  </${Modal}>`;
+}
+
+// ── Add Discord modal ────────────────────────────────────────
+function AddDiscordModal() {
+	var error = useSignal("");
+	var saving = useSignal(false);
+	var addModel = useSignal("");
+
+	function onSubmit(e) {
+		e.preventDefault();
+		var form = e.target.closest(".channel-form");
+		var accountId = form.querySelector("[data-field=accountId]").value.trim();
+		var token = form.querySelector("[data-field=token]").value.trim();
+		if (!accountId) {
+			error.value = "Bot name is required.";
+			return;
+		}
+		if (!token) {
+			error.value = "Bot token is required.";
+			return;
+		}
+		var userAllowlist = form
+			.querySelector("[data-field=userAllowlist]")
+			.value.trim()
+			.split(/\n/)
+			.map((s) => s.trim())
+			.filter(Boolean);
+		error.value = "";
+		saving.value = true;
+		var addConfig = {
+			token: token,
+			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+			guild_policy: form.querySelector("[data-field=guildPolicy]").value,
+			mention_mode: form.querySelector("[data-field=mentionMode]").value,
+			user_allowlist: userAllowlist,
+		};
+		if (addModel.value) {
+			addConfig.model = addModel.value;
+			var found = modelsSig.value.find((x) => x.id === addModel.value);
+			if (found?.provider) addConfig.model_provider = found.provider;
+		}
+		sendRpc("channels.add", {
+			type: "discord",
+			account_id: accountId,
+			config: addConfig,
+		}).then((res) => {
+			saving.value = false;
+			if (res?.ok) {
+				showAddModal.value = null;
+				addModel.value = "";
+				loadChannels();
+			} else {
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect Discord.";
+			}
+		});
+	}
+
+	var defaultPlaceholder =
+		modelsSig.value.length > 0
+			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
+			: "(server default)";
+
+	var selectStyle =
+		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
+	var inputStyle =
+		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
+
+	return html`<${Modal} show=${showAddModal.value === "discord"} onClose=${() => {
+		showAddModal.value = null;
+	}} title="Connect Discord Bot">
+    <div class="channel-form">
+      <div class="channel-card">
+        <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Discord bot</span>
+        <div class="text-xs text-[var(--muted)] channel-help">1. Go to <a href="https://discord.com/developers/applications" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Discord Developer Portal</a> and create a new application</div>
+        <div class="text-xs text-[var(--muted)]">2. Go to Bot section and create a bot, copy the token</div>
+        <div class="text-xs text-[var(--muted)]">3. Enable MESSAGE CONTENT INTENT in the bot settings</div>
+        <div class="text-xs text-[var(--muted)]">4. Go to OAuth2 > URL Generator, select bot scope with Send Messages permission</div>
+        <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://discord.com/developers/docs/getting-started" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Discord docs</a> for more details.</div>
+      </div>
+      <label class="text-xs text-[var(--muted)]">Bot name (identifier)</label>
+      <input data-field="accountId" type="text" placeholder="e.g. my-assistant" style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">Bot Token</label>
+      <input data-field="token" type="password" placeholder="Bot token from Developer Portal" style=${inputStyle} />
+      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+      <select data-field="dmPolicy" style=${selectStyle}>
+        <option value="open">Open (anyone)</option>
+        <option value="allowlist">Allowlist only</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Server (Guild) Policy</label>
+      <select data-field="guildPolicy" style=${selectStyle}>
+        <option value="open">Open (all servers)</option>
+        <option value="allowlist">Allowlist only</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Mention Mode</label>
+      <select data-field="mentionMode" style=${selectStyle}>
+        <option value="mention">Must @mention bot</option>
+        <option value="always">Always respond</option>
+        <option value="none">Don't respond in servers</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Default Model</label>
+      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
+        onChange=${(v) => {
+					addModel.value = v;
+				}}
+        placeholder=${defaultPlaceholder} />
+      <label class="text-xs text-[var(--muted)]">User Allowlist (one Discord user ID per line)</label>
+      <textarea data-field="userAllowlist" placeholder="123456789012345678" rows="3"
+        style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;" />
+      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+      <button class="provider-btn"
+        onClick=${onSubmit} disabled=${saving.value}>
+        ${saving.value ? "Connecting\u2026" : "Connect Bot"}
+      </button>
+    </div>
+  </${Modal}>`;
+}
+
 // ── Edit channel modal ───────────────────────────────────────
 function EditChannelModal() {
 	var ch = editingChannel.value;
@@ -308,24 +639,61 @@ function EditChannelModal() {
 	}, [ch]);
 	if (!ch) return null;
 	var cfg = ch.config || {};
+	var channelType = ch.type || "telegram";
+	var typeLabel = channelType.charAt(0).toUpperCase() + channelType.slice(1);
 
 	function onSave(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
-		var allowlist = form
-			.querySelector("[data-field=allowlist]")
-			.value.trim()
-			.split(/\n/)
-			.map((s) => s.trim())
-			.filter(Boolean);
 		error.value = "";
 		saving.value = true;
-		var updateConfig = {
-			token: cfg.token || "",
-			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
-			mention_mode: form.querySelector("[data-field=mentionMode]").value,
-			allowlist: allowlist,
-		};
+
+		var updateConfig = {};
+
+		if (channelType === "telegram") {
+			var allowlist = form
+				.querySelector("[data-field=allowlist]")
+				.value.trim()
+				.split(/\n/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+			updateConfig = {
+				token: cfg.token || "",
+				dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+				mention_mode: form.querySelector("[data-field=mentionMode]").value,
+				allowlist: allowlist,
+			};
+		} else if (channelType === "slack") {
+			var userAllowlist = form
+				.querySelector("[data-field=userAllowlist]")
+				.value.trim()
+				.split(/\n/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+			updateConfig = {
+				bot_token: cfg.bot_token || "",
+				app_token: cfg.app_token || "",
+				dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+				channel_policy: form.querySelector("[data-field=channelPolicy]").value,
+				activation_mode: form.querySelector("[data-field=activationMode]").value,
+				user_allowlist: userAllowlist,
+			};
+		} else if (channelType === "discord") {
+			var userAllowlist = form
+				.querySelector("[data-field=userAllowlist]")
+				.value.trim()
+				.split(/\n/)
+				.map((s) => s.trim())
+				.filter(Boolean);
+			updateConfig = {
+				token: cfg.token || "",
+				dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+				guild_policy: form.querySelector("[data-field=guildPolicy]").value,
+				mention_mode: form.querySelector("[data-field=mentionMode]").value,
+				user_allowlist: userAllowlist,
+			};
+		}
+
 		if (editModel.value) {
 			updateConfig.model = editModel.value;
 			var found = modelsSig.value.find((x) => x.id === editModel.value);
@@ -333,6 +701,7 @@ function EditChannelModal() {
 		}
 		sendRpc("channels.update", {
 			account_id: ch.account_id,
+			type: channelType,
 			config: updateConfig,
 		}).then((res) => {
 			saving.value = false;
@@ -340,7 +709,7 @@ function EditChannelModal() {
 				editingChannel.value = null;
 				loadChannels();
 			} else {
-				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update bot.";
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update channel.";
 			}
 		});
 	}
@@ -353,39 +722,128 @@ function EditChannelModal() {
 	var selectStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
 
-	return html`<${Modal} show=${true} onClose=${() => {
-		editingChannel.value = null;
-	}} title="Edit Telegram Bot">
-    <div class="channel-form">
-      <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
-      <label class="text-xs text-[var(--muted)]">DM Policy</label>
-      <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "open"}>
-        <option value="open">Open (anyone)</option>
-        <option value="allowlist">Allowlist only</option>
-        <option value="disabled">Disabled</option>
-      </select>
-      <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
-      <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
-        <option value="mention">Must @mention bot</option>
-        <option value="always">Always respond</option>
-        <option value="none">Don't respond in groups</option>
-      </select>
-      <label class="text-xs text-[var(--muted)]">Default Model</label>
-      <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
-        onChange=${(v) => {
-					editModel.value = v;
-				}}
-        placeholder=${defaultPlaceholder} />
-      <label class="text-xs text-[var(--muted)]">DM Allowlist (one username per line)</label>
-      <textarea data-field="allowlist" rows="3"
-        style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;">${(cfg.allowlist || []).join("\n")}</textarea>
-      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
-      <button class="provider-btn"
-        onClick=${onSave} disabled=${saving.value}>
-        ${saving.value ? "Saving\u2026" : "Save Changes"}
-      </button>
-    </div>
-  </${Modal}>`;
+	// Render different forms based on channel type
+	if (channelType === "telegram") {
+		return html`<${Modal} show=${true} onClose=${() => {
+			editingChannel.value = null;
+		}} title="Edit Telegram Bot">
+      <div class="channel-form">
+        <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
+        <label class="text-xs text-[var(--muted)]">DM Policy</label>
+        <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "open"}>
+          <option value="open">Open (anyone)</option>
+          <option value="allowlist">Allowlist only</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
+        <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
+          <option value="mention">Must @mention bot</option>
+          <option value="always">Always respond</option>
+          <option value="none">Don't respond in groups</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Default Model</label>
+        <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
+          onChange=${(v) => {
+						editModel.value = v;
+					}}
+          placeholder=${defaultPlaceholder} />
+        <label class="text-xs text-[var(--muted)]">DM Allowlist (one username per line)</label>
+        <textarea data-field="allowlist" rows="3"
+          style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;">${(cfg.allowlist || []).join("\n")}</textarea>
+        ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+        <button class="provider-btn"
+          onClick=${onSave} disabled=${saving.value}>
+          ${saving.value ? "Saving\u2026" : "Save Changes"}
+        </button>
+      </div>
+    </${Modal}>`;
+	}
+
+	if (channelType === "slack") {
+		return html`<${Modal} show=${true} onClose=${() => {
+			editingChannel.value = null;
+		}} title="Edit Slack Workspace">
+      <div class="channel-form">
+        <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
+        <label class="text-xs text-[var(--muted)]">DM Policy</label>
+        <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "open"}>
+          <option value="open">Open (anyone)</option>
+          <option value="allowlist">Allowlist only</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Channel Policy</label>
+        <select data-field="channelPolicy" style=${selectStyle} value=${cfg.channel_policy || "open"}>
+          <option value="open">Open (all channels)</option>
+          <option value="allowlist">Allowlist only</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Activation Mode</label>
+        <select data-field="activationMode" style=${selectStyle} value=${cfg.activation_mode || "mention"}>
+          <option value="mention">Must @mention bot</option>
+          <option value="always">Always respond</option>
+          <option value="thread_only">Thread only</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Default Model</label>
+        <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
+          onChange=${(v) => {
+						editModel.value = v;
+					}}
+          placeholder=${defaultPlaceholder} />
+        <label class="text-xs text-[var(--muted)]">User Allowlist (one Slack user ID per line)</label>
+        <textarea data-field="userAllowlist" rows="3"
+          style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;">${(cfg.user_allowlist || []).join("\n")}</textarea>
+        ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+        <button class="provider-btn"
+          onClick=${onSave} disabled=${saving.value}>
+          ${saving.value ? "Saving\u2026" : "Save Changes"}
+        </button>
+      </div>
+    </${Modal}>`;
+	}
+
+	if (channelType === "discord") {
+		return html`<${Modal} show=${true} onClose=${() => {
+			editingChannel.value = null;
+		}} title="Edit Discord Bot">
+      <div class="channel-form">
+        <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
+        <label class="text-xs text-[var(--muted)]">DM Policy</label>
+        <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "open"}>
+          <option value="open">Open (anyone)</option>
+          <option value="allowlist">Allowlist only</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Server (Guild) Policy</label>
+        <select data-field="guildPolicy" style=${selectStyle} value=${cfg.guild_policy || "open"}>
+          <option value="open">Open (all servers)</option>
+          <option value="allowlist">Allowlist only</option>
+          <option value="disabled">Disabled</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Mention Mode</label>
+        <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
+          <option value="mention">Must @mention bot</option>
+          <option value="always">Always respond</option>
+          <option value="none">Don't respond in servers</option>
+        </select>
+        <label class="text-xs text-[var(--muted)]">Default Model</label>
+        <${ModelSelect} models=${modelsSig.value} value=${editModel.value}
+          onChange=${(v) => {
+						editModel.value = v;
+					}}
+          placeholder=${defaultPlaceholder} />
+        <label class="text-xs text-[var(--muted)]">User Allowlist (one Discord user ID per line)</label>
+        <textarea data-field="userAllowlist" rows="3"
+          style="font-family:var(--font-body);resize:vertical;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;">${(cfg.user_allowlist || []).join("\n")}</textarea>
+        ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+        <button class="provider-btn"
+          onClick=${onSave} disabled=${saving.value}>
+          ${saving.value ? "Saving\u2026" : "Save Changes"}
+        </button>
+      </div>
+    </${Modal}>`;
+	}
+
+	return null;
 }
 
 // ── Main page component ──────────────────────────────────────
@@ -422,19 +880,13 @@ function ChannelsPage() {
 							activeTab.value = "senders";
 						}}>Senders</button>
         </div>
-        ${
-					activeTab.value === "channels" &&
-					html`
-          <button class="provider-btn"
-            onClick=${() => {
-							if (connected.value) showAddModal.value = true;
-						}}>+ Add Telegram Bot</button>
-        `
-				}
+        ${activeTab.value === "channels" && html`<${ConnectChannelDropdown} />`}
       </div>
       ${activeTab.value === "channels" ? html`<${ChannelsTab} />` : html`<${SendersTab} />`}
     </div>
-    <${AddChannelModal} />
+    <${AddTelegramModal} />
+    <${AddSlackModal} />
+    <${AddDiscordModal} />
     <${EditChannelModal} />
     <${ConfirmDialog} />
   `;
@@ -445,7 +897,7 @@ registerPage(
 	function initChannels(container) {
 		container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
 		activeTab.value = "channels";
-		showAddModal.value = false;
+		showAddModal.value = null;
 		editingChannel.value = null;
 		sendersAccount.value = "";
 		senders.value = [];
