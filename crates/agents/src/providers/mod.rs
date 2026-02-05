@@ -17,6 +17,9 @@ pub mod github_copilot;
 #[cfg(feature = "provider-kimi-code")]
 pub mod kimi_code;
 
+#[cfg(feature = "provider-gemini-oauth")]
+pub mod gemini_oauth;
+
 use std::{collections::HashMap, sync::Arc};
 
 use {moltis_config::schema::ProvidersConfig, secrecy::ExposeSecret};
@@ -258,6 +261,11 @@ impl ProviderRegistry {
         #[cfg(feature = "provider-kimi-code")]
         {
             reg.register_kimi_code_providers(config);
+        }
+
+        #[cfg(feature = "provider-gemini-oauth")]
+        {
+            reg.register_gemini_oauth_providers(config);
         }
 
         reg
@@ -516,6 +524,57 @@ impl ProviderRegistry {
                 ModelInfo {
                     id: model_id.into(),
                     provider: "kimi-code".into(),
+                    display_name: display_name.into(),
+                },
+                provider,
+            );
+        }
+    }
+
+    #[cfg(feature = "provider-gemini-oauth")]
+    fn register_gemini_oauth_providers(&mut self, config: &ProvidersConfig) {
+        if !config.is_enabled("gemini-oauth") {
+            return;
+        }
+
+        // Require GOOGLE_CLIENT_ID to be set
+        if gemini_oauth::GeminiOAuthProvider::get_client_id().is_none() {
+            return;
+        }
+
+        if !gemini_oauth::has_stored_tokens() {
+            return;
+        }
+
+        if let Some(model_id) = config.get("gemini-oauth").and_then(|e| e.model.as_deref()) {
+            if !self.providers.contains_key(model_id) {
+                let display = gemini_oauth::GEMINI_OAUTH_MODELS
+                    .iter()
+                    .find(|(id, _)| *id == model_id)
+                    .map(|(_, name)| name.to_string())
+                    .unwrap_or_else(|| format!("{model_id} (Gemini/OAuth)"));
+                let provider = Arc::new(gemini_oauth::GeminiOAuthProvider::new(model_id.into()));
+                self.register(
+                    ModelInfo {
+                        id: model_id.into(),
+                        provider: "gemini-oauth".into(),
+                        display_name: display,
+                    },
+                    provider,
+                );
+            }
+            return;
+        }
+
+        for &(model_id, display_name) in gemini_oauth::GEMINI_OAUTH_MODELS {
+            if self.providers.contains_key(model_id) {
+                continue;
+            }
+            let provider = Arc::new(gemini_oauth::GeminiOAuthProvider::new(model_id.into()));
+            self.register(
+                ModelInfo {
+                    id: model_id.into(),
+                    provider: "gemini-oauth".into(),
                     display_name: display_name.into(),
                 },
                 provider,
