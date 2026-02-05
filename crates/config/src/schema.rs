@@ -85,6 +85,8 @@ pub struct MoltisConfig {
     pub tailscale: TailscaleConfig,
     pub failover: FailoverConfig,
     pub heartbeat: HeartbeatConfig,
+    /// Multi-agent configuration: presets and instances.
+    pub agents: AgentsConfig,
 }
 
 /// Gateway server configuration.
@@ -757,5 +759,305 @@ impl ProvidersConfig {
     /// Get the configured entry for a provider, if any.
     pub fn get(&self, name: &str) -> Option<&ProviderEntry> {
         self.providers.get(name)
+    }
+}
+
+// ── Multi-Agent Configuration ───────────────────────────────────────────────
+
+/// Multi-agent configuration: presets and gateway agent instances.
+///
+/// Presets define reusable agent configurations (identity, model, tools).
+/// When `multi_agent` is enabled, multiple agent instances can run in the
+/// same gateway, each with its own workspace and session storage.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentsConfig {
+    /// Default preset name when none specified.
+    pub default: Option<String>,
+    /// Named agent presets keyed by preset name.
+    #[serde(default)]
+    pub presets: HashMap<String, AgentPreset>,
+    /// Enable multi-agent mode (multiple isolated agents in one gateway).
+    #[serde(default)]
+    pub multi_agent: bool,
+    /// Agent instances (only used when `multi_agent = true`).
+    #[serde(default)]
+    pub instances: Vec<AgentInstanceConfig>,
+}
+
+impl AgentsConfig {
+    /// Get a preset by name.
+    pub fn get_preset(&self, name: &str) -> Option<&AgentPreset> {
+        self.presets.get(name)
+    }
+
+    /// Get the default preset, if configured.
+    pub fn default_preset(&self) -> Option<&AgentPreset> {
+        self.default
+            .as_ref()
+            .and_then(|name| self.presets.get(name))
+    }
+}
+
+/// A named agent preset definition.
+///
+/// Presets allow defining specialized agent configurations that can be
+/// selected when spawning sub-agents or starting sessions. Each preset
+/// can override identity, model, tool policies, and system prompt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentPreset {
+    /// Agent identity overrides.
+    pub identity: AgentIdentity,
+    /// Model override (provider/model format, e.g. "anthropic/claude-haiku-3-5-20241022").
+    pub model: Option<String>,
+    /// Tool policy for this preset (allow/deny specific tools).
+    pub tools: PresetToolPolicy,
+    /// Additional system prompt text appended to base prompt.
+    pub system_prompt_suffix: Option<String>,
+    /// Maximum iterations for agent loop (overrides default).
+    pub max_iterations: Option<u32>,
+    /// Timeout override in seconds.
+    pub timeout_secs: Option<u64>,
+    /// Sandbox configuration overrides.
+    pub sandbox: Option<PresetSandboxConfig>,
+}
+
+/// Tool policy within a preset.
+///
+/// When both `allow` and `deny` are specified, `allow` acts as a whitelist
+/// and `deny` further removes tools from that list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PresetToolPolicy {
+    /// Tools to allow (whitelist). If empty, all tools are allowed.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Tools to deny (blacklist). Applied after `allow`.
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
+impl PresetToolPolicy {
+    /// Check if a tool is allowed by this policy.
+    pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
+        // If deny list contains the tool, reject
+        if self.deny.contains(&tool_name.to_string()) {
+            return false;
+        }
+        // If allow list is empty, allow all (minus deny)
+        if self.allow.is_empty() {
+            return true;
+        }
+        // If allow list is specified, tool must be in it
+        self.allow.contains(&tool_name.to_string())
+    }
+}
+
+/// Sandbox configuration overrides for a preset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PresetSandboxConfig {
+    /// Whether sandbox is enabled for this preset.
+    pub enabled: Option<bool>,
+    /// Sandbox image override.
+    pub image: Option<String>,
+    /// Network access override.
+    pub no_network: Option<bool>,
+}
+
+/// Configuration for a single agent instance in multi-agent mode.
+///
+/// Each instance runs as an isolated agent with its own workspace,
+/// sessions, and optionally different tool configurations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInstanceConfig {
+    /// Unique identifier for this agent instance.
+    pub id: String,
+    /// Preset to use (from `[agents.presets]`).
+    pub preset: Option<String>,
+    /// Override identity (merged with preset identity if both specified).
+    #[serde(default)]
+    pub identity: Option<AgentIdentity>,
+    /// Working directory for this agent.
+    pub workspace: Option<String>,
+    /// Sessions directory (relative to data_dir).
+    pub sessions_dir: Option<String>,
+    /// Per-agent sandbox configuration overrides.
+    #[serde(default)]
+    pub sandbox: Option<SandboxConfig>,
+    /// Per-agent MCP servers.
+    #[serde(default)]
+    pub mcp: Option<McpConfig>,
+    /// Channel bindings (route messages from channels to this agent).
+    #[serde(default)]
+    pub channels: Vec<ChannelBinding>,
+}
+
+/// Route a channel to a specific agent instance.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelBinding {
+    /// Channel type (e.g., "telegram").
+    pub channel_type: String,
+    /// Channel identifier pattern (e.g., "telegram:*:123456").
+    /// Supports glob patterns with `*` wildcard.
+    pub pattern: String,
+}
+
+impl ChannelBinding {
+    /// Check if a channel key matches this binding pattern.
+    pub fn matches(&self, channel_key: &str) -> bool {
+        // Simple glob matching: split by '*' and check if parts match in order
+        let parts: Vec<&str> = self.pattern.split('*').collect();
+        if parts.len() == 1 {
+            // No wildcard, exact match
+            return channel_key == self.pattern;
+        }
+
+        let mut remaining = channel_key;
+        for (i, part) in parts.iter().enumerate() {
+            if part.is_empty() {
+                continue;
+            }
+            if i == 0 {
+                // First part must be a prefix
+                if !remaining.starts_with(part) {
+                    return false;
+                }
+                remaining = &remaining[part.len()..];
+            } else if i == parts.len() - 1 {
+                // Last part must be a suffix
+                if !remaining.ends_with(part) {
+                    return false;
+                }
+            } else {
+                // Middle part must exist somewhere
+                if let Some(pos) = remaining.find(part) {
+                    remaining = &remaining[pos + part.len()..];
+                } else {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preset_tool_policy_empty_allows_all() {
+        let policy = PresetToolPolicy::default();
+        assert!(policy.is_tool_allowed("exec"));
+        assert!(policy.is_tool_allowed("read_file"));
+        assert!(policy.is_tool_allowed("anything"));
+    }
+
+    #[test]
+    fn test_preset_tool_policy_deny_list() {
+        let policy = PresetToolPolicy {
+            allow: vec![],
+            deny: vec!["exec".into(), "write_file".into()],
+        };
+        assert!(!policy.is_tool_allowed("exec"));
+        assert!(!policy.is_tool_allowed("write_file"));
+        assert!(policy.is_tool_allowed("read_file"));
+    }
+
+    #[test]
+    fn test_preset_tool_policy_allow_list() {
+        let policy = PresetToolPolicy {
+            allow: vec!["read_file".into(), "glob".into()],
+            deny: vec![],
+        };
+        assert!(policy.is_tool_allowed("read_file"));
+        assert!(policy.is_tool_allowed("glob"));
+        assert!(!policy.is_tool_allowed("exec"));
+    }
+
+    #[test]
+    fn test_preset_tool_policy_allow_and_deny() {
+        let policy = PresetToolPolicy {
+            allow: vec!["read_file".into(), "write_file".into(), "exec".into()],
+            deny: vec!["exec".into()],
+        };
+        assert!(policy.is_tool_allowed("read_file"));
+        assert!(policy.is_tool_allowed("write_file"));
+        assert!(!policy.is_tool_allowed("exec")); // denied
+        assert!(!policy.is_tool_allowed("glob")); // not in allow list
+    }
+
+    #[test]
+    fn test_channel_binding_exact_match() {
+        let binding = ChannelBinding {
+            channel_type: "telegram".into(),
+            pattern: "telegram:123:456".into(),
+        };
+        assert!(binding.matches("telegram:123:456"));
+        assert!(!binding.matches("telegram:123:789"));
+    }
+
+    #[test]
+    fn test_channel_binding_wildcard_middle() {
+        let binding = ChannelBinding {
+            channel_type: "telegram".into(),
+            pattern: "telegram:*:456".into(),
+        };
+        assert!(binding.matches("telegram:123:456"));
+        assert!(binding.matches("telegram:999:456"));
+        assert!(!binding.matches("telegram:123:789"));
+    }
+
+    #[test]
+    fn test_channel_binding_wildcard_end() {
+        let binding = ChannelBinding {
+            channel_type: "telegram".into(),
+            pattern: "telegram:123:*".into(),
+        };
+        assert!(binding.matches("telegram:123:456"));
+        assert!(binding.matches("telegram:123:789"));
+        assert!(!binding.matches("telegram:999:456"));
+    }
+
+    #[test]
+    fn test_agents_config_get_preset() {
+        let mut config = AgentsConfig::default();
+        config.presets.insert("researcher".into(), AgentPreset {
+            identity: AgentIdentity {
+                name: Some("scout".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        assert!(config.get_preset("researcher").is_some());
+        assert_eq!(
+            config.get_preset("researcher").unwrap().identity.name,
+            Some("scout".into())
+        );
+        assert!(config.get_preset("unknown").is_none());
+    }
+
+    #[test]
+    fn test_agents_config_default_preset() {
+        let mut presets = HashMap::new();
+        presets.insert("main".into(), AgentPreset {
+            model: Some("anthropic/claude-sonnet-4-20250514".into()),
+            ..Default::default()
+        });
+
+        let config = AgentsConfig {
+            default: Some("main".into()),
+            presets,
+            ..Default::default()
+        };
+
+        let preset = config.default_preset().unwrap();
+        assert_eq!(
+            preset.model,
+            Some("anthropic/claude-sonnet-4-20250514".into())
+        );
     }
 }
