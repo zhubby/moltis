@@ -19,6 +19,7 @@ Moltis supports 30+ LLM providers through a trait-based architecture. Configure 
 |----------|--------|--------------|-----------|
 | **Mistral** | Mistral Large, Codestral | ✅ | ✅ |
 | **Groq** | Llama 3, Mixtral | ✅ | ✅ |
+| **xAI** | Grok 3, Grok 2 | ✅ | ✅ |
 | **Together** | Various open models | ✅ | ✅ |
 | **Fireworks** | Various open models | ✅ | ✅ |
 | **DeepSeek** | DeepSeek V3, Coder | ✅ | ✅ |
@@ -112,6 +113,22 @@ Requires an active GitHub Copilot subscription.
 1. Get an API key from [aistudio.google.com](https://aistudio.google.com)
 2. Enter it in Settings → Providers → Google
 
+### xAI (Grok)
+
+1. Get an API key from [console.x.ai](https://console.x.ai)
+2. Enter it in Settings → Providers → xAI
+
+Available models: `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`, `grok-2`, `grok-2-mini`
+
+```json
+{
+  "xai": {
+    "apiKey": "xai-...",
+    "model": "grok-3"
+  }
+}
+```
+
 ### Ollama (Local Models)
 
 Run models locally with [Ollama](https://ollama.ai):
@@ -145,6 +162,30 @@ Access 100+ models through one API:
   }
 }
 ```
+
+### Generic OpenAI-Compatible
+
+For any OpenAI-compatible API endpoint not explicitly supported:
+
+```json
+{
+  "openai-compatible": {
+    "apiKey": "your-api-key",
+    "baseUrl": "https://your-endpoint.example.com/v1",
+    "model": "your-model-id"
+  }
+}
+```
+
+```admonish note
+Both `baseUrl` and `model` are required for the generic provider. It won't register without explicit configuration.
+```
+
+This works with:
+- Self-hosted LLM servers (vLLM, text-generation-inference)
+- Enterprise API proxies
+- Regional API endpoints
+- Any service implementing the OpenAI chat completions API
 
 ## Custom Base URLs
 
