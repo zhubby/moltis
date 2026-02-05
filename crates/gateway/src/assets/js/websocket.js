@@ -288,6 +288,13 @@ function handleSubAgentEnd(p, isActive, isChatPage) {
 	}
 }
 
+function handleChatNotice(p, isActive, isChatPage) {
+	if (!(isActive && isChatPage)) return;
+	// Show notice message with title if provided
+	var msg = p.title ? `**${p.title}:** ${p.message}` : p.message;
+	chatAddMsg("system", msg);
+}
+
 var chatHandlers = {
 	thinking: handleChatThinking,
 	thinking_text: handleChatThinkingText,
@@ -301,6 +308,7 @@ var chatHandlers = {
 	error: handleChatError,
 	sub_agent_start: handleSubAgentStart,
 	sub_agent_end: handleSubAgentEnd,
+	notice: handleChatNotice,
 };
 
 function handleChatEvent(p) {
