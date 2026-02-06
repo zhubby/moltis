@@ -571,6 +571,10 @@ and any open items.
 
 Follow conventional commit format: `feat|fix|refactor|docs|test|chore(scope): description`
 
+**No Co-Authored-By trailers.** Never add `Co-Authored-By` lines (e.g.
+`Co-Authored-By: Claude ...`) to commit messages or documentation. Commits
+should only contain the message itself — no AI attribution trailers.
+
 When adding a new feature (`feat` commits), update the features list in
 `README.md` as part of the same branch/PR.
 
