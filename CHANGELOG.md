@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-Agent Coordination**: Full multi-agent system with sub-agent spawning,
+  inter-agent communication, shared task tracking, and coordinator delegation
+
+  - **Agent Presets**: Named presets in `moltis.toml` configure model, tools,
+    system prompt, identity (name, creature, vibe, soul), memory, hooks, and
+    delegate mode for sub-agents
+
+  - **Session Access Policy**: `SessionAccessPolicy` wired into sub-agent
+    spawning. Presets can restrict which sessions a sub-agent can read/write
+    via prefix-based or explicit key rules. `ToolRegistry` gained `replace()`
+    for in-place tool swapping
+
+  - **Inter-Agent Session Tools**: Four new tools (`sessions_list`,
+    `sessions_history`, `sessions_send`, `sessions_info`) for agent-to-agent
+    communication over the existing session system
+
+  - **Shared Task List**: `task_list` tool for cross-agent task tracking with
+    create, list, get, update, and claim operations. Supports `blocked_by`
+    dependencies, ownership, and JSON file persistence
+
+  - **Persistent Agent Memory**: Sub-agents get `MEMORY.md` content (first 200
+    lines) injected into their system prompt. Three scopes: user
+    (`~/.moltis/agent-memory/<preset>/`), project (`.moltis/agent-memory/`),
+    and local (`.moltis/agent-memory-local/`)
+
+  - **Markdown Agent Definitions**: Define presets as `.md` files with YAML
+    frontmatter in `~/.moltis/agents/` (user-global) or `.moltis/agents/`
+    (project-local). Project overrides user; TOML takes precedence over
+    markdown
+
+  - **Shell Hooks for Tool Control**: Presets can define shell hooks that run
+    on events (session start, tool calls). External commands receive JSON on
+    stdin and signal via exit code (0 = continue, 1 = block, stdout JSON =
+    modify payload)
+
+  - **Delegate Mode**: `delegate_only = true` restricts agents to
+    coordination-only tools (`spawn_agent`, `sessions_list`,
+    `sessions_history`, `sessions_send`, `task_list`) with coordinator prompt
+    injection
+
+  - **Multi-Agent UI**: Web components for agent spawning, session list/history
+    views, and real-time WebSocket event integration
+
 - **Mobile PWA Support**: Install moltis as a Progressive Web App on iOS, Android, and desktop
   - Standalone mode with full-screen experience
   - Custom app icon (crab mascot)
@@ -30,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Push notifications feature is now enabled by default in the CLI
+- Extracted `SecuritySection`, `ApiKeysSection`, `PasskeysSection`,
+  `PasswordSection` into separate Preact components from the settings page
 
 - **TLS HTTP redirect port** now defaults to `gateway_port + 1` instead of
   the hardcoded port `18790`. This makes the Dockerfile simpler (both ports
@@ -57,5 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- Added `docs/design/multi-agent-architecture.md` — architecture design doc
+- Added `docs/design/multi-agent-ui.md` — UI design doc
+- Added `docs/src/agent-presets.md` — agent presets user guide
+- Added `docs/src/session-tools.md` — session tools user guide
 - Added mobile-pwa.md with PWA installation and push notification documentation
 - Updated CLAUDE.md with cargo feature policy (features enabled by default)
