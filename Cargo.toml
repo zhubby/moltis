@@ -19,6 +19,7 @@ members = [
   "crates/plugins",
   "crates/projects",
   "crates/protocol",
+  "crates/qmd",
   "crates/routing",
   "crates/sessions",
   "crates/skills",
@@ -86,6 +87,7 @@ rand         = "0.8"
 secrecy      = { features = ["serde"], version = "0.8" }
 sha2         = "0.10"
 teloxide     = { features = ["macros"], version = "0.13" }
+time         = "0.3"
 tokio-util   = "0.7"
 # TLS / certificate generation
 axum-server    = { features = ["tls-rustls"], version = "0.7" }
@@ -114,6 +116,7 @@ moltis-onboarding        = { path = "crates/onboarding" }
 moltis-plugins           = { path = "crates/plugins" }
 moltis-projects          = { path = "crates/projects" }
 moltis-protocol          = { path = "crates/protocol" }
+moltis-qmd               = { path = "crates/qmd" }
 moltis-routing           = { path = "crates/routing" }
 moltis-sessions          = { path = "crates/sessions" }
 moltis-skills            = { path = "crates/skills" }
