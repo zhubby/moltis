@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - Moltis Documentation</title>
+        <title>Tool Registry - Moltis Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -149,7 +149,7 @@
                         <a href="https://github.com/moltis-org/moltis" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/index.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/tool-registry.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -183,135 +183,67 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="moltis"><a class="header" href="#moltis">Moltis</a></h1>
-<div style="text-align: center; margin: 2em 0;">
-<strong style="font-size: 1.2em;">A personal AI gateway written in Rust.<br>One binary, no runtime, no npm.</strong>
-</div>
-<p>Moltis compiles your entire AI gateway — web UI, LLM providers, tools, and all assets — into a single self-contained executable. There’s no Node.js to babysit, no <code>node_modules</code> to sync, no V8 garbage collector introducing latency spikes.</p>
-<pre><code class="language-bash"># Quick install (macOS / Linux)
-curl -fsSL https://www.moltis.org/install.sh | sh
-</code></pre>
-<h2 id="why-moltis"><a class="header" href="#why-moltis">Why Moltis?</a></h2>
-<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Moltis</th><th>Other Solutions</th></tr></thead><tbody>
-<tr><td><strong>Deployment</strong></td><td>Single binary</td><td>Node.js + dependencies</td></tr>
-<tr><td><strong>Memory Safety</strong></td><td>Rust ownership</td><td>Garbage collection</td></tr>
-<tr><td><strong>Secret Handling</strong></td><td>Zeroed on drop</td><td>“Eventually collected”</td></tr>
-<tr><td><strong>Sandbox</strong></td><td>Docker + Apple Container</td><td>Docker only</td></tr>
-<tr><td><strong>Startup</strong></td><td>Milliseconds</td><td>Seconds</td></tr>
-</tbody></table>
-</div>
-<h2 id="key-features"><a class="header" href="#key-features">Key Features</a></h2>
+                        <h1 id="tool-registry"><a class="header" href="#tool-registry">Tool Registry</a></h1>
+<p>The tool registry manages all tools available to the agent during a
+conversation. It tracks where each tool comes from and supports filtering by
+source.</p>
+<h2 id="tool-sources"><a class="header" href="#tool-sources">Tool Sources</a></h2>
+<p>Every registered tool has a <code>ToolSource</code> that identifies its origin:</p>
 <ul>
-<li><strong>30+ LLM Providers</strong> — Anthropic, OpenAI, Google, Mistral, local models, and more</li>
-<li><strong>Streaming-First</strong> — Responses appear as tokens arrive, not after completion</li>
-<li><strong>Sandboxed Execution</strong> — Commands run in isolated containers (Docker or Apple Container)</li>
-<li><strong>MCP Support</strong> — Connect to Model Context Protocol servers for extended capabilities</li>
-<li><strong>Multi-Channel</strong> — Web UI, Telegram, API access with synchronized responses</li>
-<li><strong>Long-Term Memory</strong> — Embeddings-powered knowledge base with hybrid search</li>
-<li><strong>Hook System</strong> — Observe, modify, or block actions at any lifecycle point</li>
-<li><strong>Compile-Time Safety</strong> — Misconfigurations caught by <code>cargo check</code>, not runtime crashes</li>
+<li><strong><code>Builtin</code></strong> — tools shipped with the binary (exec, web_fetch, etc.)</li>
+<li><strong><code>Mcp { server }</code></strong> — tools provided by an MCP server, tagged with the
+server name</li>
 </ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
-<pre><code class="language-bash"># Install
-curl -fsSL https://www.moltis.org/install.sh | sh
+<p>This replaces the previous convention of identifying MCP tools by their
+<code>mcp__</code> name prefix, providing type-safe filtering instead of string matching.</p>
+<h2 id="registration"><a class="header" href="#registration">Registration</a></h2>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Built-in tool
+registry.register(Box::new(MyTool::new()));
 
-# Run
-moltis
+// MCP tool — tagged with server name
+registry.register_mcp(Box::new(adapter), "github".to_string());
+<span class="boring">}</span></code></pre></pre>
+<h2 id="filtering"><a class="header" href="#filtering">Filtering</a></h2>
+<p>When MCP tools are disabled for a session, the registry can produce a filtered
+copy:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Type-safe: filters by ToolSource::Mcp variant
+let no_mcp = registry.clone_without_mcp();
+
+// Remove all MCP tools in-place (used during sync)
+let removed_count = registry.unregister_mcp();
+<span class="boring">}</span></code></pre></pre>
+<h2 id="schema-output"><a class="header" href="#schema-output">Schema Output</a></h2>
+<p><code>list_schemas()</code> includes source metadata in every tool schema:</p>
+<pre><code class="language-json">{
+  "name": "exec",
+  "description": "Execute a command",
+  "parameters": { ... },
+  "source": "builtin"
+}
 </code></pre>
-<p>On first launch:</p>
-<ol>
-<li>Open the URL shown in your browser (e.g., <code>http://localhost:13131</code>)</li>
-<li>Add your LLM API key</li>
-<li>Start chatting!</li>
-</ol>
-<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
-<div class="admonition-title">
-<div id="admonition-note-title">
-<p>Note</p>
-</div>
-<a class="admonition-anchor-link" href="#admonition-note"></a>
-</div>
-<div>
-<p>Authentication is only required when accessing Moltis from a non-localhost address. On localhost, you can start using it immediately.</p>
-</div>
-</div>
-<p>→ <a href="quickstart.html">Full Quickstart Guide</a></p>
-<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
-<pre><code>┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│   Web UI    │  │  Telegram   │  │     API     │
-└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       │                │                │
-       └────────────────┴────────────────┘
-                        │
-                        ▼
-        ┌───────────────────────────────┐
-        │       Moltis Gateway          │
-        │   ┌─────────┐ ┌───────────┐   │
-        │   │  Agent  │ │   Tools   │   │
-        │   │  Loop   │◄┤  Registry │   │
-        │   └────┬────┘ └───────────┘   │
-        │        │                      │
-        │   ┌────▼────────────────┐     │
-        │   │  Provider Registry  │     │
-        │   │ Claude · GPT · Gemini │   │
-        │   └─────────────────────┘     │
-        └───────────────────────────────┘
-                        │
-                ┌───────▼───────┐
-                │    Sandbox    │
-                │ Docker/Apple  │
-                └───────────────┘
+<pre><code class="language-json">{
+  "name": "mcp__github__search",
+  "description": "Search GitHub",
+  "parameters": { ... },
+  "source": "mcp",
+  "mcpServer": "github"
+}
 </code></pre>
-<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
-<h3 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h3>
-<ul>
-<li><strong><a href="quickstart.html">Quickstart</a></strong> — Up and running in 5 minutes</li>
-<li><strong><a href="installation.html">Installation</a></strong> — All installation methods</li>
-<li><strong><a href="configuration.html">Configuration</a></strong> — <code>moltis.toml</code> reference</li>
-</ul>
-<h3 id="features"><a class="header" href="#features">Features</a></h3>
-<ul>
-<li><strong><a href="providers.html">Providers</a></strong> — Configure LLM providers</li>
-<li><strong><a href="mcp.html">MCP Servers</a></strong> — Extend with Model Context Protocol</li>
-<li><strong><a href="hooks.html">Hooks</a></strong> — Lifecycle hooks for customization</li>
-<li><strong><a href="local-llm.html">Local LLMs</a></strong> — Run models on your machine</li>
-</ul>
-<h3 id="deployment"><a class="header" href="#deployment">Deployment</a></h3>
-<ul>
-<li><strong><a href="docker.html">Docker</a></strong> — Container deployment</li>
-</ul>
-<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
-<ul>
-<li><strong><a href="streaming.html">Streaming</a></strong> — How real-time streaming works</li>
-<li><strong><a href="metrics-and-tracing.html">Metrics &amp; Tracing</a></strong> — Observability</li>
-</ul>
-<h2 id="security"><a class="header" href="#security">Security</a></h2>
-<p>Moltis applies defense in depth:</p>
-<ul>
-<li><strong>Authentication</strong> — Password or passkey (WebAuthn) required for non-localhost access</li>
-<li><strong>SSRF Protection</strong> — Blocks requests to internal networks</li>
-<li><strong>Secret Handling</strong> — <code>secrecy::Secret</code> zeroes memory on drop</li>
-<li><strong>Sandboxed Execution</strong> — Commands never run on the host</li>
-<li><strong>Origin Validation</strong> — Prevents Cross-Site WebSocket Hijacking</li>
-<li><strong>No Unsafe Code</strong> — <code>unsafe</code> is denied workspace-wide</li>
-</ul>
-<h2 id="community"><a class="header" href="#community">Community</a></h2>
-<ul>
-<li><strong>GitHub</strong>: <a href="https://github.com/moltis-org/moltis">github.com/moltis-org/moltis</a></li>
-<li><strong>Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">Report bugs</a></li>
-<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">Ask questions</a></li>
-</ul>
-<h2 id="license"><a class="header" href="#license">License</a></h2>
-<p>MIT — Free for personal and commercial use.</p>
+<p>The <code>source</code> and <code>mcpServer</code> fields are available to the UI for rendering
+tools grouped by origin.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-
-                            <a rel="next prefetch" href="quickstart.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
+                            <a rel="prev" href="metrics-and-tracing.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
                             </a>
+
 
                         <div style="clear: both"></div>
                     </nav>
@@ -319,10 +251,10 @@ moltis
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-
-                    <a rel="next prefetch" href="quickstart.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
+                    <a rel="prev" href="metrics-and-tracing.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
                     </a>
+
             </nav>
 
         </div>

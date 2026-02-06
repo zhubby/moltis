@@ -1,0 +1,3439 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Moltis Documentation</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for Moltis - Your AI coding assistant">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/admonish.css">
+        <link rel="stylesheet" href="theme/custom.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "light";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('light')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Moltis Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/moltis-org/moltis" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="moltis"><a class="header" href="#moltis">Moltis</a></h1>
+<div style="text-align: center; margin: 2em 0;">
+<strong style="font-size: 1.2em;">A personal AI gateway written in Rust.<br>One binary, no runtime, no npm.</strong>
+</div>
+<p>Moltis compiles your entire AI gateway — web UI, LLM providers, tools, and all assets — into a single self-contained executable. There’s no Node.js to babysit, no <code>node_modules</code> to sync, no V8 garbage collector introducing latency spikes.</p>
+<pre><code class="language-bash"># Quick install (macOS / Linux)
+curl -fsSL https://www.moltis.org/install.sh | sh
+</code></pre>
+<h2 id="why-moltis"><a class="header" href="#why-moltis">Why Moltis?</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Moltis</th><th>Other Solutions</th></tr></thead><tbody>
+<tr><td><strong>Deployment</strong></td><td>Single binary</td><td>Node.js + dependencies</td></tr>
+<tr><td><strong>Memory Safety</strong></td><td>Rust ownership</td><td>Garbage collection</td></tr>
+<tr><td><strong>Secret Handling</strong></td><td>Zeroed on drop</td><td>“Eventually collected”</td></tr>
+<tr><td><strong>Sandbox</strong></td><td>Docker + Apple Container</td><td>Docker only</td></tr>
+<tr><td><strong>Startup</strong></td><td>Milliseconds</td><td>Seconds</td></tr>
+</tbody></table>
+</div>
+<h2 id="key-features"><a class="header" href="#key-features">Key Features</a></h2>
+<ul>
+<li><strong>30+ LLM Providers</strong> — Anthropic, OpenAI, Google, Mistral, local models, and more</li>
+<li><strong>Streaming-First</strong> — Responses appear as tokens arrive, not after completion</li>
+<li><strong>Sandboxed Execution</strong> — Commands run in isolated containers (Docker or Apple Container)</li>
+<li><strong>MCP Support</strong> — Connect to Model Context Protocol servers for extended capabilities</li>
+<li><strong>Multi-Channel</strong> — Web UI, Telegram, API access with synchronized responses</li>
+<li><strong>Long-Term Memory</strong> — Embeddings-powered knowledge base with hybrid search</li>
+<li><strong>Hook System</strong> — Observe, modify, or block actions at any lifecycle point</li>
+<li><strong>Compile-Time Safety</strong> — Misconfigurations caught by <code>cargo check</code>, not runtime crashes</li>
+</ul>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<pre><code class="language-bash"># Install
+curl -fsSL https://www.moltis.org/install.sh | sh
+
+# Run
+moltis
+</code></pre>
+<p>On first launch:</p>
+<ol>
+<li>Open the URL shown in your browser (e.g., <code>http://localhost:13131</code>)</li>
+<li>Add your LLM API key</li>
+<li>Start chatting!</li>
+</ol>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="index.html#admonition-note"></a>
+</div>
+<div>
+<p>Authentication is only required when accessing Moltis from a non-localhost address. On localhost, you can start using it immediately.</p>
+</div>
+</div>
+<p>→ <a href="quickstart.html">Full Quickstart Guide</a></p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
+<pre><code>┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│   Web UI    │  │  Telegram   │  │     API     │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                │                │
+       └────────────────┴────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │       Moltis Gateway          │
+        │   ┌─────────┐ ┌───────────┐   │
+        │   │  Agent  │ │   Tools   │   │
+        │   │  Loop   │◄┤  Registry │   │
+        │   └────┬────┘ └───────────┘   │
+        │        │                      │
+        │   ┌────▼────────────────┐     │
+        │   │  Provider Registry  │     │
+        │   │ Claude · GPT · Gemini │   │
+        │   └─────────────────────┘     │
+        └───────────────────────────────┘
+                        │
+                ┌───────▼───────┐
+                │    Sandbox    │
+                │ Docker/Apple  │
+                └───────────────┘
+</code></pre>
+<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
+<h3 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h3>
+<ul>
+<li><strong><a href="quickstart.html">Quickstart</a></strong> — Up and running in 5 minutes</li>
+<li><strong><a href="installation.html">Installation</a></strong> — All installation methods</li>
+<li><strong><a href="configuration.html">Configuration</a></strong> — <code>moltis.toml</code> reference</li>
+</ul>
+<h3 id="features"><a class="header" href="#features">Features</a></h3>
+<ul>
+<li><strong><a href="providers.html">Providers</a></strong> — Configure LLM providers</li>
+<li><strong><a href="mcp.html">MCP Servers</a></strong> — Extend with Model Context Protocol</li>
+<li><strong><a href="hooks.html">Hooks</a></strong> — Lifecycle hooks for customization</li>
+<li><strong><a href="local-llm.html">Local LLMs</a></strong> — Run models on your machine</li>
+</ul>
+<h3 id="deployment"><a class="header" href="#deployment">Deployment</a></h3>
+<ul>
+<li><strong><a href="docker.html">Docker</a></strong> — Container deployment</li>
+</ul>
+<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
+<ul>
+<li><strong><a href="streaming.html">Streaming</a></strong> — How real-time streaming works</li>
+<li><strong><a href="metrics-and-tracing.html">Metrics &amp; Tracing</a></strong> — Observability</li>
+</ul>
+<h2 id="security"><a class="header" href="#security">Security</a></h2>
+<p>Moltis applies defense in depth:</p>
+<ul>
+<li><strong>Authentication</strong> — Password or passkey (WebAuthn) required for non-localhost access</li>
+<li><strong>SSRF Protection</strong> — Blocks requests to internal networks</li>
+<li><strong>Secret Handling</strong> — <code>secrecy::Secret</code> zeroes memory on drop</li>
+<li><strong>Sandboxed Execution</strong> — Commands never run on the host</li>
+<li><strong>Origin Validation</strong> — Prevents Cross-Site WebSocket Hijacking</li>
+<li><strong>No Unsafe Code</strong> — <code>unsafe</code> is denied workspace-wide</li>
+</ul>
+<h2 id="community"><a class="header" href="#community">Community</a></h2>
+<ul>
+<li><strong>GitHub</strong>: <a href="https://github.com/moltis-org/moltis">github.com/moltis-org/moltis</a></li>
+<li><strong>Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">Report bugs</a></li>
+<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">Ask questions</a></li>
+</ul>
+<h2 id="license"><a class="header" href="#license">License</a></h2>
+<p>MIT — Free for personal and commercial use.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="quickstart"><a class="header" href="#quickstart">Quickstart</a></h1>
+<p>Get Moltis running in under 5 minutes.</p>
+<h2 id="1-install"><a class="header" href="#1-install">1. Install</a></h2>
+<pre><code class="language-bash">curl -fsSL https://www.moltis.org/install.sh | sh
+</code></pre>
+<p>Or via Homebrew:</p>
+<pre><code class="language-bash">brew install moltis-org/tap/moltis
+</code></pre>
+<h2 id="2-start"><a class="header" href="#2-start">2. Start</a></h2>
+<pre><code class="language-bash">moltis
+</code></pre>
+<p>You’ll see output like:</p>
+<pre><code>🚀 Moltis gateway starting...
+🌐 Open http://localhost:13131 in your browser
+</code></pre>
+<h2 id="3-configure-a-provider"><a class="header" href="#3-configure-a-provider">3. Configure a Provider</a></h2>
+<p>You need an LLM API key to chat. The easiest options:</p>
+<h3 id="option-a-anthropic-recommended"><a class="header" href="#option-a-anthropic-recommended">Option A: Anthropic (Recommended)</a></h3>
+<ol>
+<li>Get an API key from <a href="https://console.anthropic.com">console.anthropic.com</a></li>
+<li>In Moltis, go to <strong>Settings</strong> → <strong>Providers</strong></li>
+<li>Click <strong>Anthropic</strong> → Enter your API key → <strong>Save</strong></li>
+</ol>
+<h3 id="option-b-openai"><a class="header" href="#option-b-openai">Option B: OpenAI</a></h3>
+<ol>
+<li>Get an API key from <a href="https://platform.openai.com">platform.openai.com</a></li>
+<li>In Moltis, go to <strong>Settings</strong> → <strong>Providers</strong></li>
+<li>Click <strong>OpenAI</strong> → Enter your API key → <strong>Save</strong></li>
+</ol>
+<h3 id="option-c-local-model-free"><a class="header" href="#option-c-local-model-free">Option C: Local Model (Free)</a></h3>
+<ol>
+<li>Install <a href="https://ollama.ai">Ollama</a>: <code>curl -fsSL https://ollama.ai/install.sh | sh</code></li>
+<li>Pull a model: <code>ollama pull llama3.2</code></li>
+<li>In Moltis, configure Ollama in <strong>Settings</strong> → <strong>Providers</strong></li>
+</ol>
+<h2 id="4-chat"><a class="header" href="#4-chat">4. Chat!</a></h2>
+<p>Go to the <strong>Chat</strong> tab and start a conversation:</p>
+<pre><code>You: Write a Python function to check if a number is prime
+
+Agent: Here's a Python function to check if a number is prime:
+
+def is_prime(n):
+    if n &lt; 2:
+        return False
+    for i in range(2, int(n ** 0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+</code></pre>
+<h2 id="whats-next"><a class="header" href="#whats-next">What’s Next?</a></h2>
+<h3 id="enable-tool-use"><a class="header" href="#enable-tool-use">Enable Tool Use</a></h3>
+<p>Moltis can execute code, browse the web, and more. Tools are enabled by default with sandbox protection.</p>
+<p>Try:</p>
+<pre><code>You: Create a hello.py file that prints "Hello, World!" and run it
+</code></pre>
+<h3 id="connect-telegram"><a class="header" href="#connect-telegram">Connect Telegram</a></h3>
+<p>Chat with your agent from anywhere:</p>
+<ol>
+<li>Create a bot via <a href="https://t.me/BotFather">@BotFather</a></li>
+<li>Copy the bot token</li>
+<li>In Moltis: <strong>Settings</strong> → <strong>Telegram</strong> → Enter token → <strong>Save</strong></li>
+<li>Message your bot!</li>
+</ol>
+<h3 id="add-mcp-servers"><a class="header" href="#add-mcp-servers">Add MCP Servers</a></h3>
+<p>Extend capabilities with <a href="mcp.html">MCP servers</a>:</p>
+<pre><code class="language-toml"># In moltis.toml
+[[mcp.servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "ghp_..." }
+</code></pre>
+<h3 id="set-up-memory"><a class="header" href="#set-up-memory">Set Up Memory</a></h3>
+<p>Enable long-term memory for context across sessions:</p>
+<pre><code class="language-toml"># In moltis.toml
+[memory]
+enabled = true
+</code></pre>
+<p>Add knowledge by placing Markdown files in <code>~/.moltis/memory/</code>.</p>
+<h2 id="useful-commands"><a class="header" href="#useful-commands">Useful Commands</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>/new</code></td><td>Start a new session</td></tr>
+<tr><td><code>/model &lt;name&gt;</code></td><td>Switch models</td></tr>
+<tr><td><code>/clear</code></td><td>Clear chat history</td></tr>
+<tr><td><code>/help</code></td><td>Show available commands</td></tr>
+</tbody></table>
+</div>
+<h2 id="file-locations"><a class="header" href="#file-locations">File Locations</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody>
+<tr><td><code>~/.config/moltis/moltis.toml</code></td><td>Configuration</td></tr>
+<tr><td><code>~/.config/moltis/provider_keys.json</code></td><td>API keys</td></tr>
+<tr><td><code>~/.moltis/</code></td><td>Data (sessions, memory, logs)</td></tr>
+</tbody></table>
+</div>
+<h2 id="getting-help"><a class="header" href="#getting-help">Getting Help</a></h2>
+<ul>
+<li><strong>Documentation</strong>: <a href="https://docs.moltis.org">docs.moltis.org</a></li>
+<li><strong>GitHub Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">github.com/moltis-org/moltis/issues</a></li>
+<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">github.com/moltis-org/moltis/discussions</a></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
+<p>Moltis is distributed as a single self-contained binary. Choose the installation method that works best for your setup.</p>
+<h2 id="quick-install-recommended"><a class="header" href="#quick-install-recommended">Quick Install (Recommended)</a></h2>
+<p>The fastest way to get started on macOS or Linux:</p>
+<pre><code class="language-bash">curl -fsSL https://www.moltis.org/install.sh | sh
+</code></pre>
+<p>This downloads the latest release for your platform and installs it to <code>~/.local/bin</code>.</p>
+<h2 id="package-managers"><a class="header" href="#package-managers">Package Managers</a></h2>
+<h3 id="homebrew-macos--linux"><a class="header" href="#homebrew-macos--linux">Homebrew (macOS / Linux)</a></h3>
+<pre><code class="language-bash">brew install moltis-org/tap/moltis
+</code></pre>
+<h3 id="cargo-binstall-pre-built-binary"><a class="header" href="#cargo-binstall-pre-built-binary">Cargo Binstall (Pre-built Binary)</a></h3>
+<p>If you have <a href="https://github.com/cargo-bins/cargo-binstall">cargo-binstall</a> installed:</p>
+<pre><code class="language-bash">cargo binstall moltis
+</code></pre>
+<p>This downloads a pre-built binary without compiling from source.</p>
+<h2 id="linux-packages"><a class="header" href="#linux-packages">Linux Packages</a></h2>
+<h3 id="debian--ubuntu-deb"><a class="header" href="#debian--ubuntu-deb">Debian / Ubuntu (.deb)</a></h3>
+<pre><code class="language-bash"># Download the latest .deb package
+curl -LO https://github.com/moltis-org/moltis/releases/latest/download/moltis_amd64.deb
+
+# Install
+sudo dpkg -i moltis_amd64.deb
+</code></pre>
+<h3 id="fedora--rhel-rpm"><a class="header" href="#fedora--rhel-rpm">Fedora / RHEL (.rpm)</a></h3>
+<pre><code class="language-bash"># Download the latest .rpm package
+curl -LO https://github.com/moltis-org/moltis/releases/latest/download/moltis.x86_64.rpm
+
+# Install
+sudo rpm -i moltis.x86_64.rpm
+</code></pre>
+<h3 id="arch-linux-pkgtarzst"><a class="header" href="#arch-linux-pkgtarzst">Arch Linux (.pkg.tar.zst)</a></h3>
+<pre><code class="language-bash"># Download the latest package
+curl -LO https://github.com/moltis-org/moltis/releases/latest/download/moltis.pkg.tar.zst
+
+# Install
+sudo pacman -U moltis.pkg.tar.zst
+</code></pre>
+<h3 id="snap"><a class="header" href="#snap">Snap</a></h3>
+<pre><code class="language-bash">sudo snap install moltis
+</code></pre>
+<h3 id="appimage"><a class="header" href="#appimage">AppImage</a></h3>
+<pre><code class="language-bash"># Download
+curl -LO https://github.com/moltis-org/moltis/releases/latest/download/moltis.AppImage
+chmod +x moltis.AppImage
+
+# Run
+./moltis.AppImage
+</code></pre>
+<h2 id="docker"><a class="header" href="#docker">Docker</a></h2>
+<p>Multi-architecture images (amd64/arm64) are published to GitHub Container Registry:</p>
+<pre><code class="language-bash">docker pull ghcr.io/moltis-org/moltis:latest
+</code></pre>
+<p>See <a href="docker.html">Docker Deployment</a> for full instructions on running Moltis in a container.</p>
+<h2 id="build-from-source"><a class="header" href="#build-from-source">Build from Source</a></h2>
+<h3 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h3>
+<ul>
+<li>Rust 1.75 or later</li>
+<li>A C compiler (for some dependencies)</li>
+</ul>
+<h3 id="clone-and-build"><a class="header" href="#clone-and-build">Clone and Build</a></h3>
+<pre><code class="language-bash">git clone https://github.com/moltis-org/moltis.git
+cd moltis
+cargo build --release
+</code></pre>
+<p>The binary will be at <code>target/release/moltis</code>.</p>
+<h3 id="install-via-cargo"><a class="header" href="#install-via-cargo">Install via Cargo</a></h3>
+<pre><code class="language-bash">cargo install moltis --git https://github.com/moltis-org/moltis
+</code></pre>
+<h2 id="first-run"><a class="header" href="#first-run">First Run</a></h2>
+<p>After installation, start Moltis:</p>
+<pre><code class="language-bash">moltis
+</code></pre>
+<p>On first launch:</p>
+<ol>
+<li>Open <code>http://localhost:&lt;port&gt;</code> in your browser (the port is shown in the terminal output)</li>
+<li>Configure your LLM provider (API key)</li>
+<li>Start chatting!</li>
+</ol>
+<div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="installation.html#admonition-tip"></a>
+</div>
+<div>
+<p>Moltis picks a random available port on first install to avoid conflicts. The port is saved in your config and reused on subsequent runs.</p>
+</div>
+</div>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="installation.html#admonition-note"></a>
+</div>
+<div>
+<p>Authentication is only required when accessing Moltis from a non-localhost address (e.g., over the network). When this happens, a one-time setup code is printed to the terminal for initial authentication setup.</p>
+</div>
+</div>
+<h2 id="verify-installation"><a class="header" href="#verify-installation">Verify Installation</a></h2>
+<pre><code class="language-bash">moltis --version
+</code></pre>
+<h2 id="updating"><a class="header" href="#updating">Updating</a></h2>
+<h3 id="homebrew"><a class="header" href="#homebrew">Homebrew</a></h3>
+<pre><code class="language-bash">brew upgrade moltis
+</code></pre>
+<h3 id="cargo-binstall"><a class="header" href="#cargo-binstall">Cargo Binstall</a></h3>
+<pre><code class="language-bash">cargo binstall moltis
+</code></pre>
+<h3 id="from-source"><a class="header" href="#from-source">From Source</a></h3>
+<pre><code class="language-bash">cd moltis
+git pull
+cargo build --release
+</code></pre>
+<h2 id="uninstalling"><a class="header" href="#uninstalling">Uninstalling</a></h2>
+<h3 id="homebrew-1"><a class="header" href="#homebrew-1">Homebrew</a></h3>
+<pre><code class="language-bash">brew uninstall moltis
+</code></pre>
+<h3 id="remove-data"><a class="header" href="#remove-data">Remove Data</a></h3>
+<p>Moltis stores data in two directories:</p>
+<pre><code class="language-bash"># Configuration
+rm -rf ~/.config/moltis
+
+# Data (sessions, databases, memory)
+rm -rf ~/.moltis
+</code></pre>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="installation.html#admonition-warning"></a>
+</div>
+<div>
+<p>Removing these directories deletes all your conversations, memory, and settings permanently.</p>
+</div>
+</div>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
+<p>Moltis is configured through <code>moltis.toml</code>, located in <code>~/.config/moltis/</code> by default.</p>
+<p>On first run, a complete configuration file is generated with sensible defaults. You can edit it to customize behavior.</p>
+<h2 id="configuration-file-location"><a class="header" href="#configuration-file-location">Configuration File Location</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Platform</th><th>Default Path</th></tr></thead><tbody>
+<tr><td>macOS/Linux</td><td><code>~/.config/moltis/moltis.toml</code></td></tr>
+<tr><td>Custom</td><td>Set via <code>--config-dir</code> or <code>MOLTIS_CONFIG_DIR</code></td></tr>
+</tbody></table>
+</div>
+<h2 id="basic-settings"><a class="header" href="#basic-settings">Basic Settings</a></h2>
+<pre><code class="language-toml">[gateway]
+port = 13131                    # HTTP/WebSocket port
+host = "0.0.0.0"               # Listen address
+
+[agent]
+name = "Moltis"                 # Agent display name
+model = "claude-sonnet-4-20250514"  # Default model
+timeout = 600                   # Agent run timeout (seconds)
+max_iterations = 25             # Max tool call iterations per run
+</code></pre>
+<h2 id="llm-providers"><a class="header" href="#llm-providers">LLM Providers</a></h2>
+<p>Provider API keys are stored separately in <code>~/.config/moltis/provider_keys.json</code> for security. Configure them through the web UI or directly in the JSON file.</p>
+<pre><code class="language-toml">[providers]
+default = "anthropic"           # Default provider
+
+[providers.anthropic]
+enabled = true
+models = [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    "claude-3-5-haiku-20241022",
+]
+
+[providers.openai]
+enabled = true
+models = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o1-preview",
+]
+</code></pre>
+<p>See <a href="providers.html">Providers</a> for detailed provider configuration.</p>
+<h2 id="sandbox-configuration"><a class="header" href="#sandbox-configuration">Sandbox Configuration</a></h2>
+<p>Commands run inside isolated containers for security:</p>
+<pre><code class="language-toml">[tools.exec.sandbox]
+enabled = true
+backend = "docker"              # "docker" or "apple" (macOS 15+)
+base_image = "ubuntu:25.10"
+
+# Packages installed in the sandbox image
+packages = [
+    "curl",
+    "git",
+    "jq",
+    "python3",
+    "python3-pip",
+    "nodejs",
+    "npm",
+]
+</code></pre>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="configuration.html#admonition-info"></a>
+</div>
+<div>
+<p>When you modify the packages list and restart, Moltis automatically rebuilds the sandbox image with a new tag.</p>
+</div>
+</div>
+<h2 id="memory-system"><a class="header" href="#memory-system">Memory System</a></h2>
+<p>Long-term memory uses embeddings for semantic search:</p>
+<pre><code class="language-toml">[memory]
+enabled = true
+embedding_model = "text-embedding-3-small"  # OpenAI embedding model
+chunk_size = 512                # Characters per chunk
+chunk_overlap = 50              # Overlap between chunks
+
+# Directories to watch for memory files
+watch_dirs = [
+    "~/.moltis/memory",
+]
+</code></pre>
+<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<p>Authentication is <strong>only required when accessing Moltis from a non-localhost address</strong>. When running on <code>localhost</code> or <code>127.0.0.1</code>, no authentication is needed by default.</p>
+<p>When you access Moltis from a network address (e.g., <code>http://192.168.1.100:13131</code>), a one-time setup code is printed to the terminal. Use it to set up a password or passkey.</p>
+<pre><code class="language-toml">[auth]
+disabled = false                # Set true to disable auth entirely
+
+# Session settings
+session_expiry = 604800         # Session lifetime in seconds (7 days)
+</code></pre>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="configuration.html#admonition-warning"></a>
+</div>
+<div>
+<p>Only set <code>disabled = true</code> if Moltis is running on a trusted private network. Never expose an unauthenticated instance to the internet.</p>
+</div>
+</div>
+<h2 id="hooks"><a class="header" href="#hooks">Hooks</a></h2>
+<p>Configure lifecycle hooks:</p>
+<pre><code class="language-toml">[[hooks]]
+name = "my-hook"
+command = "./hooks/my-hook.sh"
+events = ["BeforeToolCall", "AfterToolCall"]
+timeout = 5                     # Timeout in seconds
+
+[hooks.env]
+MY_VAR = "value"               # Environment variables for the hook
+</code></pre>
+<p>See <a href="hooks.html">Hooks</a> for the full hook system documentation.</p>
+<h2 id="mcp-servers"><a class="header" href="#mcp-servers">MCP Servers</a></h2>
+<p>Connect to Model Context Protocol servers:</p>
+<pre><code class="language-toml">[[mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+
+[[mcp.servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "ghp_..." }
+</code></pre>
+<h2 id="telegram-integration"><a class="header" href="#telegram-integration">Telegram Integration</a></h2>
+<pre><code class="language-toml">[telegram]
+enabled = true
+# Token is stored in provider_keys.json, not here
+allowed_users = [123456789]     # Telegram user IDs allowed to chat
+</code></pre>
+<h2 id="tls--https"><a class="header" href="#tls--https">TLS / HTTPS</a></h2>
+<pre><code class="language-toml">[tls]
+enabled = true
+cert_path = "~/.config/moltis/cert.pem"
+key_path = "~/.config/moltis/key.pem"
+# If paths don't exist, a self-signed certificate is generated
+
+# Port for the plain-HTTP redirect / CA-download server.
+# Defaults to the gateway port + 1 when not set.
+# http_redirect_port = 13132
+</code></pre>
+<p>Override via environment variable: <code>MOLTIS_TLS__HTTP_REDIRECT_PORT=8080</code>.</p>
+<h2 id="tailscale-integration"><a class="header" href="#tailscale-integration">Tailscale Integration</a></h2>
+<p>Expose Moltis over your Tailscale network:</p>
+<pre><code class="language-toml">[tailscale]
+enabled = true
+mode = "serve"                  # "serve" (private) or "funnel" (public)
+</code></pre>
+<h2 id="observability"><a class="header" href="#observability">Observability</a></h2>
+<pre><code class="language-toml">[telemetry]
+enabled = true
+otlp_endpoint = "http://localhost:4317"  # OpenTelemetry collector
+</code></pre>
+<h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
+<p>All settings can be overridden via environment variables:</p>
+<div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>MOLTIS_CONFIG_DIR</code></td><td>Configuration directory</td></tr>
+<tr><td><code>MOLTIS_DATA_DIR</code></td><td>Data directory</td></tr>
+<tr><td><code>MOLTIS_PORT</code></td><td>Gateway port</td></tr>
+<tr><td><code>MOLTIS_HOST</code></td><td>Listen address</td></tr>
+</tbody></table>
+</div>
+<h2 id="cli-flags"><a class="header" href="#cli-flags">CLI Flags</a></h2>
+<pre><code class="language-bash">moltis --config-dir /path/to/config --data-dir /path/to/data
+</code></pre>
+<h2 id="complete-example"><a class="header" href="#complete-example">Complete Example</a></h2>
+<pre><code class="language-toml">[gateway]
+port = 13131
+host = "0.0.0.0"
+
+[agent]
+name = "Atlas"
+model = "claude-sonnet-4-20250514"
+timeout = 600
+max_iterations = 25
+
+[providers]
+default = "anthropic"
+
+[tools.exec.sandbox]
+enabled = true
+backend = "docker"
+base_image = "ubuntu:25.10"
+packages = ["curl", "git", "jq", "python3", "nodejs"]
+
+[memory]
+enabled = true
+
+[auth]
+disabled = false
+
+[[hooks]]
+name = "audit-log"
+command = "./hooks/audit.sh"
+events = ["BeforeToolCall"]
+timeout = 5
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="llm-providers-1"><a class="header" href="#llm-providers-1">LLM Providers</a></h1>
+<p>Moltis supports 30+ LLM providers through a trait-based architecture. Configure providers through the web UI or directly in configuration files.</p>
+<h2 id="supported-providers"><a class="header" href="#supported-providers">Supported Providers</a></h2>
+<h3 id="tier-1-full-support"><a class="header" href="#tier-1-full-support">Tier 1 (Full Support)</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Models</th><th>Tool Calling</th><th>Streaming</th></tr></thead><tbody>
+<tr><td><strong>Anthropic</strong></td><td>Claude 4, Claude 3.5, Claude 3</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>OpenAI</strong></td><td>GPT-4o, GPT-4, o1, o3</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>Google</strong></td><td>Gemini 2.0, Gemini 1.5</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>GitHub Copilot</strong></td><td>GPT-4o, Claude</td><td>✅</td><td>✅</td></tr>
+</tbody></table>
+</div>
+<h3 id="tier-2-good-support"><a class="header" href="#tier-2-good-support">Tier 2 (Good Support)</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Models</th><th>Tool Calling</th><th>Streaming</th></tr></thead><tbody>
+<tr><td><strong>Mistral</strong></td><td>Mistral Large, Codestral</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>Groq</strong></td><td>Llama 3, Mixtral</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>Together</strong></td><td>Various open models</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>Fireworks</strong></td><td>Various open models</td><td>✅</td><td>✅</td></tr>
+<tr><td><strong>DeepSeek</strong></td><td>DeepSeek V3, Coder</td><td>✅</td><td>✅</td></tr>
+</tbody></table>
+</div>
+<h3 id="tier-3-basic-support"><a class="header" href="#tier-3-basic-support">Tier 3 (Basic Support)</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Notes</th></tr></thead><tbody>
+<tr><td><strong>OpenRouter</strong></td><td>Aggregator for 100+ models</td></tr>
+<tr><td><strong>Ollama</strong></td><td>Local models</td></tr>
+<tr><td><strong>Venice</strong></td><td>Privacy-focused</td></tr>
+<tr><td><strong>Cerebras</strong></td><td>Fast inference</td></tr>
+<tr><td><strong>SambaNova</strong></td><td>Enterprise</td></tr>
+<tr><td><strong>Cohere</strong></td><td>Command models</td></tr>
+<tr><td><strong>AI21</strong></td><td>Jamba models</td></tr>
+</tbody></table>
+</div>
+<h2 id="configuration-1"><a class="header" href="#configuration-1">Configuration</a></h2>
+<h3 id="via-web-ui-recommended"><a class="header" href="#via-web-ui-recommended">Via Web UI (Recommended)</a></h3>
+<ol>
+<li>Open Moltis in your browser</li>
+<li>Go to <strong>Settings</strong> → <strong>Providers</strong></li>
+<li>Click on a provider card</li>
+<li>Enter your API key</li>
+<li>Select your preferred model</li>
+</ol>
+<h3 id="via-configuration-files"><a class="header" href="#via-configuration-files">Via Configuration Files</a></h3>
+<p>Provider credentials are stored in <code>~/.config/moltis/provider_keys.json</code>:</p>
+<pre><code class="language-json">{
+  "anthropic": {
+    "apiKey": "sk-ant-...",
+    "model": "claude-sonnet-4-20250514"
+  },
+  "openai": {
+    "apiKey": "sk-...",
+    "model": "gpt-4o"
+  }
+}
+</code></pre>
+<p>Enable providers in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[providers]
+default = "anthropic"
+
+[providers.anthropic]
+enabled = true
+models = [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+]
+
+[providers.openai]
+enabled = true
+</code></pre>
+<h2 id="provider-specific-setup"><a class="header" href="#provider-specific-setup">Provider-Specific Setup</a></h2>
+<h3 id="anthropic"><a class="header" href="#anthropic">Anthropic</a></h3>
+<ol>
+<li>Get an API key from <a href="https://console.anthropic.com">console.anthropic.com</a></li>
+<li>Enter it in Settings → Providers → Anthropic</li>
+</ol>
+<div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="providers.html#admonition-tip"></a>
+</div>
+<div>
+<p>Claude Sonnet 4 offers the best balance of capability and cost for most coding tasks.</p>
+</div>
+</div>
+<h3 id="openai"><a class="header" href="#openai">OpenAI</a></h3>
+<ol>
+<li>Get an API key from <a href="https://platform.openai.com">platform.openai.com</a></li>
+<li>Enter it in Settings → Providers → OpenAI</li>
+</ol>
+<h3 id="github-copilot"><a class="header" href="#github-copilot">GitHub Copilot</a></h3>
+<p>GitHub Copilot uses OAuth authentication:</p>
+<ol>
+<li>Click <strong>Connect</strong> in Settings → Providers → GitHub Copilot</li>
+<li>Complete the GitHub OAuth flow</li>
+<li>Authorize Moltis to access Copilot</li>
+</ol>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
+<div class="admonition-title">
+<div id="admonition-info-title">
+<p>Info</p>
+</div>
+<a class="admonition-anchor-link" href="providers.html#admonition-info"></a>
+</div>
+<div>
+<p>Requires an active GitHub Copilot subscription.</p>
+</div>
+</div>
+<h3 id="google-gemini"><a class="header" href="#google-gemini">Google (Gemini)</a></h3>
+<ol>
+<li>Get an API key from <a href="https://aistudio.google.com">aistudio.google.com</a></li>
+<li>Enter it in Settings → Providers → Google</li>
+</ol>
+<h3 id="ollama-local-models"><a class="header" href="#ollama-local-models">Ollama (Local Models)</a></h3>
+<p>Run models locally with <a href="https://ollama.ai">Ollama</a>:</p>
+<ol>
+<li>Install Ollama: <code>curl -fsSL https://ollama.ai/install.sh | sh</code></li>
+<li>Pull a model: <code>ollama pull llama3.2</code></li>
+<li>Configure in Moltis:</li>
+</ol>
+<pre><code class="language-json">{
+  "ollama": {
+    "baseUrl": "http://localhost:11434",
+    "model": "llama3.2"
+  }
+}
+</code></pre>
+<h3 id="openrouter"><a class="header" href="#openrouter">OpenRouter</a></h3>
+<p>Access 100+ models through one API:</p>
+<ol>
+<li>Get an API key from <a href="https://openrouter.ai">openrouter.ai</a></li>
+<li>Enter it in Settings → Providers → OpenRouter</li>
+<li>Specify the model ID you want to use</li>
+</ol>
+<pre><code class="language-json">{
+  "openrouter": {
+    "apiKey": "sk-or-...",
+    "model": "anthropic/claude-3.5-sonnet"
+  }
+}
+</code></pre>
+<h2 id="custom-base-urls"><a class="header" href="#custom-base-urls">Custom Base URLs</a></h2>
+<p>For providers with custom endpoints (enterprise, proxies):</p>
+<pre><code class="language-json">{
+  "openai": {
+    "apiKey": "sk-...",
+    "baseUrl": "https://your-proxy.example.com/v1",
+    "model": "gpt-4o"
+  }
+}
+</code></pre>
+<h2 id="switching-providers"><a class="header" href="#switching-providers">Switching Providers</a></h2>
+<h3 id="per-session"><a class="header" href="#per-session">Per-Session</a></h3>
+<p>In the chat interface, use the model selector dropdown to switch providers/models for the current session.</p>
+<h3 id="per-message"><a class="header" href="#per-message">Per-Message</a></h3>
+<p>Use the <code>/model</code> command to switch models mid-conversation:</p>
+<pre><code>/model claude-opus-4-20250514
+</code></pre>
+<h3 id="default-provider"><a class="header" href="#default-provider">Default Provider</a></h3>
+<p>Set the default in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[providers]
+default = "anthropic"
+
+[agent]
+model = "claude-sonnet-4-20250514"
+</code></pre>
+<h2 id="model-capabilities"><a class="header" href="#model-capabilities">Model Capabilities</a></h2>
+<p>Different models have different strengths:</p>
+<div class="table-wrapper"><table><thead><tr><th>Use Case</th><th>Recommended Model</th></tr></thead><tbody>
+<tr><td>General coding</td><td>Claude Sonnet 4, GPT-4o</td></tr>
+<tr><td>Complex reasoning</td><td>Claude Opus 4, o1</td></tr>
+<tr><td>Fast responses</td><td>Claude Haiku, GPT-4o-mini</td></tr>
+<tr><td>Long context</td><td>Claude (200k), Gemini (1M+)</td></tr>
+<tr><td>Local/private</td><td>Llama 3 via Ollama</td></tr>
+</tbody></table>
+</div>
+<h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
+<h3 id="model-not-available"><a class="header" href="#model-not-available">“Model not available”</a></h3>
+<p>The model may not be enabled for your account or region. Check:</p>
+<ul>
+<li>Your API key has access to the model</li>
+<li>The model ID is spelled correctly</li>
+<li>Your account has sufficient credits</li>
+</ul>
+<h3 id="rate-limited"><a class="header" href="#rate-limited">“Rate limited”</a></h3>
+<p>You’ve exceeded the provider’s rate limits. Solutions:</p>
+<ul>
+<li>Wait and retry</li>
+<li>Use a different provider</li>
+<li>Upgrade your API plan</li>
+</ul>
+<h3 id="invalid-api-key"><a class="header" href="#invalid-api-key">“Invalid API key”</a></h3>
+<ul>
+<li>Verify the key is correct (no extra spaces)</li>
+<li>Check the key hasn’t expired</li>
+<li>Ensure the key has the required permissions</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="mcp-servers-1"><a class="header" href="#mcp-servers-1">MCP Servers</a></h1>
+<p>Moltis supports the <a href="https://modelcontextprotocol.io">Model Context Protocol (MCP)</a> for connecting to external tool servers. MCP servers extend your agent’s capabilities without modifying Moltis itself.</p>
+<h2 id="what-is-mcp"><a class="header" href="#what-is-mcp">What is MCP?</a></h2>
+<p>MCP is an open protocol that lets AI assistants connect to external tools and data sources. Think of MCP servers as plugins that provide:</p>
+<ul>
+<li><strong>Tools</strong> — Functions the agent can call (e.g., search, file operations, API calls)</li>
+<li><strong>Resources</strong> — Data the agent can read (e.g., files, database records)</li>
+<li><strong>Prompts</strong> — Pre-defined prompt templates</li>
+</ul>
+<h2 id="supported-transports"><a class="header" href="#supported-transports">Supported Transports</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Transport</th><th>Description</th><th>Use Case</th></tr></thead><tbody>
+<tr><td><strong>stdio</strong></td><td>Local process via stdin/stdout</td><td>npm packages, local scripts</td></tr>
+<tr><td><strong>HTTP/SSE</strong></td><td>Remote server via HTTP</td><td>Cloud services, shared servers</td></tr>
+</tbody></table>
+</div>
+<h2 id="adding-an-mcp-server"><a class="header" href="#adding-an-mcp-server">Adding an MCP Server</a></h2>
+<h3 id="via-web-ui"><a class="header" href="#via-web-ui">Via Web UI</a></h3>
+<ol>
+<li>Go to <strong>Settings</strong> → <strong>MCP Servers</strong></li>
+<li>Click <strong>Add Server</strong></li>
+<li>Enter the server configuration</li>
+<li>Click <strong>Save</strong></li>
+</ol>
+<h3 id="via-configuration"><a class="header" href="#via-configuration">Via Configuration</a></h3>
+<p>Add servers to <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[[mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"]
+
+[[mcp.servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "ghp_..." }
+
+[[mcp.servers]]
+name = "remote-api"
+url = "https://mcp.example.com/sse"
+transport = "sse"
+</code></pre>
+<h2 id="popular-mcp-servers"><a class="header" href="#popular-mcp-servers">Popular MCP Servers</a></h2>
+<h3 id="official-servers"><a class="header" href="#official-servers">Official Servers</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Server</th><th>Description</th><th>Install</th></tr></thead><tbody>
+<tr><td><strong>filesystem</strong></td><td>Read/write local files</td><td><code>npx @modelcontextprotocol/server-filesystem</code></td></tr>
+<tr><td><strong>github</strong></td><td>GitHub API access</td><td><code>npx @modelcontextprotocol/server-github</code></td></tr>
+<tr><td><strong>postgres</strong></td><td>PostgreSQL queries</td><td><code>npx @modelcontextprotocol/server-postgres</code></td></tr>
+<tr><td><strong>sqlite</strong></td><td>SQLite database</td><td><code>npx @modelcontextprotocol/server-sqlite</code></td></tr>
+<tr><td><strong>puppeteer</strong></td><td>Browser automation</td><td><code>npx @modelcontextprotocol/server-puppeteer</code></td></tr>
+<tr><td><strong>brave-search</strong></td><td>Web search</td><td><code>npx @modelcontextprotocol/server-brave-search</code></td></tr>
+</tbody></table>
+</div>
+<h3 id="community-servers"><a class="header" href="#community-servers">Community Servers</a></h3>
+<p>Explore more at <a href="https://mcp.so">mcp.so</a> and <a href="https://github.com/modelcontextprotocol/servers">GitHub MCP Servers</a>.</p>
+<h2 id="configuration-options"><a class="header" href="#configuration-options">Configuration Options</a></h2>
+<pre><code class="language-toml">[[mcp.servers]]
+name = "my-server"              # Display name
+command = "node"                # Command to run
+args = ["server.js"]            # Command arguments
+cwd = "/path/to/server"         # Working directory
+
+# Environment variables
+env = { API_KEY = "secret", DEBUG = "true" }
+
+# Health check settings
+health_check_interval = 30      # Seconds between health checks
+restart_on_failure = true       # Auto-restart on crash
+max_restart_attempts = 5        # Give up after N restarts
+restart_backoff = "exponential" # "linear" or "exponential"
+</code></pre>
+<h2 id="server-lifecycle"><a class="header" href="#server-lifecycle">Server Lifecycle</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────┐
+│                   MCP Server                         │
+│                                                      │
+│  Start → Initialize → Ready → [Tool Calls] → Stop   │
+│            │                       │                 │
+│            ▼                       ▼                 │
+│     Health Check ◄─────────── Heartbeat             │
+│            │                       │                 │
+│            ▼                       ▼                 │
+│    Crash Detected ───────────► Restart              │
+│                                    │                 │
+│                              Backoff Wait            │
+└─────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="health-monitoring"><a class="header" href="#health-monitoring">Health Monitoring</a></h3>
+<p>Moltis monitors MCP servers and automatically:</p>
+<ul>
+<li>Detects crashes via process exit</li>
+<li>Restarts with exponential backoff</li>
+<li>Disables after max restart attempts</li>
+<li>Re-enables after cooldown period</li>
+</ul>
+<h2 id="using-mcp-tools"><a class="header" href="#using-mcp-tools">Using MCP Tools</a></h2>
+<p>Once connected, MCP tools appear alongside built-in tools. The agent can use them naturally:</p>
+<pre><code>User: Search GitHub for Rust async runtime projects
+
+Agent: I'll search GitHub for you.
+[Calling github.search_repositories with query="rust async runtime"]
+
+Found 15 repositories:
+1. tokio-rs/tokio - A runtime for writing reliable async applications
+2. async-std/async-std - Async version of the Rust standard library
+...
+</code></pre>
+<h2 id="creating-an-mcp-server"><a class="header" href="#creating-an-mcp-server">Creating an MCP Server</a></h2>
+<h3 id="simple-nodejs-server"><a class="header" href="#simple-nodejs-server">Simple Node.js Server</a></h3>
+<pre><code class="language-javascript">// server.js
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const server = new Server(
+  { name: "my-server", version: "1.0.0" },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler("tools/list", async () =&gt; ({
+  tools: [{
+    name: "hello",
+    description: "Says hello",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Name to greet" }
+      },
+      required: ["name"]
+    }
+  }]
+}));
+
+server.setRequestHandler("tools/call", async (request) =&gt; {
+  if (request.params.name === "hello") {
+    const name = request.params.arguments.name;
+    return { content: [{ type: "text", text: `Hello, ${name}!` }] };
+  }
+});
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+</code></pre>
+<h3 id="configure-in-moltis"><a class="header" href="#configure-in-moltis">Configure in Moltis</a></h3>
+<pre><code class="language-toml">[[mcp.servers]]
+name = "my-server"
+command = "node"
+args = ["server.js"]
+cwd = "/path/to/my-server"
+</code></pre>
+<h2 id="debugging"><a class="header" href="#debugging">Debugging</a></h2>
+<h3 id="check-server-status"><a class="header" href="#check-server-status">Check Server Status</a></h3>
+<p>In the web UI, go to <strong>Settings</strong> → <strong>MCP Servers</strong> to see:</p>
+<ul>
+<li>Connection status (connected/disconnected/error)</li>
+<li>Available tools</li>
+<li>Recent errors</li>
+</ul>
+<h3 id="view-logs"><a class="header" href="#view-logs">View Logs</a></h3>
+<p>MCP server stderr is captured in Moltis logs:</p>
+<pre><code class="language-bash"># View gateway logs
+tail -f ~/.moltis/logs/gateway.log | grep mcp
+</code></pre>
+<h3 id="test-locally"><a class="header" href="#test-locally">Test Locally</a></h3>
+<p>Run the server directly to debug:</p>
+<pre><code class="language-bash">echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | node server.js
+</code></pre>
+<h2 id="security-considerations"><a class="header" href="#security-considerations">Security Considerations</a></h2>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="mcp.html#admonition-warning"></a>
+</div>
+<div>
+<p>MCP servers run with the same permissions as Moltis. Only use servers from trusted sources.</p>
+</div>
+</div>
+<ul>
+<li><strong>Review server code</strong> before running</li>
+<li><strong>Limit file access</strong> — use specific paths, not <code>/</code></li>
+<li><strong>Use environment variables</strong> for secrets</li>
+<li><strong>Network isolation</strong> — run untrusted servers in containers</li>
+</ul>
+<h2 id="troubleshooting-1"><a class="header" href="#troubleshooting-1">Troubleshooting</a></h2>
+<h3 id="server-wont-start"><a class="header" href="#server-wont-start">Server won’t start</a></h3>
+<ul>
+<li>Check the command exists: <code>which npx</code></li>
+<li>Verify the package: <code>npx @modelcontextprotocol/server-filesystem --help</code></li>
+<li>Check for port conflicts</li>
+</ul>
+<h3 id="tools-not-appearing"><a class="header" href="#tools-not-appearing">Tools not appearing</a></h3>
+<ul>
+<li>Server may still be initializing (wait a few seconds)</li>
+<li>Check server logs for errors</li>
+<li>Verify the server implements <code>tools/list</code></li>
+</ul>
+<h3 id="server-keeps-restarting"><a class="header" href="#server-keeps-restarting">Server keeps restarting</a></h3>
+<ul>
+<li>Check stderr for crash messages</li>
+<li>Increase <code>max_restart_attempts</code> for debugging</li>
+<li>Verify environment variables are set correctly</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="memory-system-1"><a class="header" href="#memory-system-1">Memory System</a></h1>
+<p>Moltis provides a powerful memory system that enables the agent to recall past conversations, notes, and context across sessions. This document explains the available backends, features, and configuration options.</p>
+<h2 id="backends"><a class="header" href="#backends">Backends</a></h2>
+<p>Moltis supports two memory backends:</p>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Built-in</th><th>QMD</th></tr></thead><tbody>
+<tr><td><strong>Search Type</strong></td><td>Hybrid (vector + FTS5 keyword)</td><td>Hybrid (BM25 + vector + LLM reranking)</td></tr>
+<tr><td><strong>Local Embeddings</strong></td><td>GGUF models via llama-cpp-2</td><td>GGUF models</td></tr>
+<tr><td><strong>Remote Embeddings</strong></td><td>OpenAI, Ollama, custom endpoints</td><td>Built-in</td></tr>
+<tr><td><strong>Embedding Cache</strong></td><td>SQLite with LRU eviction</td><td>Built-in</td></tr>
+<tr><td><strong>Batch API</strong></td><td>OpenAI batch (50% cost saving)</td><td>No</td></tr>
+<tr><td><strong>Circuit Breaker</strong></td><td>Fallback chain with auto-recovery</td><td>No</td></tr>
+<tr><td><strong>LLM Reranking</strong></td><td>Optional (configurable)</td><td>Built-in with <code>query</code> command</td></tr>
+<tr><td><strong>File Watching</strong></td><td>Real-time sync via notify</td><td>Built-in</td></tr>
+<tr><td><strong>External Dependency</strong></td><td>None (pure Rust)</td><td>Requires QMD binary (Node.js/Bun)</td></tr>
+<tr><td><strong>Offline Support</strong></td><td>Yes (with local embeddings)</td><td>Yes</td></tr>
+</tbody></table>
+</div>
+<h3 id="built-in-backend"><a class="header" href="#built-in-backend">Built-in Backend</a></h3>
+<p>The default backend uses SQLite for storage with FTS5 for keyword search and optional vector embeddings for semantic search. Key advantages:</p>
+<ul>
+<li><strong>Zero external dependencies</strong>: Everything is embedded in the moltis binary</li>
+<li><strong>Fallback chain</strong>: Automatically switches between embedding providers if one fails</li>
+<li><strong>Batch embedding</strong>: Reduces OpenAI API costs by 50% for large sync operations</li>
+<li><strong>Embedding cache</strong>: Avoids re-embedding unchanged content</li>
+</ul>
+<h3 id="qmd-backend"><a class="header" href="#qmd-backend">QMD Backend</a></h3>
+<p>QMD is an optional external sidecar that provides enhanced search capabilities:</p>
+<ul>
+<li><strong>BM25 keyword search</strong>: Fast, instant results (similar to Elasticsearch)</li>
+<li><strong>Vector search</strong>: Semantic similarity using local GGUF models</li>
+<li><strong>Hybrid search with LLM reranking</strong>: Combines both methods with an LLM pass for optimal relevance</li>
+</ul>
+<p>To use QMD:</p>
+<ol>
+<li>Install QMD separately from <a href="https://github.com/qmd/qmd">github.com/qmd/qmd</a></li>
+<li>Enable it in Settings &gt; Memory &gt; Backend</li>
+</ol>
+<h2 id="features-1"><a class="header" href="#features-1">Features</a></h2>
+<h3 id="citations"><a class="header" href="#citations">Citations</a></h3>
+<p>Citations append source file and line number information to search results:</p>
+<pre><code>Some important content from your notes.
+
+Source: memory/notes.md#42
+</code></pre>
+<p><strong>Configuration options:</strong></p>
+<ul>
+<li><code>auto</code> (default): Include citations when results come from multiple files</li>
+<li><code>on</code>: Always include citations</li>
+<li><code>off</code>: Never include citations</li>
+</ul>
+<h3 id="session-export"><a class="header" href="#session-export">Session Export</a></h3>
+<p>When enabled, session transcripts are automatically exported to the memory system for cross-run recall. This allows the agent to remember past conversations even after restarts.</p>
+<p>Exported sessions are:</p>
+<ul>
+<li>Stored in <code>memory/sessions/</code> as markdown files</li>
+<li>Sanitized to remove sensitive tool results and system messages</li>
+<li>Automatically cleaned up based on age/count limits</li>
+</ul>
+<h3 id="llm-reranking"><a class="header" href="#llm-reranking">LLM Reranking</a></h3>
+<p>LLM reranking uses the configured language model to re-score and reorder search results based on semantic relevance to the query. This provides better results than keyword or vector matching alone, at the cost of additional latency.</p>
+<p><strong>How it works:</strong></p>
+<ol>
+<li>Initial search returns candidate results</li>
+<li>LLM evaluates each result’s relevance (0.0-1.0 score)</li>
+<li>Results are reordered by combined score (70% LLM, 30% original)</li>
+</ol>
+<h2 id="configuration-2"><a class="header" href="#configuration-2">Configuration</a></h2>
+<p>Memory settings can be configured in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[memory]
+# Backend: "builtin" (default) or "qmd"
+backend = "builtin"
+
+# Embedding provider: "local", "ollama", "openai", "custom", or auto-detect
+provider = "local"
+
+# Citation mode: "on", "off", or "auto"
+citations = "auto"
+
+# Enable LLM reranking for hybrid search
+llm_reranking = false
+
+# Export sessions to memory for cross-run recall
+session_export = true
+
+# QMD-specific settings (only used when backend = "qmd")
+[memory.qmd]
+command = "qmd"
+max_results = 10
+timeout_ms = 30000
+</code></pre>
+<p>Or via the web UI: <strong>Settings &gt; Memory</strong></p>
+<h2 id="embedding-providers"><a class="header" href="#embedding-providers">Embedding Providers</a></h2>
+<p>The built-in backend supports multiple embedding providers:</p>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Model</th><th>Dimensions</th><th>Notes</th></tr></thead><tbody>
+<tr><td>Local (GGUF)</td><td>EmbeddingGemma-300M</td><td>768</td><td>Offline, ~300MB download</td></tr>
+<tr><td>Ollama</td><td>nomic-embed-text</td><td>768</td><td>Requires Ollama running</td></tr>
+<tr><td>OpenAI</td><td>text-embedding-3-small</td><td>1536</td><td>Requires API key</td></tr>
+<tr><td>Custom</td><td>Configurable</td><td>Varies</td><td>OpenAI-compatible endpoint</td></tr>
+</tbody></table>
+</div>
+<p>The system auto-detects available providers and creates a fallback chain:</p>
+<ol>
+<li>Try configured provider first</li>
+<li>Fall back to other available providers if it fails</li>
+<li>Use keyword-only search if no embedding provider is available</li>
+</ol>
+<h2 id="memory-directories"><a class="header" href="#memory-directories">Memory Directories</a></h2>
+<p>By default, moltis indexes markdown files from:</p>
+<ul>
+<li><code>~/.moltis/MEMORY.md</code> - Main long-term memory file</li>
+<li><code>~/.moltis/memory/*.md</code> - Additional memory files</li>
+<li><code>~/.moltis/memory/sessions/*.md</code> - Exported session transcripts</li>
+</ul>
+<h2 id="tools"><a class="header" href="#tools">Tools</a></h2>
+<p>The memory system exposes two agent tools:</p>
+<h3 id="memory_search"><a class="header" href="#memory_search">memory_search</a></h3>
+<p>Search memory with a natural language query.</p>
+<pre><code class="language-json">{
+  "query": "what did we discuss about the API design?",
+  "limit": 5
+}
+</code></pre>
+<h3 id="memory_get"><a class="header" href="#memory_get">memory_get</a></h3>
+<p>Retrieve a specific chunk by ID.</p>
+<pre><code class="language-json">{
+  "chunk_id": "memory/notes.md:42"
+}
+</code></pre>
+<h2 id="architecture-1"><a class="header" href="#architecture-1">Architecture</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────────┐
+│                     Memory Manager                          │
+├─────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   Chunker   │  │   Search    │  │  Session Export     │  │
+│  │ (markdown)  │  │  (hybrid)   │  │  (transcripts)      │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+├─────────────────────────────────────────────────────────────┤
+│                    Storage Backend                          │
+│  ┌────────────────────────┐  ┌────────────────────────┐    │
+│  │   Built-in (SQLite)    │  │   QMD (sidecar)        │    │
+│  │  - FTS5 keyword        │  │  - BM25 keyword        │    │
+│  │  - Vector similarity   │  │  - Vector similarity   │    │
+│  │  - Embedding cache     │  │  - LLM reranking       │    │
+│  └────────────────────────┘  └────────────────────────┘    │
+├─────────────────────────────────────────────────────────────┤
+│                  Embedding Providers                        │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────────┐  │
+│  │  Local  │  │ Ollama  │  │ OpenAI  │  │ Batch/Fallback│  │
+│  │  (GGUF) │  │         │  │         │  │               │  │
+│  └─────────┘  └─────────┘  └─────────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+</code></pre>
+<h2 id="troubleshooting-2"><a class="header" href="#troubleshooting-2">Troubleshooting</a></h2>
+<h3 id="memory-not-working"><a class="header" href="#memory-not-working">Memory not working</a></h3>
+<ol>
+<li>Check status in Settings &gt; Memory</li>
+<li>Ensure at least one embedding provider is available:
+<ul>
+<li>Local: Requires <code>local-embeddings</code> feature enabled at build</li>
+<li>Ollama: Must be running at <code>localhost:11434</code></li>
+<li>OpenAI: Requires <code>OPENAI_API_KEY</code> environment variable</li>
+</ul>
+</li>
+</ol>
+<h3 id="search-returns-no-results"><a class="header" href="#search-returns-no-results">Search returns no results</a></h3>
+<ol>
+<li>Check that memory files exist in the expected directories</li>
+<li>Trigger a manual sync by restarting moltis</li>
+<li>Check logs for sync errors</li>
+</ol>
+<h3 id="qmd-not-available"><a class="header" href="#qmd-not-available">QMD not available</a></h3>
+<ol>
+<li>Verify QMD is installed: <code>qmd --version</code></li>
+<li>Check that the path is correct in settings</li>
+<li>Ensure QMD has indexed your collections: <code>qmd stats</code></li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="hooks-1"><a class="header" href="#hooks-1">Hooks</a></h1>
+<p>Hooks let you observe, modify, or block actions at key points in the agent lifecycle. Use them for auditing, policy enforcement, notifications, and custom integrations.</p>
+<h2 id="how-hooks-work"><a class="header" href="#how-hooks-work">How Hooks Work</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│                      Agent Loop                         │
+│                                                         │
+│  User Message → BeforeToolCall → Tool Execution         │
+│                       │                 │               │
+│                       ▼                 ▼               │
+│                 [Your Hook]      AfterToolCall          │
+│                       │                 │               │
+│                 modify/block      [Your Hook]           │
+│                       │                 │               │
+│                       ▼                 ▼               │
+│                   Continue → Response → MessageSent     │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+<h2 id="event-types"><a class="header" href="#event-types">Event Types</a></h2>
+<h3 id="modifying-events-sequential"><a class="header" href="#modifying-events-sequential">Modifying Events (Sequential)</a></h3>
+<p>These events run hooks sequentially. Hooks can modify the payload or block the action.</p>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th><th>Can Modify</th><th>Can Block</th></tr></thead><tbody>
+<tr><td><code>BeforeToolCall</code></td><td>Before a tool executes</td><td>✅</td><td>✅</td></tr>
+<tr><td><code>BeforeCompaction</code></td><td>Before context compaction</td><td>✅</td><td>✅</td></tr>
+<tr><td><code>MessageSending</code></td><td>Before sending a response</td><td>✅</td><td>✅</td></tr>
+<tr><td><code>BeforeAgentStart</code></td><td>Before agent loop starts</td><td>✅</td><td>✅</td></tr>
+</tbody></table>
+</div>
+<h3 id="read-only-events-parallel"><a class="header" href="#read-only-events-parallel">Read-Only Events (Parallel)</a></h3>
+<p>These events run hooks in parallel for performance. They cannot modify or block.</p>
+<div class="table-wrapper"><table><thead><tr><th>Event</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>AfterToolCall</code></td><td>After a tool completes</td></tr>
+<tr><td><code>AfterCompaction</code></td><td>After context is compacted</td></tr>
+<tr><td><code>MessageReceived</code></td><td>When a user message arrives</td></tr>
+<tr><td><code>MessageSent</code></td><td>After response is delivered</td></tr>
+<tr><td><code>AgentEnd</code></td><td>When agent loop completes</td></tr>
+<tr><td><code>SessionStart</code></td><td>When a new session begins</td></tr>
+<tr><td><code>SessionEnd</code></td><td>When a session ends</td></tr>
+<tr><td><code>ToolResultPersist</code></td><td>When tool result is saved</td></tr>
+<tr><td><code>GatewayStart</code></td><td>When Moltis starts</td></tr>
+<tr><td><code>GatewayStop</code></td><td>When Moltis shuts down</td></tr>
+<tr><td><code>Command</code></td><td>When a slash command is used</td></tr>
+</tbody></table>
+</div>
+<h2 id="creating-a-hook"><a class="header" href="#creating-a-hook">Creating a Hook</a></h2>
+<h3 id="1-create-the-hook-directory"><a class="header" href="#1-create-the-hook-directory">1. Create the Hook Directory</a></h3>
+<pre><code class="language-bash">mkdir -p ~/.moltis/hooks/my-hook
+</code></pre>
+<h3 id="2-create-hookmd"><a class="header" href="#2-create-hookmd">2. Create HOOK.md</a></h3>
+<pre><code class="language-markdown">+++
+name = "my-hook"
+description = "Logs all tool calls to a file"
+events = ["BeforeToolCall", "AfterToolCall"]
+command = "./handler.sh"
+timeout = 5
+
+[requires]
+os = ["darwin", "linux"]
+bins = ["jq"]
+env = ["LOG_FILE"]
++++
+
+# My Hook
+
+This hook logs all tool calls for auditing purposes.
+</code></pre>
+<h3 id="3-create-the-handler-script"><a class="header" href="#3-create-the-handler-script">3. Create the Handler Script</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# handler.sh
+
+# Read event payload from stdin
+payload=$(cat)
+
+# Extract event type
+event=$(echo "$payload" | jq -r '.event')
+
+# Log to file
+echo "$(date -Iseconds) $event: $payload" &gt;&gt; "$LOG_FILE"
+
+# Exit 0 to continue (don't block)
+exit 0
+</code></pre>
+<h3 id="4-make-it-executable"><a class="header" href="#4-make-it-executable">4. Make it Executable</a></h3>
+<pre><code class="language-bash">chmod +x ~/.moltis/hooks/my-hook/handler.sh
+</code></pre>
+<h2 id="shell-hook-protocol"><a class="header" href="#shell-hook-protocol">Shell Hook Protocol</a></h2>
+<p>Hooks communicate via stdin/stdout and exit codes:</p>
+<h3 id="input"><a class="header" href="#input">Input</a></h3>
+<p>The event payload is passed as JSON on stdin:</p>
+<pre><code class="language-json">{
+  "event": "BeforeToolCall",
+  "data": {
+    "tool": "bash",
+    "arguments": {
+      "command": "ls -la"
+    }
+  },
+  "session_id": "abc123",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+</code></pre>
+<h3 id="output"><a class="header" href="#output">Output</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Exit Code</th><th>Stdout</th><th>Result</th></tr></thead><tbody>
+<tr><td><code>0</code></td><td>(empty)</td><td>Continue normally</td></tr>
+<tr><td><code>0</code></td><td><code>{"action":"modify","data":{...}}</code></td><td>Replace payload data</td></tr>
+<tr><td><code>1</code></td><td>—</td><td>Block (stderr = reason)</td></tr>
+</tbody></table>
+</div>
+<h3 id="example-modify-tool-arguments"><a class="header" href="#example-modify-tool-arguments">Example: Modify Tool Arguments</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+payload=$(cat)
+tool=$(echo "$payload" | jq -r '.data.tool')
+
+if [ "$tool" = "bash" ]; then
+    # Add safety flag to all bash commands
+    modified=$(echo "$payload" | jq '.data.arguments.command = "set -e; " + .data.arguments.command')
+    echo "{\"action\":\"modify\",\"data\":$(echo "$modified" | jq '.data')}"
+fi
+
+exit 0
+</code></pre>
+<h3 id="example-block-dangerous-commands"><a class="header" href="#example-block-dangerous-commands">Example: Block Dangerous Commands</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+payload=$(cat)
+command=$(echo "$payload" | jq -r '.data.arguments.command // ""')
+
+# Block rm -rf /
+if echo "$command" | grep -qE 'rm\s+-rf\s+/'; then
+    echo "Blocked dangerous rm command" &gt;&amp;2
+    exit 1
+fi
+
+exit 0
+</code></pre>
+<h2 id="hook-discovery"><a class="header" href="#hook-discovery">Hook Discovery</a></h2>
+<p>Hooks are discovered from <code>HOOK.md</code> files in these locations (priority order):</p>
+<ol>
+<li><strong>Project-local</strong>: <code>&lt;workspace&gt;/.moltis/hooks/&lt;name&gt;/HOOK.md</code></li>
+<li><strong>User-global</strong>: <code>~/.moltis/hooks/&lt;name&gt;/HOOK.md</code></li>
+</ol>
+<p>Project-local hooks take precedence over global hooks with the same name.</p>
+<h2 id="configuration-in-moltistoml"><a class="header" href="#configuration-in-moltistoml">Configuration in moltis.toml</a></h2>
+<p>You can also define hooks directly in the config file:</p>
+<pre><code class="language-toml">[[hooks]]
+name = "audit-log"
+command = "./hooks/audit.sh"
+events = ["BeforeToolCall", "AfterToolCall"]
+timeout = 5
+priority = 100  # Higher = runs first
+
+[[hooks]]
+name = "notify-slack"
+command = "./hooks/slack-notify.sh"
+events = ["SessionEnd"]
+env = { SLACK_WEBHOOK_URL = "https://hooks.slack.com/..." }
+</code></pre>
+<h2 id="eligibility-requirements"><a class="header" href="#eligibility-requirements">Eligibility Requirements</a></h2>
+<p>Hooks can declare requirements that must be met:</p>
+<pre><code class="language-toml">[requires]
+os = ["darwin", "linux"]       # Only run on these OSes
+bins = ["jq", "curl"]          # Required binaries in PATH
+env = ["SLACK_WEBHOOK_URL"]    # Required environment variables
+</code></pre>
+<p>If requirements aren’t met, the hook is skipped (not an error).</p>
+<h2 id="circuit-breaker"><a class="header" href="#circuit-breaker">Circuit Breaker</a></h2>
+<p>Hooks that fail repeatedly are automatically disabled:</p>
+<ul>
+<li><strong>Threshold</strong>: 5 consecutive failures</li>
+<li><strong>Cooldown</strong>: 60 seconds</li>
+<li><strong>Recovery</strong>: Auto-re-enabled after cooldown</li>
+</ul>
+<p>This prevents a broken hook from blocking all operations.</p>
+<h2 id="cli-commands"><a class="header" href="#cli-commands">CLI Commands</a></h2>
+<pre><code class="language-bash"># List all discovered hooks
+moltis hooks list
+
+# List only eligible hooks (requirements met)
+moltis hooks list --eligible
+
+# Output as JSON
+moltis hooks list --json
+
+# Show details for a specific hook
+moltis hooks info my-hook
+</code></pre>
+<h2 id="bundled-hooks"><a class="header" href="#bundled-hooks">Bundled Hooks</a></h2>
+<p>Moltis includes several built-in hooks:</p>
+<h3 id="boot-md"><a class="header" href="#boot-md">boot-md</a></h3>
+<p>Reads <code>BOOT.md</code> from the workspace on <code>GatewayStart</code> and injects it into the agent context.</p>
+<h3 id="session-memory"><a class="header" href="#session-memory">session-memory</a></h3>
+<p>Saves session context when you use the <code>/new</code> command, preserving important information for future sessions.</p>
+<h3 id="command-logger"><a class="header" href="#command-logger">command-logger</a></h3>
+<p>Logs all <code>Command</code> events to a JSONL file for auditing.</p>
+<h2 id="example-hooks"><a class="header" href="#example-hooks">Example Hooks</a></h2>
+<h3 id="slack-notification-on-session-end"><a class="header" href="#slack-notification-on-session-end">Slack Notification on Session End</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# slack-notify.sh
+payload=$(cat)
+session_id=$(echo "$payload" | jq -r '.session_id')
+message_count=$(echo "$payload" | jq -r '.data.message_count')
+
+curl -X POST "$SLACK_WEBHOOK_URL" \
+  -H 'Content-Type: application/json' \
+  -d "{\"text\":\"Session $session_id ended with $message_count messages\"}"
+
+exit 0
+</code></pre>
+<h3 id="redact-secrets-from-tool-output"><a class="header" href="#redact-secrets-from-tool-output">Redact Secrets from Tool Output</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# redact-secrets.sh
+payload=$(cat)
+
+# Redact common secret patterns
+redacted=$(echo "$payload" | sed -E '
+  s/sk-[a-zA-Z0-9]{32,}/[REDACTED]/g
+  s/ghp_[a-zA-Z0-9]{36}/[REDACTED]/g
+  s/password=[^&amp;\s]+/password=[REDACTED]/g
+')
+
+echo "{\"action\":\"modify\",\"data\":$(echo "$redacted" | jq '.data')}"
+exit 0
+</code></pre>
+<h3 id="block-file-writes-outside-project"><a class="header" href="#block-file-writes-outside-project">Block File Writes Outside Project</a></h3>
+<pre><code class="language-bash">#!/bin/bash
+# sandbox-writes.sh
+payload=$(cat)
+tool=$(echo "$payload" | jq -r '.data.tool')
+
+if [ "$tool" = "write_file" ]; then
+    path=$(echo "$payload" | jq -r '.data.arguments.path')
+
+    # Only allow writes under current project
+    if [[ ! "$path" =~ ^/workspace/ ]]; then
+        echo "File writes only allowed in /workspace" &gt;&amp;2
+        exit 1
+    fi
+fi
+
+exit 0
+</code></pre>
+<h2 id="best-practices"><a class="header" href="#best-practices">Best Practices</a></h2>
+<ol>
+<li><strong>Keep hooks fast</strong> — Set appropriate timeouts (default: 5s)</li>
+<li><strong>Handle errors gracefully</strong> — Use <code>exit 0</code> unless you want to block</li>
+<li><strong>Log for debugging</strong> — Write to a log file, not stdout</li>
+<li><strong>Test locally first</strong> — Pipe sample JSON through your script</li>
+<li><strong>Use jq for JSON</strong> — It’s reliable and fast for parsing</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="local-llm-support"><a class="header" href="#local-llm-support">Local LLM Support</a></h1>
+<p>Moltis can run LLM inference locally on your machine without requiring an API
+key or internet connection. This enables fully offline operation and keeps your
+conversations private.</p>
+<h2 id="backends-1"><a class="header" href="#backends-1">Backends</a></h2>
+<p>Moltis supports two backends for local inference:</p>
+<div class="table-wrapper"><table><thead><tr><th>Backend</th><th>Format</th><th>Platform</th><th>GPU Acceleration</th></tr></thead><tbody>
+<tr><td><strong>GGUF</strong> (llama.cpp)</td><td><code>.gguf</code> files</td><td>macOS, Linux, Windows</td><td>Metal (macOS), CUDA (NVIDIA)</td></tr>
+<tr><td><strong>MLX</strong></td><td>MLX model repos</td><td>macOS (Apple Silicon only)</td><td>Apple Silicon neural engine</td></tr>
+</tbody></table>
+</div>
+<h3 id="gguf-llamacpp"><a class="header" href="#gguf-llamacpp">GGUF (llama.cpp)</a></h3>
+<p>GGUF is the primary backend, powered by <a href="https://github.com/ggerganov/llama.cpp">llama.cpp</a>.
+It supports quantized models in the GGUF format, which significantly reduces
+memory requirements while maintaining good quality.</p>
+<p><strong>Advantages:</strong></p>
+<ul>
+<li>Cross-platform (macOS, Linux, Windows)</li>
+<li>Wide model compatibility (any GGUF model)</li>
+<li>GPU acceleration on both NVIDIA (CUDA) and Apple Silicon (Metal)</li>
+<li>Mature and well-tested</li>
+</ul>
+<h3 id="mlx"><a class="header" href="#mlx">MLX</a></h3>
+<p>MLX is Apple’s machine learning framework optimized for Apple Silicon. Models
+from the <a href="https://huggingface.co/mlx-community">mlx-community</a> on HuggingFace
+are specifically optimized for M1/M2/M3/M4 chips.</p>
+<p><strong>Advantages:</strong></p>
+<ul>
+<li>Native Apple Silicon performance</li>
+<li>Efficient unified memory usage</li>
+<li>Lower latency on Macs</li>
+</ul>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>macOS with Apple Silicon (M1/M2/M3/M4)</li>
+</ul>
+<h2 id="memory-requirements"><a class="header" href="#memory-requirements">Memory Requirements</a></h2>
+<p>Models are organized by memory tiers based on your system RAM:</p>
+<div class="table-wrapper"><table><thead><tr><th>Tier</th><th>RAM</th><th>Recommended Models</th></tr></thead><tbody>
+<tr><td><strong>Tiny</strong></td><td>4GB</td><td>Qwen 2.5 Coder 1.5B, Llama 3.2 1B</td></tr>
+<tr><td><strong>Small</strong></td><td>8GB</td><td>Qwen 2.5 Coder 3B, Llama 3.2 3B</td></tr>
+<tr><td><strong>Medium</strong></td><td>16GB</td><td>Qwen 2.5 Coder 7B, Llama 3.1 8B</td></tr>
+<tr><td><strong>Large</strong></td><td>32GB+</td><td>Qwen 2.5 Coder 14B, DeepSeek Coder V2 Lite</td></tr>
+</tbody></table>
+</div>
+<p>Moltis automatically detects your system memory and suggests appropriate models
+in the UI.</p>
+<h2 id="configuration-3"><a class="header" href="#configuration-3">Configuration</a></h2>
+<h3 id="via-web-ui-recommended-1"><a class="header" href="#via-web-ui-recommended-1">Via Web UI (Recommended)</a></h3>
+<ol>
+<li>Navigate to <strong>Providers</strong> in the sidebar</li>
+<li>Click <strong>Add Provider</strong></li>
+<li>Select <strong>Local LLM</strong></li>
+<li>Choose a model from the registry or search HuggingFace</li>
+<li>Click <strong>Configure</strong> — the model will download automatically</li>
+</ol>
+<h3 id="via-configuration-file"><a class="header" href="#via-configuration-file">Via Configuration File</a></h3>
+<p>Add to <code>~/.moltis/moltis.toml</code>:</p>
+<pre><code class="language-toml">[providers.local]
+model = "qwen2.5-coder-7b-q4_k_m"
+</code></pre>
+<p>For custom GGUF files:</p>
+<pre><code class="language-toml">[providers.local]
+model = "my-custom-model"
+model_path = "/path/to/model.gguf"
+</code></pre>
+<h2 id="model-storage"><a class="header" href="#model-storage">Model Storage</a></h2>
+<p>Downloaded models are cached in <code>~/.cache/moltis/models/</code> by default. This
+directory can grow large (several GB per model).</p>
+<p>To change the cache location:</p>
+<pre><code class="language-toml">[providers.local]
+cache_dir = "/custom/models/path"
+</code></pre>
+<h2 id="huggingface-integration"><a class="header" href="#huggingface-integration">HuggingFace Integration</a></h2>
+<p>You can search and download models directly from HuggingFace:</p>
+<ol>
+<li>In the Add Provider dialog, click “Search HuggingFace”</li>
+<li>Enter a search term (e.g., “qwen coder”)</li>
+<li>Select GGUF or MLX backend</li>
+<li>Choose a model from the results</li>
+<li>The model will be downloaded on first use</li>
+</ol>
+<h3 id="finding-gguf-models"><a class="header" href="#finding-gguf-models">Finding GGUF Models</a></h3>
+<p>Look for repositories with “GGUF” in the name on HuggingFace:</p>
+<ul>
+<li><a href="https://huggingface.co/TheBloke">TheBloke</a> — large collection of quantized models</li>
+<li><a href="https://huggingface.co/bartowski">bartowski</a> — Llama 3.x GGUF models</li>
+<li><a href="https://huggingface.co/Qwen">Qwen</a> — official Qwen GGUF models</li>
+</ul>
+<h3 id="finding-mlx-models"><a class="header" href="#finding-mlx-models">Finding MLX Models</a></h3>
+<p>MLX models are available from <a href="https://huggingface.co/mlx-community">mlx-community</a>:</p>
+<ul>
+<li>Pre-converted models optimized for Apple Silicon</li>
+<li>Look for models ending in <code>-4bit</code> or <code>-8bit</code> for quantized versions</li>
+</ul>
+<h2 id="gpu-acceleration"><a class="header" href="#gpu-acceleration">GPU Acceleration</a></h2>
+<h3 id="metal-macos"><a class="header" href="#metal-macos">Metal (macOS)</a></h3>
+<p>Metal acceleration is enabled by default on macOS. The number of GPU layers
+can be configured:</p>
+<pre><code class="language-toml">[providers.local]
+gpu_layers = 99  # Offload all layers to GPU
+</code></pre>
+<h3 id="cuda-nvidia"><a class="header" href="#cuda-nvidia">CUDA (NVIDIA)</a></h3>
+<p>Requires building with the <code>local-llm-cuda</code> feature:</p>
+<pre><code class="language-bash">cargo build --release --features local-llm-cuda
+</code></pre>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<p>Local LLM models have some limitations compared to cloud providers:</p>
+<ol>
+<li>
+<p><strong>No tool calling</strong> — Local models don’t support function/tool calling.
+When using a local model, features like file operations, shell commands,
+and memory search are disabled.</p>
+</li>
+<li>
+<p><strong>Slower inference</strong> — Depending on your hardware, local inference may be
+significantly slower than cloud APIs.</p>
+</li>
+<li>
+<p><strong>Quality varies</strong> — Smaller quantized models may produce lower quality
+responses than larger cloud models.</p>
+</li>
+<li>
+<p><strong>Context window</strong> — Local models typically have smaller context windows
+(8K-32K tokens vs 128K+ for cloud models).</p>
+</li>
+</ol>
+<h2 id="chat-templates"><a class="header" href="#chat-templates">Chat Templates</a></h2>
+<p>Different model families use different chat formatting. Moltis automatically
+detects the correct template for registered models:</p>
+<ul>
+<li><strong>ChatML</strong> — Qwen, many instruction-tuned models</li>
+<li><strong>Llama 3</strong> — Meta’s Llama 3.x family</li>
+<li><strong>DeepSeek</strong> — DeepSeek Coder models</li>
+</ul>
+<p>For custom models, the template is auto-detected from the model metadata when
+possible.</p>
+<h2 id="troubleshooting-3"><a class="header" href="#troubleshooting-3">Troubleshooting</a></h2>
+<h3 id="model-fails-to-load"><a class="header" href="#model-fails-to-load">Model fails to load</a></h3>
+<ul>
+<li>Check you have enough RAM (see memory tier table above)</li>
+<li>Verify the GGUF file isn’t corrupted (re-download if needed)</li>
+<li>Ensure the model file matches the expected architecture</li>
+</ul>
+<h3 id="slow-inference"><a class="header" href="#slow-inference">Slow inference</a></h3>
+<ul>
+<li>Enable GPU acceleration (Metal on macOS, CUDA on Linux)</li>
+<li>Try a smaller/more quantized model</li>
+<li>Reduce context size in config</li>
+</ul>
+<h3 id="out-of-memory"><a class="header" href="#out-of-memory">Out of memory</a></h3>
+<ul>
+<li>Choose a model from a lower memory tier</li>
+<li>Close other applications to free RAM</li>
+<li>Use a more aggressively quantized model (Q4_K_M vs Q8_0)</li>
+</ul>
+<h2 id="feature-flag"><a class="header" href="#feature-flag">Feature Flag</a></h2>
+<p>Local LLM support requires the <code>local-llm</code> feature flag at compile time:</p>
+<pre><code class="language-bash">cargo build --release --features local-llm
+</code></pre>
+<p>This is enabled by default in release builds.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="sandbox-backends"><a class="header" href="#sandbox-backends">Sandbox Backends</a></h1>
+<p>Moltis runs LLM-generated commands inside containers to protect your host
+system. The sandbox backend controls which container technology is used.</p>
+<h2 id="backend-selection"><a class="header" href="#backend-selection">Backend Selection</a></h2>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[tools.exec.sandbox]
+backend = "auto"          # default — picks the best available
+# backend = "docker"      # force Docker
+# backend = "apple-container"  # force Apple Container (macOS only)
+</code></pre>
+<p>With <code>"auto"</code> (the default), Moltis picks the strongest available backend:</p>
+<div class="table-wrapper"><table><thead><tr><th>Priority</th><th>Backend</th><th>Platform</th><th>Isolation</th></tr></thead><tbody>
+<tr><td>1</td><td>Apple Container</td><td>macOS</td><td>VM (Virtualization.framework)</td></tr>
+<tr><td>2</td><td>Docker</td><td>any</td><td>Linux namespaces / cgroups</td></tr>
+<tr><td>3</td><td>none (host)</td><td>any</td><td>no isolation</td></tr>
+</tbody></table>
+</div>
+<h2 id="apple-container-recommended-on-macos"><a class="header" href="#apple-container-recommended-on-macos">Apple Container (recommended on macOS)</a></h2>
+<p><a href="https://github.com/apple/container">Apple Container</a> runs each sandbox in a
+lightweight virtual machine using Apple’s Virtualization.framework. Every
+container gets its own kernel, so a kernel exploit inside the sandbox cannot
+reach the host — unlike Docker, which shares the host kernel.</p>
+<h3 id="install"><a class="header" href="#install">Install</a></h3>
+<p>Download the signed installer from GitHub:</p>
+<pre><code class="language-bash"># Download the installer package
+gh release download --repo apple/container --pattern "container-installer-signed.pkg" --dir /tmp
+
+# Install (requires admin)
+sudo installer -pkg /tmp/container-installer-signed.pkg -target /
+
+# First-time setup — downloads a default Linux kernel
+container system start
+</code></pre>
+<p>Alternatively, build from source with <code>brew install container</code> (requires
+Xcode 26+).</p>
+<h3 id="verify"><a class="header" href="#verify">Verify</a></h3>
+<pre><code class="language-bash">container --version
+# Run a quick test
+container run --rm ubuntu echo "hello from VM"
+</code></pre>
+<p>Once installed, restart <code>moltis gateway</code> — the startup banner will show
+<code>sandbox: apple-container backend</code>.</p>
+<h2 id="docker-1"><a class="header" href="#docker-1">Docker</a></h2>
+<p>Docker is supported on macOS, Linux, and Windows. On macOS it runs inside a
+Linux VM managed by Docker Desktop, so it is reasonably isolated but adds more
+overhead than Apple Container.</p>
+<p>Install from https://docs.docker.com/get-docker/</p>
+<h2 id="no-sandbox"><a class="header" href="#no-sandbox">No sandbox</a></h2>
+<p>If neither runtime is found, commands execute directly on the host. The
+startup banner will show a warning. This is <strong>not recommended</strong> for untrusted
+workloads.</p>
+<h2 id="per-session-overrides"><a class="header" href="#per-session-overrides">Per-session overrides</a></h2>
+<p>The web UI allows toggling sandboxing per session and selecting a custom
+container image. These overrides persist across gateway restarts.</p>
+<h2 id="resource-limits"><a class="header" href="#resource-limits">Resource limits</a></h2>
+<pre><code class="language-toml">[tools.exec.sandbox.resource_limits]
+memory_limit = "512M"
+cpu_quota = 1.0
+pids_max = 256
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="session-state"><a class="header" href="#session-state">Session State</a></h1>
+<p>Moltis provides a per-session key-value store that allows skills, extensions,
+and the agent itself to persist context across messages within a session.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>Session state is scoped to a <code>(session_key, namespace, key)</code> triple, backed by
+SQLite. Each entry stores a string value and is automatically timestamped.</p>
+<p>The agent accesses state through the <code>session_state</code> tool, which supports three
+operations: <code>get</code>, <code>set</code>, and <code>list</code>.</p>
+<h2 id="agent-tool"><a class="header" href="#agent-tool">Agent Tool</a></h2>
+<p>The <code>session_state</code> tool is registered as a built-in tool and available in every
+session.</p>
+<h3 id="get-a-value"><a class="header" href="#get-a-value">Get a value</a></h3>
+<pre><code class="language-json">{
+  "op": "get",
+  "namespace": "my-skill",
+  "key": "last_query"
+}
+</code></pre>
+<h3 id="set-a-value"><a class="header" href="#set-a-value">Set a value</a></h3>
+<pre><code class="language-json">{
+  "op": "set",
+  "namespace": "my-skill",
+  "key": "last_query",
+  "value": "SELECT * FROM users"
+}
+</code></pre>
+<h3 id="list-all-keys-in-a-namespace"><a class="header" href="#list-all-keys-in-a-namespace">List all keys in a namespace</a></h3>
+<pre><code class="language-json">{
+  "op": "list",
+  "namespace": "my-skill"
+}
+</code></pre>
+<h2 id="namespacing"><a class="header" href="#namespacing">Namespacing</a></h2>
+<p>Every state entry belongs to a namespace. This prevents collisions between
+different skills or extensions using state in the same session. Use your skill
+name as the namespace.</p>
+<h2 id="storage"><a class="header" href="#storage">Storage</a></h2>
+<p>State is stored in the <code>session_state</code> table in the main SQLite database
+(<code>moltis.db</code>). The migration is in
+<code>crates/sessions/migrations/20260205120000_session_state.sql</code>.</p>
+<div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="session-state.html#admonition-tip"></a>
+</div>
+<div>
+<p>State values are strings. To store structured data, serialize to JSON before
+writing and parse after reading.</p>
+</div>
+</div>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="session-branching"><a class="header" href="#session-branching">Session Branching</a></h1>
+<p>Session branching (forking) lets you create an independent copy of a
+conversation at any point. The new session diverges without affecting the
+original — useful for exploring alternative approaches, running “what if”
+scenarios, or preserving a checkpoint before a risky prompt.</p>
+<h2 id="forking-from-the-ui"><a class="header" href="#forking-from-the-ui">Forking from the UI</a></h2>
+<p>There are two ways to fork a session in the web UI:</p>
+<ul>
+<li><strong>Chat header</strong> — click the <strong>Fork</strong> button in the header bar (next to
+Delete). This is visible for every session except cron sessions.</li>
+<li><strong>Sidebar</strong> — hover over a session in the sidebar and click the fork icon
+that appears in the action buttons.</li>
+</ul>
+<p>Both create a new session that copies all messages from the current one and
+immediately switch you to it.</p>
+<p>Forked sessions appear <strong>indented</strong> under their parent in the sidebar, with a
+branch icon to distinguish them from top-level sessions. The metadata line
+shows <code>fork@N</code> where N is the message index at which the fork occurred.</p>
+<h2 id="agent-tool-1"><a class="header" href="#agent-tool-1">Agent Tool</a></h2>
+<p>The agent can also fork programmatically using the <code>branch_session</code> tool:</p>
+<pre><code class="language-json">{
+  "at_message": 5,
+  "label": "explore-alternative"
+}
+</code></pre>
+<ul>
+<li><strong><code>at_message</code></strong> — the message index to fork at (messages 0..N are copied).
+If omitted, all messages are copied.</li>
+<li><strong><code>label</code></strong> — optional human-readable label for the new session.</li>
+</ul>
+<p>The tool returns the new session key.</p>
+<h2 id="rpc-method"><a class="header" href="#rpc-method">RPC Method</a></h2>
+<p>The <code>sessions.fork</code> RPC method is the underlying mechanism:</p>
+<pre><code class="language-json">{ "key": "main", "at_message": 5, "label": "my-fork" }
+</code></pre>
+<p>On success the response payload contains <code>{ "sessionKey": "session:&lt;uuid&gt;" }</code>.</p>
+<h2 id="what-gets-inherited"><a class="header" href="#what-gets-inherited">What Gets Inherited</a></h2>
+<p>When forking, the new session inherits:</p>
+<div class="table-wrapper"><table><thead><tr><th>Inherited</th><th>Not inherited</th></tr></thead><tbody>
+<tr><td>Messages (up to fork point)</td><td>Worktree branch</td></tr>
+<tr><td>Model selection</td><td>Sandbox settings</td></tr>
+<tr><td>Project assignment</td><td>Channel binding</td></tr>
+<tr><td>MCP disabled flag</td><td></td></tr>
+</tbody></table>
+</div>
+<h2 id="parent-child-relationships"><a class="header" href="#parent-child-relationships">Parent-Child Relationships</a></h2>
+<p>Fork relationships are stored directly on the <code>sessions</code> table:</p>
+<ul>
+<li><strong><code>parent_session_key</code></strong> — the key of the session this was forked from.</li>
+<li><strong><code>fork_point</code></strong> — the message index where the fork occurred.</li>
+</ul>
+<p>These fields drive the tree rendering in the sidebar. Sessions with a parent
+appear indented under it; deeply nested forks indent further.</p>
+<div id="admonition-deleting-a-parent" class="admonition admonish-warning" role="note" aria-labelledby="admonition-deleting-a-parent-title">
+<div class="admonition-title">
+<div id="admonition-deleting-a-parent-title">
+<p>Deleting a parent</p>
+</div>
+<a class="admonition-anchor-link" href="session-branching.html#admonition-deleting-a-parent"></a>
+</div>
+<div>
+<p>Deleting a parent session does <strong>not</strong> cascade to its children. Child sessions
+become top-level sessions — they keep their messages and history but lose
+their visual nesting in the sidebar.</p>
+</div>
+</div>
+<h2 id="navigation-after-delete"><a class="header" href="#navigation-after-delete">Navigation After Delete</a></h2>
+<p>When you delete a forked session, the UI navigates back to its parent session.
+If the deleted session had no parent (or the parent no longer exists), it falls
+back to the next sibling or <code>main</code>.</p>
+<div id="admonition-independence" class="admonition admonish-info" role="note" aria-labelledby="admonition-independence-title">
+<div class="admonition-title">
+<div id="admonition-independence-title">
+<p>Independence</p>
+</div>
+<a class="admonition-anchor-link" href="session-branching.html#admonition-independence"></a>
+</div>
+<div>
+<p>A forked session is fully independent after creation. Changes to the parent
+do not propagate to the fork, and vice versa.</p>
+</div>
+</div>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="skill-self-extension"><a class="header" href="#skill-self-extension">Skill Self-Extension</a></h1>
+<p>Moltis can create, update, and delete skills at runtime through agent tools,
+enabling the system to extend its own capabilities during a conversation.</p>
+<h2 id="overview-1"><a class="header" href="#overview-1">Overview</a></h2>
+<p>Three agent tools manage project-local skills:</p>
+<div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>create_skill</code></td><td>Write a new <code>SKILL.md</code> to <code>.moltis/skills/&lt;name&gt;/</code></td></tr>
+<tr><td><code>update_skill</code></td><td>Overwrite an existing skill’s <code>SKILL.md</code></td></tr>
+<tr><td><code>delete_skill</code></td><td>Remove a skill directory</td></tr>
+</tbody></table>
+</div>
+<p>Skills created this way are project-local and stored in the working directory’s
+<code>.moltis/skills/</code> folder. They become available on the next message
+automatically thanks to the skill watcher.</p>
+<h2 id="skill-watcher"><a class="header" href="#skill-watcher">Skill Watcher</a></h2>
+<p>The skill watcher (<code>crates/skills/src/watcher.rs</code>) monitors skill directories
+for filesystem changes using debounced notifications. When a <code>SKILL.md</code> file is
+created, modified, or deleted, the watcher emits a <code>skills.changed</code> event via
+the WebSocket event bus so the UI can refresh.</p>
+<div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="skill-tools.html#admonition-tip"></a>
+</div>
+<div>
+<p>The watcher uses debouncing to avoid firing multiple events for rapid
+successive edits (e.g. an editor writing a temp file then renaming).</p>
+</div>
+</div>
+<h2 id="creating-a-skill"><a class="header" href="#creating-a-skill">Creating a Skill</a></h2>
+<p>The agent can create a skill by calling the <code>create_skill</code> tool:</p>
+<pre><code class="language-json">{
+  "name": "summarize-pr",
+  "content": "# summarize-pr\n\nSummarize a GitHub pull request...",
+  "description": "Summarize GitHub PRs with key changes and review notes"
+}
+</code></pre>
+<p>This writes <code>.moltis/skills/summarize-pr/SKILL.md</code> with the provided content.
+The skill discoverer picks it up on the next message.</p>
+<h2 id="updating-a-skill"><a class="header" href="#updating-a-skill">Updating a Skill</a></h2>
+<pre><code class="language-json">{
+  "name": "summarize-pr",
+  "content": "# summarize-pr\n\nUpdated instructions..."
+}
+</code></pre>
+<h2 id="deleting-a-skill"><a class="header" href="#deleting-a-skill">Deleting a Skill</a></h2>
+<pre><code class="language-json">{
+  "name": "summarize-pr"
+}
+</code></pre>
+<p>This removes the entire <code>.moltis/skills/summarize-pr/</code> directory.</p>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="skill-tools.html#admonition-warning"></a>
+</div>
+<div>
+<p>Deleted skills cannot be recovered. The agent should confirm with the user
+before deleting a skill.</p>
+</div>
+</div>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="mobile-pwa-and-push-notifications"><a class="header" href="#mobile-pwa-and-push-notifications">Mobile PWA and Push Notifications</a></h1>
+<p>Moltis can be installed as a Progressive Web App (PWA) on mobile devices, providing a native app-like experience with push notifications.</p>
+<h2 id="installing-on-mobile"><a class="header" href="#installing-on-mobile">Installing on Mobile</a></h2>
+<h3 id="ios-safari"><a class="header" href="#ios-safari">iOS (Safari)</a></h3>
+<ol>
+<li>Open moltis in Safari</li>
+<li>Tap the Share button (box with arrow)</li>
+<li>Scroll down and tap “Add to Home Screen”</li>
+<li>Tap “Add” to confirm</li>
+</ol>
+<p>The app will appear on your home screen with the moltis icon.</p>
+<h3 id="android-chrome"><a class="header" href="#android-chrome">Android (Chrome)</a></h3>
+<ol>
+<li>Open moltis in Chrome</li>
+<li>You should see an install banner at the bottom - tap “Install”</li>
+<li>Or tap the three-dot menu and select “Install app” or “Add to Home Screen”</li>
+<li>Tap “Install” to confirm</li>
+</ol>
+<p>The app will appear in your app drawer and home screen.</p>
+<h2 id="pwa-features"><a class="header" href="#pwa-features">PWA Features</a></h2>
+<p>When installed as a PWA, moltis provides:</p>
+<ul>
+<li><strong>Standalone mode</strong>: Full-screen experience without browser UI</li>
+<li><strong>Offline support</strong>: Previously loaded content remains accessible</li>
+<li><strong>Fast loading</strong>: Assets are cached locally</li>
+<li><strong>Home screen icon</strong>: Quick access from your device’s home screen</li>
+<li><strong>Safe area support</strong>: Proper spacing for notched devices (iPhone X+)</li>
+</ul>
+<h2 id="push-notifications"><a class="header" href="#push-notifications">Push Notifications</a></h2>
+<p>Push notifications allow you to receive alerts when the LLM responds, even when you’re not actively viewing the app.</p>
+<h3 id="enabling-push-notifications"><a class="header" href="#enabling-push-notifications">Enabling Push Notifications</a></h3>
+<ol>
+<li>Open the moltis app (must be installed as PWA on Safari/iOS)</li>
+<li>Go to <strong>Settings &gt; Notifications</strong></li>
+<li>Click <strong>Enable</strong> to subscribe to push notifications</li>
+<li>When prompted, allow notification permissions</li>
+</ol>
+<p><strong>Safari/iOS Note</strong>: Push notifications only work when the app is installed as a PWA. If you see “Installation required”, add moltis to your Dock first:</p>
+<ul>
+<li><strong>macOS</strong>: File → Add to Dock</li>
+<li><strong>iOS</strong>: Share → Add to Home Screen</li>
+</ul>
+<h3 id="managing-subscriptions"><a class="header" href="#managing-subscriptions">Managing Subscriptions</a></h3>
+<p>The Settings &gt; Notifications page shows all subscribed devices:</p>
+<ul>
+<li><strong>Device name</strong>: Parsed from user agent (e.g., “Safari on macOS”, “iPhone”)</li>
+<li><strong>IP address</strong>: Client IP at subscription time (supports proxies via X-Forwarded-For)</li>
+<li><strong>Subscription date</strong>: When the device subscribed</li>
+</ul>
+<p>You can remove any subscription by clicking the <strong>Remove</strong> button. This works from any device - useful for revoking access to old devices.</p>
+<p>Subscription changes are broadcast in real-time via WebSocket, so all connected clients see updates immediately.</p>
+<h3 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h3>
+<p>Moltis uses the Web Push API with VAPID (Voluntary Application Server Identification) keys:</p>
+<ol>
+<li><strong>VAPID Keys</strong>: On first run, the server generates a P-256 ECDSA key pair</li>
+<li><strong>Subscription</strong>: The browser creates a push subscription using the server’s public key</li>
+<li><strong>Registration</strong>: The subscription details are sent to the server and stored</li>
+<li><strong>Notification</strong>: When you need to be notified, the server encrypts and sends a push message</li>
+</ol>
+<h3 id="push-api-routes"><a class="header" href="#push-api-routes">Push API Routes</a></h3>
+<p>The gateway exposes these API endpoints for push notifications:</p>
+<div class="table-wrapper"><table><thead><tr><th>Endpoint</th><th>Method</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>/api/push/vapid-key</code></td><td>GET</td><td>Get the VAPID public key for subscription</td></tr>
+<tr><td><code>/api/push/subscribe</code></td><td>POST</td><td>Register a push subscription</td></tr>
+<tr><td><code>/api/push/unsubscribe</code></td><td>POST</td><td>Remove a push subscription</td></tr>
+<tr><td><code>/api/push/status</code></td><td>GET</td><td>Get push service status and subscription list</td></tr>
+</tbody></table>
+</div>
+<h3 id="subscribe-request"><a class="header" href="#subscribe-request">Subscribe Request</a></h3>
+<pre><code class="language-json">{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/...",
+  "keys": {
+    "p256dh": "base64url-encoded-key",
+    "auth": "base64url-encoded-auth"
+  }
+}
+</code></pre>
+<h3 id="status-response"><a class="header" href="#status-response">Status Response</a></h3>
+<pre><code class="language-json">{
+  "enabled": true,
+  "subscription_count": 2,
+  "subscriptions": [
+    {
+      "endpoint": "https://fcm.googleapis.com/...",
+      "device": "Safari on macOS",
+      "ip": "192.168.1.100",
+      "created_at": "2025-02-05T23:30:00Z"
+    }
+  ]
+}
+</code></pre>
+<h3 id="notification-payload"><a class="header" href="#notification-payload">Notification Payload</a></h3>
+<p>Push notifications include:</p>
+<pre><code class="language-json">{
+  "title": "moltis",
+  "body": "New response available",
+  "url": "/chats",
+  "sessionKey": "session-id"
+}
+</code></pre>
+<p>Clicking a notification will open or focus the app and navigate to the relevant chat.</p>
+<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
+<h3 id="feature-flag-1"><a class="header" href="#feature-flag-1">Feature Flag</a></h3>
+<p>Push notifications are controlled by the <code>push-notifications</code> feature flag, which is enabled by default. To disable:</p>
+<pre><code class="language-toml"># In your Cargo.toml or when building
+[dependencies]
+moltis-gateway = { default-features = false, features = ["web-ui", "tls"] }
+</code></pre>
+<p>Or build without the feature:</p>
+<pre><code class="language-bash">cargo build --no-default-features --features web-ui,tls,tailscale,file-watcher
+</code></pre>
+<h3 id="data-storage"><a class="header" href="#data-storage">Data Storage</a></h3>
+<p>Push notification data is stored in <code>push.json</code> in the data directory:</p>
+<ul>
+<li><strong>VAPID keys</strong>: Generated once and reused</li>
+<li><strong>Subscriptions</strong>: List of all registered browser subscriptions</li>
+</ul>
+<p>The VAPID keys are persisted so subscriptions remain valid across restarts.</p>
+<h2 id="mobile-ui-considerations"><a class="header" href="#mobile-ui-considerations">Mobile UI Considerations</a></h2>
+<p>The mobile interface adapts for smaller screens:</p>
+<ul>
+<li><strong>Navigation drawer</strong>: The sidebar becomes a slide-out drawer on mobile</li>
+<li><strong>Sessions panel</strong>: Displayed as a bottom sheet that can be swiped</li>
+<li><strong>Touch targets</strong>: Minimum 44px touch targets for accessibility</li>
+<li><strong>Safe areas</strong>: Proper insets for devices with notches or home indicators</li>
+</ul>
+<h3 id="responsive-breakpoints"><a class="header" href="#responsive-breakpoints">Responsive Breakpoints</a></h3>
+<ul>
+<li><strong>Mobile</strong>: &lt; 768px width (drawer navigation)</li>
+<li><strong>Desktop</strong>: ≥ 768px width (sidebar navigation)</li>
+</ul>
+<h2 id="browser-support"><a class="header" href="#browser-support">Browser Support</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Chrome</th><th>Safari</th><th>Firefox</th><th>Edge</th></tr></thead><tbody>
+<tr><td>PWA Install</td><td>✅</td><td>✅ (iOS)</td><td>❌</td><td>✅</td></tr>
+<tr><td>Push Notifications</td><td>✅</td><td>✅ (iOS 16.4+)</td><td>✅</td><td>✅</td></tr>
+<tr><td>Service Worker</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+<tr><td>Offline Support</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+</tbody></table>
+</div>
+<p>Note: iOS push notifications require iOS 16.4 or later and the app must be installed as a PWA.</p>
+<h2 id="troubleshooting-4"><a class="header" href="#troubleshooting-4">Troubleshooting</a></h2>
+<h3 id="notifications-not-working"><a class="header" href="#notifications-not-working">Notifications Not Working</a></h3>
+<ol>
+<li><strong>Check permissions</strong>: Ensure notifications are allowed in browser/OS settings</li>
+<li><strong>Check subscription</strong>: Go to Settings &gt; Notifications to see if your device is listed</li>
+<li><strong>Check server logs</strong>: Look for <code>push:</code> prefixed log messages for delivery status</li>
+<li><strong>Safari/iOS specific</strong>:
+<ul>
+<li>Must be installed as PWA (Add to Dock/Home Screen)</li>
+<li>iOS requires version 16.4 or later</li>
+<li>The Enable button is disabled until installed as PWA</li>
+</ul>
+</li>
+<li><strong>Behind a proxy</strong>: Ensure your proxy forwards <code>X-Forwarded-For</code> or <code>X-Real-IP</code> headers</li>
+</ol>
+<h3 id="pwa-not-installing"><a class="header" href="#pwa-not-installing">PWA Not Installing</a></h3>
+<ol>
+<li><strong>HTTPS required</strong>: PWAs require a secure connection (or localhost)</li>
+<li><strong>Valid manifest</strong>: Ensure <code>/manifest.json</code> loads correctly</li>
+<li><strong>Service worker</strong>: Check that <code>/sw.js</code> registers without errors</li>
+<li><strong>Clear cache</strong>: Try clearing browser cache and reloading</li>
+</ol>
+<h3 id="service-worker-issues"><a class="header" href="#service-worker-issues">Service Worker Issues</a></h3>
+<p>Clear the service worker registration:</p>
+<ol>
+<li>Open browser DevTools</li>
+<li>Go to Application &gt; Service Workers</li>
+<li>Click “Unregister” on the moltis service worker</li>
+<li>Reload the page</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="security-architecture"><a class="header" href="#security-architecture">Security Architecture</a></h1>
+<p>Moltis is designed with a defense-in-depth security model. This document
+explains the key security features and provides guidance for production
+deployments.</p>
+<h2 id="overview-2"><a class="header" href="#overview-2">Overview</a></h2>
+<p>Moltis runs AI agents that can execute code and interact with external systems.
+This power requires multiple layers of protection:</p>
+<ol>
+<li><strong>Human-in-the-loop approval</strong> for dangerous commands</li>
+<li><strong>Sandbox isolation</strong> for command execution</li>
+<li><strong>Channel authorization</strong> for external integrations</li>
+<li><strong>Rate limiting</strong> to prevent resource abuse</li>
+<li><strong>Scope-based access control</strong> for API authorization</li>
+</ol>
+<h2 id="command-execution-approval"><a class="header" href="#command-execution-approval">Command Execution Approval</a></h2>
+<p>By default, Moltis requires explicit user approval before executing potentially
+dangerous commands. This “human-in-the-loop” design ensures the AI cannot take
+destructive actions without consent.</p>
+<h3 id="how-it-works-2"><a class="header" href="#how-it-works-2">How It Works</a></h3>
+<p>When the agent wants to run a command:</p>
+<ol>
+<li>The command is analyzed against approval policies</li>
+<li>If approval is required, the user sees a prompt in the UI</li>
+<li>The user can approve, deny, or modify the command</li>
+<li>Only approved commands execute</li>
+</ol>
+<h3 id="approval-policies"><a class="header" href="#approval-policies">Approval Policies</a></h3>
+<p>Configure approval behavior in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[tools.exec]
+approval_mode = "always"  # always require approval
+# approval_mode = "smart" # auto-approve safe commands (default)
+# approval_mode = "never" # dangerous: never require approval
+</code></pre>
+<p><strong>Recommendation</strong>: Keep <code>approval_mode = "smart"</code> (the default) for most use
+cases. Only use <code>"never"</code> in fully automated, sandboxed environments.</p>
+<h2 id="sandbox-isolation"><a class="header" href="#sandbox-isolation">Sandbox Isolation</a></h2>
+<p>Commands execute inside isolated containers (Docker or Apple Container) by
+default. This protects your host system from:</p>
+<ul>
+<li>Accidental file deletion or modification</li>
+<li>Malicious code execution</li>
+<li>Resource exhaustion (memory, CPU, disk)</li>
+</ul>
+<p>See <a href="sandbox.html">sandbox.md</a> for backend configuration.</p>
+<h3 id="resource-limits-1"><a class="header" href="#resource-limits-1">Resource Limits</a></h3>
+<pre><code class="language-toml">[tools.exec.sandbox.resource_limits]
+memory_limit = "512M"
+cpu_quota = 1.0
+pids_max = 256
+</code></pre>
+<h3 id="network-isolation"><a class="header" href="#network-isolation">Network Isolation</a></h3>
+<p>Sandbox containers have limited network access by default. Outbound connections
+are allowed but the sandbox cannot bind to host ports.</p>
+<h2 id="channel-authorization"><a class="header" href="#channel-authorization">Channel Authorization</a></h2>
+<p>Channels (Telegram, Slack, etc.) allow external parties to interact with your
+Moltis agent. This requires careful access control.</p>
+<h3 id="sender-allowlisting"><a class="header" href="#sender-allowlisting">Sender Allowlisting</a></h3>
+<p>When a new sender contacts the agent through a channel, they are placed in a
+pending queue. You must explicitly approve or deny each sender before they can
+interact with the agent.</p>
+<pre><code>UI: Settings &gt; Channels &gt; Pending Senders
+</code></pre>
+<h3 id="per-channel-permissions"><a class="header" href="#per-channel-permissions">Per-Channel Permissions</a></h3>
+<p>Each channel can have different permission levels:</p>
+<ul>
+<li><strong>Read-only</strong>: Sender can ask questions, agent responds</li>
+<li><strong>Execute</strong>: Sender can trigger actions (with approval still required)</li>
+<li><strong>Admin</strong>: Full access including configuration changes</li>
+</ul>
+<h3 id="channel-isolation"><a class="header" href="#channel-isolation">Channel Isolation</a></h3>
+<p>Channels run in isolated sessions by default. A malicious message from one
+channel cannot affect another channel’s session or the main UI session.</p>
+<h2 id="cron-job-security"><a class="header" href="#cron-job-security">Cron Job Security</a></h2>
+<p>Scheduled tasks (cron jobs) can run agent turns automatically. Security
+considerations:</p>
+<h3 id="rate-limiting"><a class="header" href="#rate-limiting">Rate Limiting</a></h3>
+<p>To prevent prompt injection attacks from rapidly creating many cron jobs:</p>
+<pre><code class="language-toml">[cron]
+rate_limit_max = 10           # max jobs per window
+rate_limit_window_secs = 60   # window duration (1 minute)
+</code></pre>
+<p>This limits job creation to 10 per minute by default. System jobs (like
+heartbeat) bypass this limit.</p>
+<h3 id="job-notifications"><a class="header" href="#job-notifications">Job Notifications</a></h3>
+<p>When cron jobs are created, updated, or removed, Moltis broadcasts events:</p>
+<ul>
+<li><code>cron.job.created</code> - A new job was created</li>
+<li><code>cron.job.updated</code> - An existing job was modified</li>
+<li><code>cron.job.removed</code> - A job was deleted</li>
+</ul>
+<p>Monitor these events to detect suspicious automated job creation.</p>
+<h3 id="sandbox-for-cron-jobs"><a class="header" href="#sandbox-for-cron-jobs">Sandbox for Cron Jobs</a></h3>
+<p>Cron job execution uses sandbox isolation by default:</p>
+<pre><code class="language-toml"># Per-job configuration
+[cron.job.sandbox]
+enabled = true              # run in sandbox (default)
+# image = "custom:latest"   # optional custom image
+</code></pre>
+<h2 id="identity-protection"><a class="header" href="#identity-protection">Identity Protection</a></h2>
+<p>The agent’s identity (name, personality “soul”) is stored in <code>moltis.toml</code>.
+Modifying identity requires the <code>operator.write</code> scope, not just <code>operator.read</code>.</p>
+<p>This prevents prompt injection attacks from subtly modifying the agent’s
+personality to make it more compliant with malicious requests.</p>
+<h2 id="api-authorization"><a class="header" href="#api-authorization">API Authorization</a></h2>
+<p>The gateway API uses role-based access control with scopes:</p>
+<div class="table-wrapper"><table><thead><tr><th>Scope</th><th>Permissions</th></tr></thead><tbody>
+<tr><td><code>operator.read</code></td><td>View status, list jobs, read history</td></tr>
+<tr><td><code>operator.write</code></td><td>Send messages, create jobs, modify configuration</td></tr>
+<tr><td><code>operator.admin</code></td><td>All permissions (includes all other scopes)</td></tr>
+<tr><td><code>operator.approvals</code></td><td>Handle command approval requests</td></tr>
+<tr><td><code>operator.pairing</code></td><td>Manage device/node pairing</td></tr>
+</tbody></table>
+</div>
+<h3 id="api-keys"><a class="header" href="#api-keys">API Keys</a></h3>
+<p>API keys authenticate external tools and scripts connecting to Moltis. Keys can
+have <strong>full access</strong> (all scopes) or be restricted to specific scopes for
+defense-in-depth.</p>
+<h4 id="creating-api-keys"><a class="header" href="#creating-api-keys">Creating API Keys</a></h4>
+<p><strong>Web UI</strong>: Settings &gt; Security &gt; API Keys</p>
+<ol>
+<li>Enter a label describing the key’s purpose</li>
+<li>Choose “Full access” or select specific scopes</li>
+<li>Click “Generate key”</li>
+<li><strong>Copy the key immediately</strong> — it’s only shown once</li>
+</ol>
+<p><strong>CLI</strong>:</p>
+<pre><code class="language-bash"># Full access key
+moltis auth create-api-key --label "CI pipeline"
+
+# Scoped key (comma-separated scopes)
+moltis auth create-api-key --label "Monitor" --scopes "operator.read"
+moltis auth create-api-key --label "Automation" --scopes "operator.read,operator.write"
+</code></pre>
+<h4 id="using-api-keys"><a class="header" href="#using-api-keys">Using API Keys</a></h4>
+<p>Pass the key in the <code>connect</code> handshake over WebSocket:</p>
+<pre><code class="language-json">{
+  "method": "connect",
+  "params": {
+    "client": { "id": "my-tool", "version": "1.0.0" },
+    "auth": { "api_key": "mk_abc123..." }
+  }
+}
+</code></pre>
+<p>Or use Bearer authentication for REST API calls:</p>
+<pre><code>Authorization: Bearer mk_abc123...
+</code></pre>
+<h4 id="scope-recommendations"><a class="header" href="#scope-recommendations">Scope Recommendations</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Use Case</th><th>Recommended Scopes</th></tr></thead><tbody>
+<tr><td>Read-only monitoring</td><td><code>operator.read</code></td></tr>
+<tr><td>Automated workflows</td><td><code>operator.read</code>, <code>operator.write</code></td></tr>
+<tr><td>Approval handling</td><td><code>operator.read</code>, <code>operator.approvals</code></td></tr>
+<tr><td>Full automation</td><td>Full access (no scope restrictions)</td></tr>
+</tbody></table>
+</div>
+<p><strong>Best practice</strong>: Use the minimum necessary scopes. If a key only needs to
+read status and logs, don’t grant <code>operator.write</code>.</p>
+<h4 id="backward-compatibility"><a class="header" href="#backward-compatibility">Backward Compatibility</a></h4>
+<p>Existing API keys (created before scopes were added) have full access. Newly
+created keys without explicit scopes also have full access.</p>
+<h2 id="network-security"><a class="header" href="#network-security">Network Security</a></h2>
+<h3 id="tls-encryption"><a class="header" href="#tls-encryption">TLS Encryption</a></h3>
+<p>HTTPS is enabled by default with auto-generated certificates:</p>
+<pre><code class="language-toml">[tls]
+enabled = true
+auto_generate = true
+</code></pre>
+<p>For production, use certificates from a trusted CA or configure custom
+certificates.</p>
+<h3 id="origin-validation"><a class="header" href="#origin-validation">Origin Validation</a></h3>
+<p>WebSocket connections validate the <code>Origin</code> header to prevent cross-site
+WebSocket hijacking (CSWSH). Connections from untrusted origins are rejected.</p>
+<h3 id="ssrf-protection"><a class="header" href="#ssrf-protection">SSRF Protection</a></h3>
+<p>The <code>web_fetch</code> tool resolves DNS and blocks requests to private IP ranges
+(loopback, RFC 1918, link-local, CGNAT). This prevents server-side request
+forgery attacks.</p>
+<h2 id="production-recommendations"><a class="header" href="#production-recommendations">Production Recommendations</a></h2>
+<h3 id="1-enable-authentication"><a class="header" href="#1-enable-authentication">1. Enable Authentication</a></h3>
+<p>By default, Moltis requires a password when accessed from non-localhost:</p>
+<pre><code class="language-toml">[auth]
+disabled = false  # keep this false in production
+</code></pre>
+<h3 id="2-use-sandbox-isolation"><a class="header" href="#2-use-sandbox-isolation">2. Use Sandbox Isolation</a></h3>
+<p>Always run with sandbox enabled in production:</p>
+<pre><code class="language-toml">[tools.exec.sandbox]
+enabled = true
+backend = "auto"  # uses strongest available
+</code></pre>
+<h3 id="3-limit-rate-limits"><a class="header" href="#3-limit-rate-limits">3. Limit Rate Limits</a></h3>
+<p>Tighten rate limits for untrusted environments:</p>
+<pre><code class="language-toml">[cron]
+rate_limit_max = 5
+rate_limit_window_secs = 300  # 5 per 5 minutes
+</code></pre>
+<h3 id="4-review-channel-senders"><a class="header" href="#4-review-channel-senders">4. Review Channel Senders</a></h3>
+<p>Regularly audit approved senders and revoke access for unknown parties.</p>
+<h3 id="5-monitor-events"><a class="header" href="#5-monitor-events">5. Monitor Events</a></h3>
+<p>Watch for these suspicious patterns:</p>
+<ul>
+<li>Rapid cron job creation</li>
+<li>Identity modification attempts</li>
+<li>Unusual command patterns in approval requests</li>
+<li>New channel senders from unexpected sources</li>
+</ul>
+<h3 id="6-network-segmentation"><a class="header" href="#6-network-segmentation">6. Network Segmentation</a></h3>
+<p>Run Moltis on a private network or behind a reverse proxy with:</p>
+<ul>
+<li>IP allowlisting</li>
+<li>Rate limiting</li>
+<li>Web Application Firewall (WAF) rules</li>
+</ul>
+<h3 id="7-keep-software-updated"><a class="header" href="#7-keep-software-updated">7. Keep Software Updated</a></h3>
+<p>Subscribe to security advisories and update promptly when vulnerabilities are
+disclosed.</p>
+<h2 id="reporting-security-issues"><a class="header" href="#reporting-security-issues">Reporting Security Issues</a></h2>
+<p>Report security vulnerabilities privately to the maintainers. Do not open
+public issues for security bugs.</p>
+<p>See the repository’s SECURITY.md for contact information.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="running-moltis-in-docker"><a class="header" href="#running-moltis-in-docker">Running Moltis in Docker</a></h1>
+<p>Moltis is available as a multi-architecture Docker image supporting both
+<code>linux/amd64</code> and <code>linux/arm64</code>. The image is published to GitHub Container
+Registry on every release.</p>
+<h2 id="quick-start-1"><a class="header" href="#quick-start-1">Quick Start</a></h2>
+<pre><code class="language-bash">docker run -d \
+  --name moltis \
+  -p 13131:13131 \
+  -v moltis-config:/home/moltis/.config/moltis \
+  -v moltis-data:/home/moltis/.moltis \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/penso/moltis:latest
+</code></pre>
+<p>Open http://localhost:13131 in your browser and configure your LLM provider to start chatting.</p>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="docker.html#admonition-note"></a>
+</div>
+<div>
+<p>When accessing from localhost, no authentication is required. If you access Moltis from a different machine (e.g., over the network), a setup code is printed to the container logs for authentication setup:</p>
+<p>```bash
+docker logs moltis
+```</p>
+</div>
+</div>
+<h2 id="volume-mounts"><a class="header" href="#volume-mounts">Volume Mounts</a></h2>
+<p>Moltis uses two directories that should be persisted:</p>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody>
+<tr><td><code>/home/moltis/.config/moltis</code></td><td>Configuration files: <code>moltis.toml</code>, <code>credentials.json</code>, <code>mcp-servers.json</code></td></tr>
+<tr><td><code>/home/moltis/.moltis</code></td><td>Runtime data: databases, sessions, memory files, logs</td></tr>
+</tbody></table>
+</div>
+<p>You can use named volumes (as shown above) or bind mounts to local directories
+for easier access to configuration files:</p>
+<pre><code class="language-bash">docker run -d \
+  --name moltis \
+  -p 13131:13131 \
+  -v ./config:/home/moltis/.config/moltis \
+  -v ./data:/home/moltis/.moltis \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/penso/moltis:latest
+</code></pre>
+<p>With bind mounts, you can edit <code>config/moltis.toml</code> directly on the host.</p>
+<h2 id="docker-socket-sandbox-execution"><a class="header" href="#docker-socket-sandbox-execution">Docker Socket (Sandbox Execution)</a></h2>
+<p>Moltis runs LLM-generated shell commands inside isolated containers for
+security. When Moltis itself runs in a container, it needs access to the host’s
+container runtime to create these sandbox containers.</p>
+<p><strong>Without the socket mount</strong>, sandbox execution is disabled. The agent will
+still work for chat-only interactions, but any tool that runs shell commands
+will fail.</p>
+<pre><code class="language-bash"># Required for sandbox execution
+-v /var/run/docker.sock:/var/run/docker.sock
+</code></pre>
+<h3 id="security-consideration"><a class="header" href="#security-consideration">Security Consideration</a></h3>
+<p>Mounting the Docker socket gives the container full access to the Docker
+daemon. This is equivalent to root access on the host for practical purposes.
+Only run Moltis containers from trusted sources (official images from
+<code>ghcr.io/penso/moltis</code>).</p>
+<p>If you cannot mount the Docker socket, Moltis will run in “no sandbox” mode —
+commands execute directly inside the Moltis container itself, which provides
+no isolation.</p>
+<h2 id="docker-compose"><a class="header" href="#docker-compose">Docker Compose</a></h2>
+<p>See <a href="../examples/docker-compose.yml"><code>examples/docker-compose.yml</code></a> for a
+complete example:</p>
+<pre><code class="language-yaml">services:
+  moltis:
+    image: ghcr.io/penso/moltis:latest
+    container_name: moltis
+    restart: unless-stopped
+    ports:
+      - "13131:13131"
+    volumes:
+      - ./config:/home/moltis/.config/moltis
+      - ./data:/home/moltis/.moltis
+      - /var/run/docker.sock:/var/run/docker.sock
+</code></pre>
+<p>Start with:</p>
+<pre><code class="language-bash">docker compose up -d
+docker compose logs -f moltis  # watch for startup messages
+</code></pre>
+<h2 id="podman-support"><a class="header" href="#podman-support">Podman Support</a></h2>
+<p>Moltis works with Podman using its Docker-compatible API. Mount the Podman
+socket instead of the Docker socket:</p>
+<pre><code class="language-bash"># Podman rootless
+podman run -d \
+  --name moltis \
+  -p 13131:13131 \
+  -v moltis-config:/home/moltis/.config/moltis \
+  -v moltis-data:/home/moltis/.moltis \
+  -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock \
+  ghcr.io/penso/moltis:latest
+
+# Podman rootful
+podman run -d \
+  --name moltis \
+  -p 13131:13131 \
+  -v moltis-config:/home/moltis/.config/moltis \
+  -v moltis-data:/home/moltis/.moltis \
+  -v /run/podman/podman.sock:/var/run/docker.sock \
+  ghcr.io/penso/moltis:latest
+</code></pre>
+<p>You may need to enable the Podman socket service first:</p>
+<pre><code class="language-bash"># Rootless
+systemctl --user enable --now podman.socket
+
+# Rootful
+sudo systemctl enable --now podman.socket
+</code></pre>
+<h2 id="environment-variables-1"><a class="header" href="#environment-variables-1">Environment Variables</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>MOLTIS_CONFIG_DIR</code></td><td>Override config directory (default: <code>~/.config/moltis</code>)</td></tr>
+<tr><td><code>MOLTIS_DATA_DIR</code></td><td>Override data directory (default: <code>~/.moltis</code>)</td></tr>
+</tbody></table>
+</div>
+<p>Example:</p>
+<pre><code class="language-bash">docker run -d \
+  --name moltis \
+  -p 13131:13131 \
+  -e MOLTIS_CONFIG_DIR=/config \
+  -e MOLTIS_DATA_DIR=/data \
+  -v ./config:/config \
+  -v ./data:/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/penso/moltis:latest
+</code></pre>
+<h2 id="building-locally"><a class="header" href="#building-locally">Building Locally</a></h2>
+<p>To build the Docker image from source:</p>
+<pre><code class="language-bash"># Single architecture (current platform)
+docker build -t moltis:local .
+
+# Multi-architecture (requires buildx)
+docker buildx build --platform linux/amd64,linux/arm64 -t moltis:local .
+</code></pre>
+<h2 id="orbstack"><a class="header" href="#orbstack">OrbStack</a></h2>
+<p>OrbStack on macOS works identically to Docker — use the same socket path
+(<code>/var/run/docker.sock</code>). OrbStack’s lightweight Linux VM provides good
+isolation with lower resource usage than Docker Desktop.</p>
+<h2 id="troubleshooting-5"><a class="header" href="#troubleshooting-5">Troubleshooting</a></h2>
+<h3 id="cannot-connect-to-docker-daemon"><a class="header" href="#cannot-connect-to-docker-daemon">“Cannot connect to Docker daemon”</a></h3>
+<p>The Docker socket is not mounted or the Moltis user doesn’t have permission
+to access it. Verify:</p>
+<pre><code class="language-bash">docker exec moltis ls -la /var/run/docker.sock
+</code></pre>
+<h3 id="setup-code-not-appearing-in-logs-for-network-access"><a class="header" href="#setup-code-not-appearing-in-logs-for-network-access">Setup code not appearing in logs (for network access)</a></h3>
+<p>The setup code only appears when accessing from a non-localhost address. If you’re accessing from the same machine via <code>localhost</code>, no setup code is needed. For network access, wait a few seconds for the gateway to start, then check logs:</p>
+<pre><code class="language-bash">docker logs moltis 2&gt;&amp;1 | grep -i setup
+</code></pre>
+<h3 id="permission-denied-on-bind-mounts"><a class="header" href="#permission-denied-on-bind-mounts">Permission denied on bind mounts</a></h3>
+<p>When using bind mounts, ensure the directories exist and are writable:</p>
+<pre><code class="language-bash">mkdir -p ./config ./data
+chmod 755 ./config ./data
+</code></pre>
+<p>The container runs as user <code>moltis</code> (UID 1000). If you see permission errors,
+you may need to adjust ownership:</p>
+<pre><code class="language-bash">sudo chown -R 1000:1000 ./config ./data
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="streaming-architecture"><a class="header" href="#streaming-architecture">Streaming Architecture</a></h1>
+<p>This document explains how streaming responses work in Moltis, from the LLM
+provider through to the web UI.</p>
+<h2 id="overview-3"><a class="header" href="#overview-3">Overview</a></h2>
+<p>Moltis supports real-time token streaming for LLM responses, providing a much
+better user experience than waiting for the complete response. Streaming works
+even when tools are enabled, allowing users to see text as it arrives while
+tool calls are accumulated and executed.</p>
+<h2 id="components"><a class="header" href="#components">Components</a></h2>
+<h3 id="1-streamevent-enum-cratesagentssrcmodelrs"><a class="header" href="#1-streamevent-enum-cratesagentssrcmodelrs">1. StreamEvent Enum (<code>crates/agents/src/model.rs</code>)</a></h3>
+<p>The <code>StreamEvent</code> enum defines all events that can occur during a streaming
+LLM response:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub enum StreamEvent {
+    /// Text content delta - a chunk of text from the LLM.
+    Delta(String),
+
+    /// A tool call has started (for providers with native tool support).
+    ToolCallStart { id: String, name: String, index: usize },
+
+    /// Streaming delta for tool call arguments (JSON fragment).
+    ToolCallArgumentsDelta { index: usize, delta: String },
+
+    /// A tool call's arguments are complete.
+    ToolCallComplete { index: usize },
+
+    /// Stream completed successfully with token usage.
+    Done(Usage),
+
+    /// An error occurred.
+    Error(String),
+}
+<span class="boring">}</span></code></pre></pre>
+<h3 id="2-llmprovider-trait-cratesagentssrcmodelrs"><a class="header" href="#2-llmprovider-trait-cratesagentssrcmodelrs">2. LlmProvider Trait (<code>crates/agents/src/model.rs</code>)</a></h3>
+<p>The <code>LlmProvider</code> trait defines two streaming methods:</p>
+<ul>
+<li><code>stream()</code> - Basic streaming without tool support</li>
+<li><code>stream_with_tools()</code> - Streaming with tool schemas passed to the API</li>
+</ul>
+<p>Providers that support streaming with tools (like Anthropic) override
+<code>stream_with_tools()</code>. Others fall back to <code>stream()</code> which ignores the tools
+parameter.</p>
+<h3 id="3-anthropic-provider-cratesagentssrcprovidersanthropicrs"><a class="header" href="#3-anthropic-provider-cratesagentssrcprovidersanthropicrs">3. Anthropic Provider (<code>crates/agents/src/providers/anthropic.rs</code>)</a></h3>
+<p>The Anthropic provider implements streaming by:</p>
+<ol>
+<li>Making a POST request to <code>/v1/messages</code> with <code>"stream": true</code></li>
+<li>Reading Server-Sent Events (SSE) from the response</li>
+<li>Parsing events and yielding appropriate <code>StreamEvent</code> variants:</li>
+</ol>
+<div class="table-wrapper"><table><thead><tr><th>SSE Event Type</th><th>StreamEvent</th></tr></thead><tbody>
+<tr><td><code>content_block_start</code> (text)</td><td>(none, just tracking)</td></tr>
+<tr><td><code>content_block_start</code> (tool_use)</td><td><code>ToolCallStart</code></td></tr>
+<tr><td><code>content_block_delta</code> (text_delta)</td><td><code>Delta</code></td></tr>
+<tr><td><code>content_block_delta</code> (input_json_delta)</td><td><code>ToolCallArgumentsDelta</code></td></tr>
+<tr><td><code>content_block_stop</code></td><td><code>ToolCallComplete</code> (for tool blocks)</td></tr>
+<tr><td><code>message_delta</code></td><td>(usage tracking)</td></tr>
+<tr><td><code>message_stop</code></td><td><code>Done</code></td></tr>
+<tr><td><code>error</code></td><td><code>Error</code></td></tr>
+</tbody></table>
+</div>
+<h3 id="4-agent-runner-cratesagentssrcrunnerrs"><a class="header" href="#4-agent-runner-cratesagentssrcrunnerrs">4. Agent Runner (<code>crates/agents/src/runner.rs</code>)</a></h3>
+<p>The <code>run_agent_loop_streaming()</code> function orchestrates the streaming agent
+loop:</p>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│                    Agent Loop                           │
+│                                                         │
+│  1. Call provider.stream_with_tools()                   │
+│                                                         │
+│  2. While stream has events:                            │
+│     ├─ Delta(text) → emit RunnerEvent::TextDelta        │
+│     ├─ ToolCallStart → accumulate tool call             │
+│     ├─ ToolCallArgumentsDelta → accumulate args         │
+│     ├─ ToolCallComplete → finalize args                 │
+│     ├─ Done → record usage                              │
+│     └─ Error → return error                             │
+│                                                         │
+│  3. If no tool calls → return accumulated text          │
+│                                                         │
+│  4. Execute tool calls concurrently                     │
+│     ├─ Emit ToolCallStart events                        │
+│     ├─ Run tools in parallel                            │
+│     └─ Emit ToolCallEnd events                          │
+│                                                         │
+│  5. Append tool results to messages                     │
+│                                                         │
+│  6. Loop back to step 1                                 │
+└─────────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="5-gateway-cratesgatewaysrcchatrs"><a class="header" href="#5-gateway-cratesgatewaysrcchatrs">5. Gateway (<code>crates/gateway/src/chat.rs</code>)</a></h3>
+<p>The gateway’s <code>run_with_tools()</code> function:</p>
+<ol>
+<li>Sets up an event callback that broadcasts <code>RunnerEvent</code>s via WebSocket</li>
+<li>Calls <code>run_agent_loop_streaming()</code></li>
+<li>Broadcasts events to connected clients as JSON frames</li>
+</ol>
+<p>Event types broadcast to the UI:</p>
+<div class="table-wrapper"><table><thead><tr><th>RunnerEvent</th><th>WebSocket State</th></tr></thead><tbody>
+<tr><td><code>Thinking</code></td><td><code>thinking</code></td></tr>
+<tr><td><code>ThinkingDone</code></td><td><code>thinking_done</code></td></tr>
+<tr><td><code>TextDelta(text)</code></td><td><code>delta</code> with <code>text</code> field</td></tr>
+<tr><td><code>ToolCallStart</code></td><td><code>tool_call_start</code></td></tr>
+<tr><td><code>ToolCallEnd</code></td><td><code>tool_call_end</code></td></tr>
+<tr><td><code>Iteration(n)</code></td><td><code>iteration</code></td></tr>
+</tbody></table>
+</div>
+<h3 id="6-frontend-cratesgatewaysrcassetsjs"><a class="header" href="#6-frontend-cratesgatewaysrcassetsjs">6. Frontend (<code>crates/gateway/src/assets/js/</code>)</a></h3>
+<p>The JavaScript frontend handles streaming via WebSocket:</p>
+<ol>
+<li><strong>websocket.js</strong> - Receives WebSocket frames and dispatches to handlers</li>
+<li><strong>events.js</strong> - Event bus for distributing events to components</li>
+<li><strong>state.js</strong> - Manages streaming state (<code>streamText</code>, <code>streamEl</code>)</li>
+</ol>
+<p>When a <code>delta</code> event arrives:</p>
+<pre><code class="language-javascript">function handleChatDelta(p, isActive, isChatPage) {
+  if (!(p.text &amp;&amp; isActive &amp;&amp; isChatPage)) return;
+  removeThinking();
+  if (!S.streamEl) {
+    S.setStreamText("");
+    S.setStreamEl(document.createElement("div"));
+    S.streamEl.className = "msg assistant";
+    S.chatMsgBox.appendChild(S.streamEl);
+  }
+  S.setStreamText(S.streamText + p.text);
+  setSafeMarkdownHtml(S.streamEl, S.streamText);
+  S.chatMsgBox.scrollTop = S.chatMsgBox.scrollHeight;
+}
+</code></pre>
+<h2 id="data-flow"><a class="header" href="#data-flow">Data Flow</a></h2>
+<pre><code>┌──────────────┐     SSE      ┌──────────────┐   StreamEvent   ┌──────────────┐
+│   Anthropic  │─────────────▶│   Provider   │────────────────▶│    Runner    │
+│     API      │              │              │                 │              │
+└──────────────┘              └──────────────┘                 └──────┬───────┘
+                                                                      │
+                                                               RunnerEvent
+                                                                      │
+                                                                      ▼
+┌──────────────┐   WebSocket  ┌──────────────┐    Callback     ┌──────────────┐
+│   Browser    │◀─────────────│   Gateway    │◀────────────────│   Callback   │
+│              │              │              │                 │   (on_event) │
+└──────────────┘              └──────────────┘                 └──────────────┘
+</code></pre>
+<h2 id="adding-streaming-to-new-providers"><a class="header" href="#adding-streaming-to-new-providers">Adding Streaming to New Providers</a></h2>
+<p>To add streaming support for a new LLM provider:</p>
+<ol>
+<li>Implement the <code>stream()</code> method (basic streaming)</li>
+<li>If the provider supports tools in streaming mode, override
+<code>stream_with_tools()</code></li>
+<li>Parse the provider’s streaming format and yield appropriate <code>StreamEvent</code>
+variants</li>
+<li>Handle errors gracefully with <code>StreamEvent::Error</code></li>
+<li>Always emit <code>StreamEvent::Done</code> with usage statistics when complete</li>
+</ol>
+<p>Example skeleton:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>fn stream_with_tools(
+    &amp;self,
+    messages: Vec&lt;serde_json::Value&gt;,
+    tools: Vec&lt;serde_json::Value&gt;,
+) -&gt; Pin&lt;Box&lt;dyn Stream&lt;Item = StreamEvent&gt; + Send + '_&gt;&gt; {
+    Box::pin(async_stream::stream! {
+        // Make streaming request to provider API
+        let resp = self.client.post(...)
+            .json(&amp;body)
+            .send()
+            .await?;
+
+        // Read SSE or streaming response
+        let mut byte_stream = resp.bytes_stream();
+
+        while let Some(chunk) = byte_stream.next().await {
+            // Parse chunk and yield events
+            match parse_event(&amp;chunk) {
+                TextDelta(text) =&gt; yield StreamEvent::Delta(text),
+                ToolStart { id, name, idx } =&gt; {
+                    yield StreamEvent::ToolCallStart { id, name, index: idx }
+                }
+                // ... handle other event types
+            }
+        }
+
+        yield StreamEvent::Done(usage);
+    })
+}
+<span class="boring">}</span></code></pre></pre>
+<h2 id="performance-considerations"><a class="header" href="#performance-considerations">Performance Considerations</a></h2>
+<ul>
+<li><strong>Unbounded channels</strong>: WebSocket send channels are unbounded, so slow
+clients can accumulate messages in memory</li>
+<li><strong>Markdown re-rendering</strong>: The frontend re-renders full markdown on each
+delta, which is O(n) work per delta. For very long responses, this can
+cause UI lag</li>
+<li><strong>Concurrent tool execution</strong>: Multiple tool calls are executed in parallel
+using <code>futures::join_all()</code>, improving throughput when the LLM requests
+several tools at once</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="sqlite-database-migrations"><a class="header" href="#sqlite-database-migrations">SQLite Database Migrations</a></h1>
+<p>Moltis uses <a href="https://github.com/launchbadge/sqlx">sqlx</a> for database access and its
+built-in migration system for schema management. Each crate owns its migrations,
+keeping schema definitions close to the code that uses them.</p>
+<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<p>Each crate that uses SQLite has its own <code>migrations/</code> directory and exposes a
+<code>run_migrations()</code> function. The gateway orchestrates running all migrations at
+startup in the correct dependency order.</p>
+<pre><code>crates/
+├── projects/
+│   ├── migrations/
+│   │   └── 20240205100000_init.sql   # projects table
+│   └── src/lib.rs                     # run_migrations()
+├── sessions/
+│   ├── migrations/
+│   │   └── 20240205100001_init.sql   # sessions, channel_sessions
+│   └── src/lib.rs                     # run_migrations()
+├── cron/
+│   ├── migrations/
+│   │   └── 20240205100002_init.sql   # cron_jobs, cron_runs
+│   └── src/lib.rs                     # run_migrations()
+├── gateway/
+│   ├── migrations/
+│   │   └── 20240205100003_init.sql   # auth, message_log, channels
+│   └── src/server.rs                  # orchestrates moltis.db migrations
+└── memory/
+    ├── migrations/
+    │   └── 20240205100004_init.sql   # files, chunks, embedding_cache, FTS
+    └── src/lib.rs                     # run_migrations() (separate memory.db)
+</code></pre>
+<h2 id="how-it-works-3"><a class="header" href="#how-it-works-3">How It Works</a></h2>
+<h3 id="migration-ownership"><a class="header" href="#migration-ownership">Migration Ownership</a></h3>
+<p>Each crate is autonomous and owns its schema:</p>
+<div class="table-wrapper"><table><thead><tr><th>Crate</th><th>Database</th><th>Tables</th><th>Migration File</th></tr></thead><tbody>
+<tr><td><code>moltis-projects</code></td><td><code>moltis.db</code></td><td><code>projects</code></td><td><code>20240205100000_init.sql</code></td></tr>
+<tr><td><code>moltis-sessions</code></td><td><code>moltis.db</code></td><td><code>sessions</code>, <code>channel_sessions</code></td><td><code>20240205100001_init.sql</code></td></tr>
+<tr><td><code>moltis-cron</code></td><td><code>moltis.db</code></td><td><code>cron_jobs</code>, <code>cron_runs</code></td><td><code>20240205100002_init.sql</code></td></tr>
+<tr><td><code>moltis-gateway</code></td><td><code>moltis.db</code></td><td><code>auth_*</code>, <code>passkeys</code>, <code>api_keys</code>, <code>env_variables</code>, <code>message_log</code>, <code>channels</code></td><td><code>20240205100003_init.sql</code></td></tr>
+<tr><td><code>moltis-memory</code></td><td><code>memory.db</code></td><td><code>files</code>, <code>chunks</code>, <code>embedding_cache</code>, <code>chunks_fts</code></td><td><code>20240205100004_init.sql</code></td></tr>
+</tbody></table>
+</div>
+<h3 id="startup-sequence"><a class="header" href="#startup-sequence">Startup Sequence</a></h3>
+<p>The gateway runs migrations in dependency order:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// server.rs
+moltis_projects::run_migrations(&amp;db_pool).await?;   // 1. projects first
+moltis_sessions::run_migrations(&amp;db_pool).await?;   // 2. sessions (FK → projects)
+moltis_cron::run_migrations(&amp;db_pool).await?;       // 3. cron (independent)
+sqlx::migrate!("./migrations").run(&amp;db_pool).await?; // 4. gateway tables
+<span class="boring">}</span></code></pre></pre>
+<p>Sessions depends on projects due to a foreign key (<code>sessions.project_id</code> references
+<code>projects.id</code>), so projects must migrate first.</p>
+<h3 id="version-tracking"><a class="header" href="#version-tracking">Version Tracking</a></h3>
+<p>sqlx tracks applied migrations in the <code>_sqlx_migrations</code> table:</p>
+<pre><code class="language-sql">SELECT version, description, installed_on, success FROM _sqlx_migrations;
+</code></pre>
+<p>Migrations are identified by their timestamp prefix (e.g., <code>20240205100000</code>), which
+must be globally unique across all crates.</p>
+<h2 id="database-files"><a class="header" href="#database-files">Database Files</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Database</th><th>Location</th><th>Crates</th></tr></thead><tbody>
+<tr><td><code>moltis.db</code></td><td><code>~/.moltis/moltis.db</code></td><td>projects, sessions, cron, gateway</td></tr>
+<tr><td><code>memory.db</code></td><td><code>~/.moltis/memory.db</code></td><td>memory (separate, managed internally)</td></tr>
+</tbody></table>
+</div>
+<h2 id="adding-new-migrations"><a class="header" href="#adding-new-migrations">Adding New Migrations</a></h2>
+<h3 id="adding-a-column-to-an-existing-table"><a class="header" href="#adding-a-column-to-an-existing-table">Adding a Column to an Existing Table</a></h3>
+<ol>
+<li>Create a new migration file in the owning crate:</li>
+</ol>
+<pre><code class="language-bash"># Example: adding tags to sessions
+touch crates/sessions/migrations/20240301120000_add_tags.sql
+</code></pre>
+<ol start="2">
+<li>Write the migration SQL:</li>
+</ol>
+<pre><code class="language-sql">-- 20240301120000_add_tags.sql
+ALTER TABLE sessions ADD COLUMN tags TEXT;
+CREATE INDEX IF NOT EXISTS idx_sessions_tags ON sessions(tags);
+</code></pre>
+<ol start="3">
+<li>Rebuild to embed the migration:</li>
+</ol>
+<pre><code class="language-bash">cargo build
+</code></pre>
+<h3 id="adding-a-new-table-to-an-existing-crate"><a class="header" href="#adding-a-new-table-to-an-existing-crate">Adding a New Table to an Existing Crate</a></h3>
+<ol>
+<li>Create the migration file with a new timestamp:</li>
+</ol>
+<pre><code class="language-bash">touch crates/sessions/migrations/20240302100000_session_bookmarks.sql
+</code></pre>
+<ol start="2">
+<li>Write the CREATE TABLE statement:</li>
+</ol>
+<pre><code class="language-sql">-- 20240302100000_session_bookmarks.sql
+CREATE TABLE IF NOT EXISTS session_bookmarks (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+</code></pre>
+<h3 id="adding-tables-to-a-new-crate"><a class="header" href="#adding-tables-to-a-new-crate">Adding Tables to a New Crate</a></h3>
+<ol>
+<li>Create the migrations directory:</li>
+</ol>
+<pre><code class="language-bash">mkdir -p crates/new-feature/migrations
+</code></pre>
+<ol start="2">
+<li>Create the migration file with a globally unique timestamp:</li>
+</ol>
+<pre><code class="language-bash">touch crates/new-feature/migrations/20240401100000_init.sql
+</code></pre>
+<ol start="3">
+<li>Add <code>run_migrations()</code> to the crate’s <code>lib.rs</code>:</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub async fn run_migrations(pool: &amp;sqlx::SqlitePool) -&gt; anyhow::Result&lt;()&gt; {
+    sqlx::migrate!("./migrations").run(pool).await?;
+    Ok(())
+}
+<span class="boring">}</span></code></pre></pre>
+<ol start="4">
+<li>Call it from <code>server.rs</code> in the appropriate order:</li>
+</ol>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>moltis_new_feature::run_migrations(&amp;db_pool).await?;
+<span class="boring">}</span></code></pre></pre>
+<h2 id="timestamp-convention"><a class="header" href="#timestamp-convention">Timestamp Convention</a></h2>
+<p>Use <code>YYYYMMDDHHMMSS</code> format for migration filenames:</p>
+<ul>
+<li><code>YYYY</code> - 4-digit year</li>
+<li><code>MM</code> - 2-digit month</li>
+<li><code>DD</code> - 2-digit day</li>
+<li><code>HH</code> - 2-digit hour (24h)</li>
+<li><code>MM</code> - 2-digit minute</li>
+<li><code>SS</code> - 2-digit second</li>
+</ul>
+<p>This ensures global uniqueness across crates. When adding migrations, use the
+current timestamp to avoid collisions.</p>
+<h2 id="sqlite-limitations"><a class="header" href="#sqlite-limitations">SQLite Limitations</a></h2>
+<h3 id="alter-table"><a class="header" href="#alter-table">ALTER TABLE</a></h3>
+<p>SQLite has limited <code>ALTER TABLE</code> support:</p>
+<ul>
+<li><strong>ADD COLUMN</strong>: Supported ✓</li>
+<li><strong>DROP COLUMN</strong>: SQLite 3.35+ only</li>
+<li><strong>Rename column</strong>: Requires table recreation</li>
+<li><strong>Change column type</strong>: Requires table recreation</li>
+</ul>
+<p>For complex schema changes, use the table recreation pattern:</p>
+<pre><code class="language-sql">-- Create new table with desired schema
+CREATE TABLE sessions_new (
+    -- new schema
+);
+
+-- Copy data (map old columns to new)
+INSERT INTO sessions_new SELECT ... FROM sessions;
+
+-- Swap tables
+DROP TABLE sessions;
+ALTER TABLE sessions_new RENAME TO sessions;
+
+-- Recreate indexes
+CREATE INDEX idx_sessions_created_at ON sessions(created_at);
+</code></pre>
+<h3 id="foreign-keys"><a class="header" href="#foreign-keys">Foreign Keys</a></h3>
+<p>SQLite foreign keys are checked at insert/update time, not migration time. Ensure
+migrations run in dependency order (parent table first).</p>
+<h2 id="testing"><a class="header" href="#testing">Testing</a></h2>
+<p>Unit tests use in-memory databases with the crate’s <code>init()</code> method:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[tokio::test]
+async fn test_session_operations() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+    // Create schema for tests (init() retained for this purpose)
+    SqliteSessionMetadata::init(&amp;pool).await.unwrap();
+
+    let meta = SqliteSessionMetadata::new(pool);
+    // ... test code
+}
+<span class="boring">}</span></code></pre></pre>
+<p>The <code>init()</code> methods are retained (marked <code>#[doc(hidden)]</code>) specifically for tests.
+In production, migrations handle schema creation.</p>
+<h2 id="troubleshooting-6"><a class="header" href="#troubleshooting-6">Troubleshooting</a></h2>
+<h3 id="failed-to-run-migrations"><a class="header" href="#failed-to-run-migrations">“failed to run migrations”</a></h3>
+<ol>
+<li>Check file permissions on <code>~/.moltis/</code></li>
+<li>Ensure the database file isn’t locked by another process</li>
+<li>Check for syntax errors in migration SQL files</li>
+</ol>
+<h3 id="migration-order-issues"><a class="header" href="#migration-order-issues">Migration Order Issues</a></h3>
+<p>If you see foreign key errors, verify the migration order in <code>server.rs</code>. Parent
+tables must be created before child tables with FK references.</p>
+<h3 id="checking-migration-status"><a class="header" href="#checking-migration-status">Checking Migration Status</a></h3>
+<pre><code class="language-bash">sqlite3 ~/.moltis/moltis.db "SELECT version, description, success FROM _sqlx_migrations ORDER BY version"
+</code></pre>
+<h3 id="resetting-migrations-development-only"><a class="header" href="#resetting-migrations-development-only">Resetting Migrations (Development Only)</a></h3>
+<pre><code class="language-bash"># Backup first!
+rm ~/.moltis/moltis.db
+cargo run  # Creates fresh database with all migrations
+</code></pre>
+<h2 id="best-practices-1"><a class="header" href="#best-practices-1">Best Practices</a></h2>
+<h3 id="do"><a class="header" href="#do">DO</a></h3>
+<ul>
+<li>Use timestamp-based version numbers for global uniqueness</li>
+<li>Keep each crate’s migrations in its own directory</li>
+<li>Use <code>IF NOT EXISTS</code> for idempotent initial migrations</li>
+<li>Test migrations on a copy of production data before deploying</li>
+<li>Keep migrations small and focused</li>
+</ul>
+<h3 id="dont"><a class="header" href="#dont">DON’T</a></h3>
+<ul>
+<li>Modify existing migration files after deployment</li>
+<li>Reuse timestamps across crates</li>
+<li>Put multiple crates’ tables in one migration file</li>
+<li>Skip the dependency order in <code>server.rs</code></li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="metrics-and-tracing"><a class="header" href="#metrics-and-tracing">Metrics and Tracing</a></h1>
+<p>Moltis includes comprehensive observability support through Prometheus metrics and
+tracing integration. This document explains how to enable, configure, and use
+these features.</p>
+<h2 id="overview-4"><a class="header" href="#overview-4">Overview</a></h2>
+<p>The metrics system is built on the <a href="https://docs.rs/metrics"><code>metrics</code></a> crate
+facade, which provides a unified interface similar to the <code>log</code> crate. When the
+<code>prometheus</code> feature is enabled, metrics are exported in Prometheus text format
+for scraping by Grafana, Prometheus, or other monitoring tools.</p>
+<p>All metrics are <strong>feature-gated</strong> — they add zero overhead when disabled.</p>
+<h2 id="feature-flags"><a class="header" href="#feature-flags">Feature Flags</a></h2>
+<p>Metrics are controlled by two feature flags:</p>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Description</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>metrics</code></td><td>Enables metrics collection and the <code>/api/metrics</code> JSON API</td><td>Enabled</td></tr>
+<tr><td><code>prometheus</code></td><td>Enables the <code>/metrics</code> Prometheus endpoint (requires <code>metrics</code>)</td><td>Enabled</td></tr>
+</tbody></table>
+</div>
+<h3 id="compile-time-configuration"><a class="header" href="#compile-time-configuration">Compile-Time Configuration</a></h3>
+<pre><code class="language-toml"># Enable only metrics collection (no Prometheus endpoint)
+moltis-gateway = { version = "0.1", features = ["metrics"] }
+
+# Enable metrics with Prometheus export (default)
+moltis-gateway = { version = "0.1", features = ["metrics", "prometheus"] }
+
+# Enable metrics for specific crates
+moltis-agents = { version = "0.1", features = ["metrics"] }
+moltis-cron = { version = "0.1", features = ["metrics"] }
+</code></pre>
+<p>To build without metrics entirely:</p>
+<pre><code class="language-bash">cargo build --release --no-default-features --features "file-watcher,tailscale,tls,web-ui"
+</code></pre>
+<h2 id="prometheus-endpoint"><a class="header" href="#prometheus-endpoint">Prometheus Endpoint</a></h2>
+<p>When the <code>prometheus</code> feature is enabled, the gateway exposes a <code>/metrics</code> endpoint:</p>
+<pre><code>GET http://localhost:18789/metrics
+</code></pre>
+<p>This endpoint is <strong>unauthenticated</strong> to allow Prometheus scrapers to access it.
+It returns metrics in Prometheus text format:</p>
+<pre><code># HELP moltis_http_requests_total Total number of HTTP requests handled
+# TYPE moltis_http_requests_total counter
+moltis_http_requests_total{method="GET",status="200",endpoint="/api/chat"} 42
+
+# HELP moltis_llm_completion_duration_seconds Duration of LLM completion requests
+# TYPE moltis_llm_completion_duration_seconds histogram
+moltis_llm_completion_duration_seconds_bucket{provider="anthropic",model="claude-3-opus",le="1.0"} 5
+</code></pre>
+<h3 id="grafana-integration"><a class="header" href="#grafana-integration">Grafana Integration</a></h3>
+<p>To scrape metrics with Prometheus and visualize in Grafana:</p>
+<ol>
+<li>Add moltis to your <code>prometheus.yml</code>:</li>
+</ol>
+<pre><code class="language-yaml">scrape_configs:
+  - job_name: 'moltis'
+    static_configs:
+      - targets: ['localhost:18789']
+    metrics_path: /metrics
+    scrape_interval: 15s
+</code></pre>
+<ol start="2">
+<li>Import or create Grafana dashboards using the <code>moltis_*</code> metrics.</li>
+</ol>
+<h2 id="json-api-endpoints"><a class="header" href="#json-api-endpoints">JSON API Endpoints</a></h2>
+<p>For the web UI dashboard and programmatic access, authenticated JSON endpoints
+are available:</p>
+<div class="table-wrapper"><table><thead><tr><th>Endpoint</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>GET /api/metrics</code></td><td>Full metrics snapshot with aggregates and per-provider breakdown</td></tr>
+<tr><td><code>GET /api/metrics/summary</code></td><td>Lightweight counts for navigation badges</td></tr>
+<tr><td><code>GET /api/metrics/history</code></td><td>Time-series data points for charts (last hour, 10s intervals)</td></tr>
+</tbody></table>
+</div>
+<h3 id="history-endpoint"><a class="header" href="#history-endpoint">History Endpoint</a></h3>
+<p>The <code>/api/metrics/history</code> endpoint returns historical metrics data for rendering
+time-series charts:</p>
+<pre><code class="language-json">{
+  "enabled": true,
+  "interval_seconds": 10,
+  "max_points": 60480,
+  "points": [
+    {
+      "timestamp": 1706832000000,
+      "llm_completions": 42,
+      "llm_input_tokens": 15000,
+      "llm_output_tokens": 8000,
+      "http_requests": 150,
+      "ws_active": 3,
+      "tool_executions": 25,
+      "mcp_calls": 12,
+      "active_sessions": 2
+    }
+  ]
+}
+</code></pre>
+<h2 id="metrics-persistence"><a class="header" href="#metrics-persistence">Metrics Persistence</a></h2>
+<p>Metrics history is persisted to SQLite, so historical data survives server
+restarts. The database is stored at <code>~/.moltis/metrics.db</code> (or the configured
+data directory).</p>
+<p>Key features:</p>
+<ul>
+<li><strong>7-day retention</strong>: History is kept for 7 days (60,480 data points at
+10-second intervals)</li>
+<li><strong>Automatic cleanup</strong>: Old data is automatically removed hourly</li>
+<li><strong>Startup recovery</strong>: History is loaded from the database when the server
+starts</li>
+</ul>
+<p>The storage backend uses a trait-based design (<code>MetricsStore</code>), allowing
+alternative implementations (e.g., TimescaleDB) for larger deployments.</p>
+<h3 id="storage-architecture"><a class="header" href="#storage-architecture">Storage Architecture</a></h3>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// The MetricsStore trait defines the storage interface
+#[async_trait]
+pub trait MetricsStore: Send + Sync {
+    async fn save_point(&amp;self, point: &amp;MetricsHistoryPoint) -&gt; Result&lt;()&gt;;
+    async fn load_history(&amp;self, since: u64, limit: usize) -&gt; Result&lt;Vec&lt;MetricsHistoryPoint&gt;&gt;;
+    async fn cleanup_before(&amp;self, before: u64) -&gt; Result&lt;u64&gt;;
+    async fn latest_point(&amp;self) -&gt; Result&lt;Option&lt;MetricsHistoryPoint&gt;&gt;;
+}
+<span class="boring">}</span></code></pre></pre>
+<p>The default <code>SqliteMetricsStore</code> implementation stores data in a single table
+with an index on the timestamp column for efficient range queries.</p>
+<h2 id="web-ui-dashboard"><a class="header" href="#web-ui-dashboard">Web UI Dashboard</a></h2>
+<p>The gateway includes a built-in metrics dashboard at <code>/monitoring</code> in the web UI.
+This page displays:</p>
+<p><strong>Overview Tab:</strong></p>
+<ul>
+<li>System metrics (uptime, connected clients, active sessions)</li>
+<li>LLM usage (completions, tokens, cache statistics)</li>
+<li>Tool execution statistics</li>
+<li>MCP server status</li>
+<li>Provider breakdown table</li>
+<li>Prometheus endpoint (with copy button)</li>
+</ul>
+<p><strong>Charts Tab:</strong></p>
+<ul>
+<li>Token usage over time (input/output)</li>
+<li>HTTP requests and LLM completions</li>
+<li>WebSocket connections and active sessions</li>
+<li>Tool executions and MCP calls</li>
+</ul>
+<p>The dashboard uses <a href="https://github.com/leeoniya/uPlot">uPlot</a> for lightweight,
+high-performance time-series charts. Data updates every 10 seconds for current
+metrics and every 30 seconds for history.</p>
+<h2 id="available-metrics"><a class="header" href="#available-metrics">Available Metrics</a></h2>
+<h3 id="http-metrics"><a class="header" href="#http-metrics">HTTP Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_http_requests_total</code></td><td>Counter</td><td>method, status, endpoint</td><td>Total HTTP requests</td></tr>
+<tr><td><code>moltis_http_request_duration_seconds</code></td><td>Histogram</td><td>method, status, endpoint</td><td>Request latency</td></tr>
+<tr><td><code>moltis_http_requests_in_flight</code></td><td>Gauge</td><td>—</td><td>Currently processing requests</td></tr>
+</tbody></table>
+</div>
+<h3 id="llmagent-metrics"><a class="header" href="#llmagent-metrics">LLM/Agent Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_llm_completions_total</code></td><td>Counter</td><td>provider, model</td><td>Total completions requested</td></tr>
+<tr><td><code>moltis_llm_completion_duration_seconds</code></td><td>Histogram</td><td>provider, model</td><td>Completion latency</td></tr>
+<tr><td><code>moltis_llm_input_tokens_total</code></td><td>Counter</td><td>provider, model</td><td>Input tokens processed</td></tr>
+<tr><td><code>moltis_llm_output_tokens_total</code></td><td>Counter</td><td>provider, model</td><td>Output tokens generated</td></tr>
+<tr><td><code>moltis_llm_completion_errors_total</code></td><td>Counter</td><td>provider, model, error_type</td><td>Completion failures</td></tr>
+<tr><td><code>moltis_llm_time_to_first_token_seconds</code></td><td>Histogram</td><td>provider, model</td><td>Streaming TTFT</td></tr>
+</tbody></table>
+</div>
+<h4 id="provider-aliases"><a class="header" href="#provider-aliases">Provider Aliases</a></h4>
+<p>When you have multiple instances of the same provider type (e.g., separate API keys
+for work and personal use), you can use the <code>alias</code> configuration option to
+differentiate them in metrics:</p>
+<pre><code class="language-toml">[providers.anthropic]
+api_key = "sk-work-..."
+alias = "anthropic-work"
+
+# Note: You would need separate config sections for multiple instances
+# of the same provider. This is a placeholder for future functionality.
+</code></pre>
+<p>The alias appears in the <code>provider</code> label of all LLM metrics:</p>
+<pre><code>moltis_llm_input_tokens_total{provider="anthropic-work", model="claude-3-opus"} 5000
+moltis_llm_input_tokens_total{provider="anthropic-personal", model="claude-3-opus"} 3000
+</code></pre>
+<p>This allows you to:</p>
+<ul>
+<li>Track token usage separately for billing purposes</li>
+<li>Create separate Grafana dashboards per provider instance</li>
+<li>Monitor rate limits and quotas independently</li>
+</ul>
+<h3 id="mcp-model-context-protocol-metrics"><a class="header" href="#mcp-model-context-protocol-metrics">MCP (Model Context Protocol) Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_mcp_tool_calls_total</code></td><td>Counter</td><td>server, tool</td><td>Tool invocations</td></tr>
+<tr><td><code>moltis_mcp_tool_call_duration_seconds</code></td><td>Histogram</td><td>server, tool</td><td>Tool call latency</td></tr>
+<tr><td><code>moltis_mcp_tool_call_errors_total</code></td><td>Counter</td><td>server, tool, error_type</td><td>Tool call failures</td></tr>
+<tr><td><code>moltis_mcp_servers_connected</code></td><td>Gauge</td><td>—</td><td>Active MCP server connections</td></tr>
+</tbody></table>
+</div>
+<h3 id="tool-execution-metrics"><a class="header" href="#tool-execution-metrics">Tool Execution Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_tool_executions_total</code></td><td>Counter</td><td>tool</td><td>Tool executions</td></tr>
+<tr><td><code>moltis_tool_execution_duration_seconds</code></td><td>Histogram</td><td>tool</td><td>Execution time</td></tr>
+<tr><td><code>moltis_sandbox_command_executions_total</code></td><td>Counter</td><td>—</td><td>Sandbox commands run</td></tr>
+</tbody></table>
+</div>
+<h3 id="session-metrics"><a class="header" href="#session-metrics">Session Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_sessions_created_total</code></td><td>Counter</td><td>—</td><td>Sessions created</td></tr>
+<tr><td><code>moltis_sessions_active</code></td><td>Gauge</td><td>—</td><td>Currently active sessions</td></tr>
+<tr><td><code>moltis_session_messages_total</code></td><td>Counter</td><td>role</td><td>Messages by role</td></tr>
+</tbody></table>
+</div>
+<h3 id="cron-job-metrics"><a class="header" href="#cron-job-metrics">Cron Job Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_cron_jobs_scheduled</code></td><td>Gauge</td><td>—</td><td>Number of scheduled jobs</td></tr>
+<tr><td><code>moltis_cron_executions_total</code></td><td>Counter</td><td>—</td><td>Job executions</td></tr>
+<tr><td><code>moltis_cron_execution_duration_seconds</code></td><td>Histogram</td><td>—</td><td>Job duration</td></tr>
+<tr><td><code>moltis_cron_errors_total</code></td><td>Counter</td><td>—</td><td>Failed jobs</td></tr>
+<tr><td><code>moltis_cron_stuck_jobs_cleared_total</code></td><td>Counter</td><td>—</td><td>Jobs exceeding 2h timeout</td></tr>
+<tr><td><code>moltis_cron_input_tokens_total</code></td><td>Counter</td><td>—</td><td>Input tokens from cron runs</td></tr>
+<tr><td><code>moltis_cron_output_tokens_total</code></td><td>Counter</td><td>—</td><td>Output tokens from cron runs</td></tr>
+</tbody></table>
+</div>
+<h3 id="memorysearch-metrics"><a class="header" href="#memorysearch-metrics">Memory/Search Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_memory_searches_total</code></td><td>Counter</td><td>search_type</td><td>Searches performed</td></tr>
+<tr><td><code>moltis_memory_search_duration_seconds</code></td><td>Histogram</td><td>search_type</td><td>Search latency</td></tr>
+<tr><td><code>moltis_memory_embeddings_generated_total</code></td><td>Counter</td><td>provider</td><td>Embeddings created</td></tr>
+</tbody></table>
+</div>
+<h3 id="channel-metrics"><a class="header" href="#channel-metrics">Channel Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_channels_active</code></td><td>Gauge</td><td>—</td><td>Loaded channel plugins</td></tr>
+<tr><td><code>moltis_channel_messages_received_total</code></td><td>Counter</td><td>channel</td><td>Inbound messages</td></tr>
+<tr><td><code>moltis_channel_messages_sent_total</code></td><td>Counter</td><td>channel</td><td>Outbound messages</td></tr>
+</tbody></table>
+</div>
+<h3 id="telegram-specific-metrics"><a class="header" href="#telegram-specific-metrics">Telegram-Specific Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_telegram_messages_received_total</code></td><td>Counter</td><td>—</td><td>Messages from Telegram</td></tr>
+<tr><td><code>moltis_telegram_access_control_denials_total</code></td><td>Counter</td><td>—</td><td>Access denied events</td></tr>
+<tr><td><code>moltis_telegram_polling_duration_seconds</code></td><td>Histogram</td><td>—</td><td>Message handling time</td></tr>
+</tbody></table>
+</div>
+<h3 id="oauth-metrics"><a class="header" href="#oauth-metrics">OAuth Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_oauth_flow_starts_total</code></td><td>Counter</td><td>—</td><td>OAuth flows initiated</td></tr>
+<tr><td><code>moltis_oauth_flow_completions_total</code></td><td>Counter</td><td>—</td><td>Successful completions</td></tr>
+<tr><td><code>moltis_oauth_token_refresh_total</code></td><td>Counter</td><td>—</td><td>Token refreshes</td></tr>
+<tr><td><code>moltis_oauth_token_refresh_failures_total</code></td><td>Counter</td><td>—</td><td>Refresh failures</td></tr>
+</tbody></table>
+</div>
+<h3 id="skills-metrics"><a class="header" href="#skills-metrics">Skills Metrics</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_skills_installation_attempts_total</code></td><td>Counter</td><td>—</td><td>Installation attempts</td></tr>
+<tr><td><code>moltis_skills_installation_duration_seconds</code></td><td>Histogram</td><td>—</td><td>Installation time</td></tr>
+<tr><td><code>moltis_skills_git_clone_total</code></td><td>Counter</td><td>—</td><td>Successful git clones</td></tr>
+<tr><td><code>moltis_skills_git_clone_fallback_total</code></td><td>Counter</td><td>—</td><td>Fallbacks to HTTP tarball</td></tr>
+</tbody></table>
+</div>
+<h2 id="tracing-integration"><a class="header" href="#tracing-integration">Tracing Integration</a></h2>
+<p>The <code>moltis-metrics</code> crate includes optional tracing integration via the
+<code>tracing</code> feature. This allows span context to propagate to metric labels.</p>
+<h3 id="enabling-tracing"><a class="header" href="#enabling-tracing">Enabling Tracing</a></h3>
+<pre><code class="language-toml">moltis-metrics = { version = "0.1", features = ["prometheus", "tracing"] }
+</code></pre>
+<h3 id="initialization"><a class="header" href="#initialization">Initialization</a></h3>
+<pre><pre class="playground"><code class="language-rust">use moltis_metrics::tracing_integration::init_tracing;
+
+fn main() {
+    // Initialize tracing with metrics context propagation
+    init_tracing();
+
+    // Now spans will add labels to metrics
+}</code></pre></pre>
+<h3 id="how-it-works-4"><a class="header" href="#how-it-works-4">How It Works</a></h3>
+<p>When tracing is enabled, span fields are automatically added as metric labels:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tracing::instrument;
+
+#[instrument(fields(operation = "fetch_user", component = "api"))]
+async fn fetch_user(id: u64) -&gt; User {
+    // Metrics recorded here will include:
+    // - operation="fetch_user"
+    // - component="api"
+    counter!("api_calls_total").increment(1);
+}
+<span class="boring">}</span></code></pre></pre>
+<h3 id="span-labels"><a class="header" href="#span-labels">Span Labels</a></h3>
+<p>The following span fields are propagated to metrics:</p>
+<div class="table-wrapper"><table><thead><tr><th>Field</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>operation</code></td><td>The operation being performed</td></tr>
+<tr><td><code>component</code></td><td>The component/module name</td></tr>
+<tr><td><code>span.name</code></td><td>The span’s target/name</td></tr>
+</tbody></table>
+</div>
+<h2 id="adding-custom-metrics"><a class="header" href="#adding-custom-metrics">Adding Custom Metrics</a></h2>
+<h3 id="in-your-code"><a class="header" href="#in-your-code">In Your Code</a></h3>
+<p>Use the <code>metrics</code> macros re-exported from <code>moltis-metrics</code>:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use moltis_metrics::{counter, gauge, histogram, labels};
+
+// Simple counter
+counter!("my_custom_requests_total").increment(1);
+
+// Counter with labels
+counter!(
+    "my_custom_requests_total",
+    labels::ENDPOINT =&gt; "/api/users",
+    labels::METHOD =&gt; "GET"
+).increment(1);
+
+// Gauge (current value)
+gauge!("my_queue_size").set(42.0);
+
+// Histogram (distribution)
+histogram!("my_operation_duration_seconds").record(0.123);
+<span class="boring">}</span></code></pre></pre>
+<h3 id="feature-gating"><a class="header" href="#feature-gating">Feature-Gating</a></h3>
+<p>Always gate metrics code to avoid overhead when disabled:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[cfg(feature = "metrics")]
+use moltis_metrics::{counter, histogram};
+
+pub async fn my_function() {
+    #[cfg(feature = "metrics")]
+    let start = std::time::Instant::now();
+
+    // ... do work ...
+
+    #[cfg(feature = "metrics")]
+    {
+        counter!("my_operations_total").increment(1);
+        histogram!("my_operation_duration_seconds")
+            .record(start.elapsed().as_secs_f64());
+    }
+}
+<span class="boring">}</span></code></pre></pre>
+<h3 id="adding-new-metric-definitions"><a class="header" href="#adding-new-metric-definitions">Adding New Metric Definitions</a></h3>
+<p>For consistency, add metric name constants to <code>crates/metrics/src/definitions.rs</code>:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>/// My feature metrics
+pub mod my_feature {
+    /// Total operations performed
+    pub const OPERATIONS_TOTAL: &amp;str = "moltis_my_feature_operations_total";
+    /// Operation duration in seconds
+    pub const OPERATION_DURATION_SECONDS: &amp;str = "moltis_my_feature_operation_duration_seconds";
+}
+<span class="boring">}</span></code></pre></pre>
+<p>Then use them:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use moltis_metrics::{counter, my_feature};
+
+counter!(my_feature::OPERATIONS_TOTAL).increment(1);
+<span class="boring">}</span></code></pre></pre>
+<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
+<p>Metrics configuration in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[metrics]
+enabled = true              # Enable metrics collection (default: true)
+prometheus_endpoint = true  # Expose /metrics endpoint (default: true)
+labels = { env = "prod" }   # Add custom labels to all metrics
+</code></pre>
+<p>Environment variables:</p>
+<ul>
+<li><code>RUST_LOG=moltis_metrics=debug</code> — Enable debug logging for metrics initialization</li>
+</ul>
+<h2 id="best-practices-2"><a class="header" href="#best-practices-2">Best Practices</a></h2>
+<ol>
+<li><strong>Use consistent naming</strong>: Follow the pattern <code>moltis_&lt;subsystem&gt;_&lt;metric&gt;_&lt;unit&gt;</code></li>
+<li><strong>Add units to names</strong>: <code>_total</code> for counters, <code>_seconds</code> for durations, <code>_bytes</code> for sizes</li>
+<li><strong>Keep cardinality low</strong>: Avoid high-cardinality labels (like user IDs or request IDs)</li>
+<li><strong>Feature-gate everything</strong>: Use <code>#[cfg(feature = "metrics")]</code> to ensure zero overhead when disabled</li>
+<li><strong>Use predefined buckets</strong>: The <code>buckets</code> module has standard histogram buckets for common metric types</li>
+</ol>
+<h2 id="troubleshooting-7"><a class="header" href="#troubleshooting-7">Troubleshooting</a></h2>
+<h3 id="metrics-not-appearing"><a class="header" href="#metrics-not-appearing">Metrics not appearing</a></h3>
+<ol>
+<li>Verify the <code>metrics</code> feature is enabled at compile time</li>
+<li>Check that the metrics recorder is initialized (happens automatically in gateway)</li>
+<li>Ensure you’re hitting the correct <code>/metrics</code> endpoint</li>
+<li>Check <code>moltis.toml</code> has <code>[metrics] enabled = true</code></li>
+</ol>
+<h3 id="prometheus-endpoint-not-available"><a class="header" href="#prometheus-endpoint-not-available">Prometheus endpoint not available</a></h3>
+<ol>
+<li>Ensure the <code>prometheus</code> feature is enabled (it’s separate from <code>metrics</code>)</li>
+<li>Check your build: <code>cargo build --features prometheus</code></li>
+</ol>
+<h3 id="high-memory-usage"><a class="header" href="#high-memory-usage">High memory usage</a></h3>
+<ul>
+<li>Check for high-cardinality labels (many unique label combinations)</li>
+<li>Consider reducing histogram bucket counts</li>
+</ul>
+<h3 id="missing-labels"><a class="header" href="#missing-labels">Missing labels</a></h3>
+<ul>
+<li>Ensure labels are passed consistently across all metric recordings</li>
+<li>Check that tracing spans include the expected fields</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="tool-registry"><a class="header" href="#tool-registry">Tool Registry</a></h1>
+<p>The tool registry manages all tools available to the agent during a
+conversation. It tracks where each tool comes from and supports filtering by
+source.</p>
+<h2 id="tool-sources"><a class="header" href="#tool-sources">Tool Sources</a></h2>
+<p>Every registered tool has a <code>ToolSource</code> that identifies its origin:</p>
+<ul>
+<li><strong><code>Builtin</code></strong> — tools shipped with the binary (exec, web_fetch, etc.)</li>
+<li><strong><code>Mcp { server }</code></strong> — tools provided by an MCP server, tagged with the
+server name</li>
+</ul>
+<p>This replaces the previous convention of identifying MCP tools by their
+<code>mcp__</code> name prefix, providing type-safe filtering instead of string matching.</p>
+<h2 id="registration"><a class="header" href="#registration">Registration</a></h2>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Built-in tool
+registry.register(Box::new(MyTool::new()));
+
+// MCP tool — tagged with server name
+registry.register_mcp(Box::new(adapter), "github".to_string());
+<span class="boring">}</span></code></pre></pre>
+<h2 id="filtering"><a class="header" href="#filtering">Filtering</a></h2>
+<p>When MCP tools are disabled for a session, the registry can produce a filtered
+copy:</p>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Type-safe: filters by ToolSource::Mcp variant
+let no_mcp = registry.clone_without_mcp();
+
+// Remove all MCP tools in-place (used during sync)
+let removed_count = registry.unregister_mcp();
+<span class="boring">}</span></code></pre></pre>
+<h2 id="schema-output"><a class="header" href="#schema-output">Schema Output</a></h2>
+<p><code>list_schemas()</code> includes source metadata in every tool schema:</p>
+<pre><code class="language-json">{
+  "name": "exec",
+  "description": "Execute a command",
+  "parameters": { ... },
+  "source": "builtin"
+}
+</code></pre>
+<pre><code class="language-json">{
+  "name": "mcp__github__search",
+  "description": "Search GitHub",
+  "parameters": { ... },
+  "source": "mcp",
+  "mcpServer": "github"
+}
+</code></pre>
+<p>The <code>source</code> and <code>mcpServer</code> fields are available to the UI for rendering
+tools grouped by origin.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>

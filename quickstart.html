@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - Moltis Documentation</title>
+        <title>Quickstart - Moltis Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -149,7 +149,7 @@
                         <a href="https://github.com/moltis-org/moltis" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/index.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/quickstart.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -183,133 +183,116 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="moltis"><a class="header" href="#moltis">Moltis</a></h1>
-<div style="text-align: center; margin: 2em 0;">
-<strong style="font-size: 1.2em;">A personal AI gateway written in Rust.<br>One binary, no runtime, no npm.</strong>
-</div>
-<p>Moltis compiles your entire AI gateway — web UI, LLM providers, tools, and all assets — into a single self-contained executable. There’s no Node.js to babysit, no <code>node_modules</code> to sync, no V8 garbage collector introducing latency spikes.</p>
-<pre><code class="language-bash"># Quick install (macOS / Linux)
-curl -fsSL https://www.moltis.org/install.sh | sh
+                        <h1 id="quickstart"><a class="header" href="#quickstart">Quickstart</a></h1>
+<p>Get Moltis running in under 5 minutes.</p>
+<h2 id="1-install"><a class="header" href="#1-install">1. Install</a></h2>
+<pre><code class="language-bash">curl -fsSL https://www.moltis.org/install.sh | sh
 </code></pre>
-<h2 id="why-moltis"><a class="header" href="#why-moltis">Why Moltis?</a></h2>
-<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Moltis</th><th>Other Solutions</th></tr></thead><tbody>
-<tr><td><strong>Deployment</strong></td><td>Single binary</td><td>Node.js + dependencies</td></tr>
-<tr><td><strong>Memory Safety</strong></td><td>Rust ownership</td><td>Garbage collection</td></tr>
-<tr><td><strong>Secret Handling</strong></td><td>Zeroed on drop</td><td>“Eventually collected”</td></tr>
-<tr><td><strong>Sandbox</strong></td><td>Docker + Apple Container</td><td>Docker only</td></tr>
-<tr><td><strong>Startup</strong></td><td>Milliseconds</td><td>Seconds</td></tr>
+<p>Or via Homebrew:</p>
+<pre><code class="language-bash">brew install moltis-org/tap/moltis
+</code></pre>
+<h2 id="2-start"><a class="header" href="#2-start">2. Start</a></h2>
+<pre><code class="language-bash">moltis
+</code></pre>
+<p>You’ll see output like:</p>
+<pre><code>🚀 Moltis gateway starting...
+🌐 Open http://localhost:13131 in your browser
+</code></pre>
+<h2 id="3-configure-a-provider"><a class="header" href="#3-configure-a-provider">3. Configure a Provider</a></h2>
+<p>You need an LLM API key to chat. The easiest options:</p>
+<h3 id="option-a-anthropic-recommended"><a class="header" href="#option-a-anthropic-recommended">Option A: Anthropic (Recommended)</a></h3>
+<ol>
+<li>Get an API key from <a href="https://console.anthropic.com">console.anthropic.com</a></li>
+<li>In Moltis, go to <strong>Settings</strong> → <strong>Providers</strong></li>
+<li>Click <strong>Anthropic</strong> → Enter your API key → <strong>Save</strong></li>
+</ol>
+<h3 id="option-b-openai"><a class="header" href="#option-b-openai">Option B: OpenAI</a></h3>
+<ol>
+<li>Get an API key from <a href="https://platform.openai.com">platform.openai.com</a></li>
+<li>In Moltis, go to <strong>Settings</strong> → <strong>Providers</strong></li>
+<li>Click <strong>OpenAI</strong> → Enter your API key → <strong>Save</strong></li>
+</ol>
+<h3 id="option-c-local-model-free"><a class="header" href="#option-c-local-model-free">Option C: Local Model (Free)</a></h3>
+<ol>
+<li>Install <a href="https://ollama.ai">Ollama</a>: <code>curl -fsSL https://ollama.ai/install.sh | sh</code></li>
+<li>Pull a model: <code>ollama pull llama3.2</code></li>
+<li>In Moltis, configure Ollama in <strong>Settings</strong> → <strong>Providers</strong></li>
+</ol>
+<h2 id="4-chat"><a class="header" href="#4-chat">4. Chat!</a></h2>
+<p>Go to the <strong>Chat</strong> tab and start a conversation:</p>
+<pre><code>You: Write a Python function to check if a number is prime
+
+Agent: Here's a Python function to check if a number is prime:
+
+def is_prime(n):
+    if n &lt; 2:
+        return False
+    for i in range(2, int(n ** 0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+</code></pre>
+<h2 id="whats-next"><a class="header" href="#whats-next">What’s Next?</a></h2>
+<h3 id="enable-tool-use"><a class="header" href="#enable-tool-use">Enable Tool Use</a></h3>
+<p>Moltis can execute code, browse the web, and more. Tools are enabled by default with sandbox protection.</p>
+<p>Try:</p>
+<pre><code>You: Create a hello.py file that prints "Hello, World!" and run it
+</code></pre>
+<h3 id="connect-telegram"><a class="header" href="#connect-telegram">Connect Telegram</a></h3>
+<p>Chat with your agent from anywhere:</p>
+<ol>
+<li>Create a bot via <a href="https://t.me/BotFather">@BotFather</a></li>
+<li>Copy the bot token</li>
+<li>In Moltis: <strong>Settings</strong> → <strong>Telegram</strong> → Enter token → <strong>Save</strong></li>
+<li>Message your bot!</li>
+</ol>
+<h3 id="add-mcp-servers"><a class="header" href="#add-mcp-servers">Add MCP Servers</a></h3>
+<p>Extend capabilities with <a href="mcp.html">MCP servers</a>:</p>
+<pre><code class="language-toml"># In moltis.toml
+[[mcp.servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "ghp_..." }
+</code></pre>
+<h3 id="set-up-memory"><a class="header" href="#set-up-memory">Set Up Memory</a></h3>
+<p>Enable long-term memory for context across sessions:</p>
+<pre><code class="language-toml"># In moltis.toml
+[memory]
+enabled = true
+</code></pre>
+<p>Add knowledge by placing Markdown files in <code>~/.moltis/memory/</code>.</p>
+<h2 id="useful-commands"><a class="header" href="#useful-commands">Useful Commands</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Command</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>/new</code></td><td>Start a new session</td></tr>
+<tr><td><code>/model &lt;name&gt;</code></td><td>Switch models</td></tr>
+<tr><td><code>/clear</code></td><td>Clear chat history</td></tr>
+<tr><td><code>/help</code></td><td>Show available commands</td></tr>
 </tbody></table>
 </div>
-<h2 id="key-features"><a class="header" href="#key-features">Key Features</a></h2>
-<ul>
-<li><strong>30+ LLM Providers</strong> — Anthropic, OpenAI, Google, Mistral, local models, and more</li>
-<li><strong>Streaming-First</strong> — Responses appear as tokens arrive, not after completion</li>
-<li><strong>Sandboxed Execution</strong> — Commands run in isolated containers (Docker or Apple Container)</li>
-<li><strong>MCP Support</strong> — Connect to Model Context Protocol servers for extended capabilities</li>
-<li><strong>Multi-Channel</strong> — Web UI, Telegram, API access with synchronized responses</li>
-<li><strong>Long-Term Memory</strong> — Embeddings-powered knowledge base with hybrid search</li>
-<li><strong>Hook System</strong> — Observe, modify, or block actions at any lifecycle point</li>
-<li><strong>Compile-Time Safety</strong> — Misconfigurations caught by <code>cargo check</code>, not runtime crashes</li>
-</ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
-<pre><code class="language-bash"># Install
-curl -fsSL https://www.moltis.org/install.sh | sh
-
-# Run
-moltis
-</code></pre>
-<p>On first launch:</p>
-<ol>
-<li>Open the URL shown in your browser (e.g., <code>http://localhost:13131</code>)</li>
-<li>Add your LLM API key</li>
-<li>Start chatting!</li>
-</ol>
-<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
-<div class="admonition-title">
-<div id="admonition-note-title">
-<p>Note</p>
+<h2 id="file-locations"><a class="header" href="#file-locations">File Locations</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Path</th><th>Contents</th></tr></thead><tbody>
+<tr><td><code>~/.config/moltis/moltis.toml</code></td><td>Configuration</td></tr>
+<tr><td><code>~/.config/moltis/provider_keys.json</code></td><td>API keys</td></tr>
+<tr><td><code>~/.moltis/</code></td><td>Data (sessions, memory, logs)</td></tr>
+</tbody></table>
 </div>
-<a class="admonition-anchor-link" href="#admonition-note"></a>
-</div>
-<div>
-<p>Authentication is only required when accessing Moltis from a non-localhost address. On localhost, you can start using it immediately.</p>
-</div>
-</div>
-<p>→ <a href="quickstart.html">Full Quickstart Guide</a></p>
-<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
-<pre><code>┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│   Web UI    │  │  Telegram   │  │     API     │
-└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       │                │                │
-       └────────────────┴────────────────┘
-                        │
-                        ▼
-        ┌───────────────────────────────┐
-        │       Moltis Gateway          │
-        │   ┌─────────┐ ┌───────────┐   │
-        │   │  Agent  │ │   Tools   │   │
-        │   │  Loop   │◄┤  Registry │   │
-        │   └────┬────┘ └───────────┘   │
-        │        │                      │
-        │   ┌────▼────────────────┐     │
-        │   │  Provider Registry  │     │
-        │   │ Claude · GPT · Gemini │   │
-        │   └─────────────────────┘     │
-        └───────────────────────────────┘
-                        │
-                ┌───────▼───────┐
-                │    Sandbox    │
-                │ Docker/Apple  │
-                └───────────────┘
-</code></pre>
-<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
-<h3 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h3>
+<h2 id="getting-help"><a class="header" href="#getting-help">Getting Help</a></h2>
 <ul>
-<li><strong><a href="quickstart.html">Quickstart</a></strong> — Up and running in 5 minutes</li>
-<li><strong><a href="installation.html">Installation</a></strong> — All installation methods</li>
-<li><strong><a href="configuration.html">Configuration</a></strong> — <code>moltis.toml</code> reference</li>
+<li><strong>Documentation</strong>: <a href="https://docs.moltis.org">docs.moltis.org</a></li>
+<li><strong>GitHub Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">github.com/moltis-org/moltis/issues</a></li>
+<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">github.com/moltis-org/moltis/discussions</a></li>
 </ul>
-<h3 id="features"><a class="header" href="#features">Features</a></h3>
-<ul>
-<li><strong><a href="providers.html">Providers</a></strong> — Configure LLM providers</li>
-<li><strong><a href="mcp.html">MCP Servers</a></strong> — Extend with Model Context Protocol</li>
-<li><strong><a href="hooks.html">Hooks</a></strong> — Lifecycle hooks for customization</li>
-<li><strong><a href="local-llm.html">Local LLMs</a></strong> — Run models on your machine</li>
-</ul>
-<h3 id="deployment"><a class="header" href="#deployment">Deployment</a></h3>
-<ul>
-<li><strong><a href="docker.html">Docker</a></strong> — Container deployment</li>
-</ul>
-<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
-<ul>
-<li><strong><a href="streaming.html">Streaming</a></strong> — How real-time streaming works</li>
-<li><strong><a href="metrics-and-tracing.html">Metrics &amp; Tracing</a></strong> — Observability</li>
-</ul>
-<h2 id="security"><a class="header" href="#security">Security</a></h2>
-<p>Moltis applies defense in depth:</p>
-<ul>
-<li><strong>Authentication</strong> — Password or passkey (WebAuthn) required for non-localhost access</li>
-<li><strong>SSRF Protection</strong> — Blocks requests to internal networks</li>
-<li><strong>Secret Handling</strong> — <code>secrecy::Secret</code> zeroes memory on drop</li>
-<li><strong>Sandboxed Execution</strong> — Commands never run on the host</li>
-<li><strong>Origin Validation</strong> — Prevents Cross-Site WebSocket Hijacking</li>
-<li><strong>No Unsafe Code</strong> — <code>unsafe</code> is denied workspace-wide</li>
-</ul>
-<h2 id="community"><a class="header" href="#community">Community</a></h2>
-<ul>
-<li><strong>GitHub</strong>: <a href="https://github.com/moltis-org/moltis">github.com/moltis-org/moltis</a></li>
-<li><strong>Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">Report bugs</a></li>
-<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">Ask questions</a></li>
-</ul>
-<h2 id="license"><a class="header" href="#license">License</a></h2>
-<p>MIT — Free for personal and commercial use.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="index.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
 
-                            <a rel="next prefetch" href="quickstart.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -319,8 +302,11 @@ moltis
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="index.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
 
-                    <a rel="next prefetch" href="quickstart.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

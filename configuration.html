@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - Moltis Documentation</title>
+        <title>Configuration - Moltis Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -149,7 +149,7 @@
                         <a href="https://github.com/moltis-org/moltis" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/index.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/configuration.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -183,133 +183,218 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="moltis"><a class="header" href="#moltis">Moltis</a></h1>
-<div style="text-align: center; margin: 2em 0;">
-<strong style="font-size: 1.2em;">A personal AI gateway written in Rust.<br>One binary, no runtime, no npm.</strong>
-</div>
-<p>Moltis compiles your entire AI gateway — web UI, LLM providers, tools, and all assets — into a single self-contained executable. There’s no Node.js to babysit, no <code>node_modules</code> to sync, no V8 garbage collector introducing latency spikes.</p>
-<pre><code class="language-bash"># Quick install (macOS / Linux)
-curl -fsSL https://www.moltis.org/install.sh | sh
-</code></pre>
-<h2 id="why-moltis"><a class="header" href="#why-moltis">Why Moltis?</a></h2>
-<div class="table-wrapper"><table><thead><tr><th>Feature</th><th>Moltis</th><th>Other Solutions</th></tr></thead><tbody>
-<tr><td><strong>Deployment</strong></td><td>Single binary</td><td>Node.js + dependencies</td></tr>
-<tr><td><strong>Memory Safety</strong></td><td>Rust ownership</td><td>Garbage collection</td></tr>
-<tr><td><strong>Secret Handling</strong></td><td>Zeroed on drop</td><td>“Eventually collected”</td></tr>
-<tr><td><strong>Sandbox</strong></td><td>Docker + Apple Container</td><td>Docker only</td></tr>
-<tr><td><strong>Startup</strong></td><td>Milliseconds</td><td>Seconds</td></tr>
+                        <h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
+<p>Moltis is configured through <code>moltis.toml</code>, located in <code>~/.config/moltis/</code> by default.</p>
+<p>On first run, a complete configuration file is generated with sensible defaults. You can edit it to customize behavior.</p>
+<h2 id="configuration-file-location"><a class="header" href="#configuration-file-location">Configuration File Location</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Platform</th><th>Default Path</th></tr></thead><tbody>
+<tr><td>macOS/Linux</td><td><code>~/.config/moltis/moltis.toml</code></td></tr>
+<tr><td>Custom</td><td>Set via <code>--config-dir</code> or <code>MOLTIS_CONFIG_DIR</code></td></tr>
 </tbody></table>
 </div>
-<h2 id="key-features"><a class="header" href="#key-features">Key Features</a></h2>
-<ul>
-<li><strong>30+ LLM Providers</strong> — Anthropic, OpenAI, Google, Mistral, local models, and more</li>
-<li><strong>Streaming-First</strong> — Responses appear as tokens arrive, not after completion</li>
-<li><strong>Sandboxed Execution</strong> — Commands run in isolated containers (Docker or Apple Container)</li>
-<li><strong>MCP Support</strong> — Connect to Model Context Protocol servers for extended capabilities</li>
-<li><strong>Multi-Channel</strong> — Web UI, Telegram, API access with synchronized responses</li>
-<li><strong>Long-Term Memory</strong> — Embeddings-powered knowledge base with hybrid search</li>
-<li><strong>Hook System</strong> — Observe, modify, or block actions at any lifecycle point</li>
-<li><strong>Compile-Time Safety</strong> — Misconfigurations caught by <code>cargo check</code>, not runtime crashes</li>
-</ul>
-<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
-<pre><code class="language-bash"># Install
-curl -fsSL https://www.moltis.org/install.sh | sh
+<h2 id="basic-settings"><a class="header" href="#basic-settings">Basic Settings</a></h2>
+<pre><code class="language-toml">[gateway]
+port = 13131                    # HTTP/WebSocket port
+host = "0.0.0.0"               # Listen address
 
-# Run
-moltis
+[agent]
+name = "Moltis"                 # Agent display name
+model = "claude-sonnet-4-20250514"  # Default model
+timeout = 600                   # Agent run timeout (seconds)
+max_iterations = 25             # Max tool call iterations per run
 </code></pre>
-<p>On first launch:</p>
-<ol>
-<li>Open the URL shown in your browser (e.g., <code>http://localhost:13131</code>)</li>
-<li>Add your LLM API key</li>
-<li>Start chatting!</li>
-</ol>
-<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<h2 id="llm-providers"><a class="header" href="#llm-providers">LLM Providers</a></h2>
+<p>Provider API keys are stored separately in <code>~/.config/moltis/provider_keys.json</code> for security. Configure them through the web UI or directly in the JSON file.</p>
+<pre><code class="language-toml">[providers]
+default = "anthropic"           # Default provider
+
+[providers.anthropic]
+enabled = true
+models = [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+    "claude-3-5-haiku-20241022",
+]
+
+[providers.openai]
+enabled = true
+models = [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o1-preview",
+]
+</code></pre>
+<p>See <a href="providers.html">Providers</a> for detailed provider configuration.</p>
+<h2 id="sandbox-configuration"><a class="header" href="#sandbox-configuration">Sandbox Configuration</a></h2>
+<p>Commands run inside isolated containers for security:</p>
+<pre><code class="language-toml">[tools.exec.sandbox]
+enabled = true
+backend = "docker"              # "docker" or "apple" (macOS 15+)
+base_image = "ubuntu:25.10"
+
+# Packages installed in the sandbox image
+packages = [
+    "curl",
+    "git",
+    "jq",
+    "python3",
+    "python3-pip",
+    "nodejs",
+    "npm",
+]
+</code></pre>
+<div id="admonition-info" class="admonition admonish-info" role="note" aria-labelledby="admonition-info-title">
 <div class="admonition-title">
-<div id="admonition-note-title">
-<p>Note</p>
+<div id="admonition-info-title">
+<p>Info</p>
 </div>
-<a class="admonition-anchor-link" href="#admonition-note"></a>
+<a class="admonition-anchor-link" href="#admonition-info"></a>
 </div>
 <div>
-<p>Authentication is only required when accessing Moltis from a non-localhost address. On localhost, you can start using it immediately.</p>
+<p>When you modify the packages list and restart, Moltis automatically rebuilds the sandbox image with a new tag.</p>
 </div>
 </div>
-<p>→ <a href="quickstart.html">Full Quickstart Guide</a></p>
-<h2 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h2>
-<pre><code>┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│   Web UI    │  │  Telegram   │  │     API     │
-└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
-       │                │                │
-       └────────────────┴────────────────┘
-                        │
-                        ▼
-        ┌───────────────────────────────┐
-        │       Moltis Gateway          │
-        │   ┌─────────┐ ┌───────────┐   │
-        │   │  Agent  │ │   Tools   │   │
-        │   │  Loop   │◄┤  Registry │   │
-        │   └────┬────┘ └───────────┘   │
-        │        │                      │
-        │   ┌────▼────────────────┐     │
-        │   │  Provider Registry  │     │
-        │   │ Claude · GPT · Gemini │   │
-        │   └─────────────────────┘     │
-        └───────────────────────────────┘
-                        │
-                ┌───────▼───────┐
-                │    Sandbox    │
-                │ Docker/Apple  │
-                └───────────────┘
+<h2 id="memory-system"><a class="header" href="#memory-system">Memory System</a></h2>
+<p>Long-term memory uses embeddings for semantic search:</p>
+<pre><code class="language-toml">[memory]
+enabled = true
+embedding_model = "text-embedding-3-small"  # OpenAI embedding model
+chunk_size = 512                # Characters per chunk
+chunk_overlap = 50              # Overlap between chunks
+
+# Directories to watch for memory files
+watch_dirs = [
+    "~/.moltis/memory",
+]
 </code></pre>
-<h2 id="documentation"><a class="header" href="#documentation">Documentation</a></h2>
-<h3 id="getting-started"><a class="header" href="#getting-started">Getting Started</a></h3>
-<ul>
-<li><strong><a href="quickstart.html">Quickstart</a></strong> — Up and running in 5 minutes</li>
-<li><strong><a href="installation.html">Installation</a></strong> — All installation methods</li>
-<li><strong><a href="configuration.html">Configuration</a></strong> — <code>moltis.toml</code> reference</li>
-</ul>
-<h3 id="features"><a class="header" href="#features">Features</a></h3>
-<ul>
-<li><strong><a href="providers.html">Providers</a></strong> — Configure LLM providers</li>
-<li><strong><a href="mcp.html">MCP Servers</a></strong> — Extend with Model Context Protocol</li>
-<li><strong><a href="hooks.html">Hooks</a></strong> — Lifecycle hooks for customization</li>
-<li><strong><a href="local-llm.html">Local LLMs</a></strong> — Run models on your machine</li>
-</ul>
-<h3 id="deployment"><a class="header" href="#deployment">Deployment</a></h3>
-<ul>
-<li><strong><a href="docker.html">Docker</a></strong> — Container deployment</li>
-</ul>
-<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
-<ul>
-<li><strong><a href="streaming.html">Streaming</a></strong> — How real-time streaming works</li>
-<li><strong><a href="metrics-and-tracing.html">Metrics &amp; Tracing</a></strong> — Observability</li>
-</ul>
-<h2 id="security"><a class="header" href="#security">Security</a></h2>
-<p>Moltis applies defense in depth:</p>
-<ul>
-<li><strong>Authentication</strong> — Password or passkey (WebAuthn) required for non-localhost access</li>
-<li><strong>SSRF Protection</strong> — Blocks requests to internal networks</li>
-<li><strong>Secret Handling</strong> — <code>secrecy::Secret</code> zeroes memory on drop</li>
-<li><strong>Sandboxed Execution</strong> — Commands never run on the host</li>
-<li><strong>Origin Validation</strong> — Prevents Cross-Site WebSocket Hijacking</li>
-<li><strong>No Unsafe Code</strong> — <code>unsafe</code> is denied workspace-wide</li>
-</ul>
-<h2 id="community"><a class="header" href="#community">Community</a></h2>
-<ul>
-<li><strong>GitHub</strong>: <a href="https://github.com/moltis-org/moltis">github.com/moltis-org/moltis</a></li>
-<li><strong>Issues</strong>: <a href="https://github.com/moltis-org/moltis/issues">Report bugs</a></li>
-<li><strong>Discussions</strong>: <a href="https://github.com/moltis-org/moltis/discussions">Ask questions</a></li>
-</ul>
-<h2 id="license"><a class="header" href="#license">License</a></h2>
-<p>MIT — Free for personal and commercial use.</p>
+<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<p>Authentication is <strong>only required when accessing Moltis from a non-localhost address</strong>. When running on <code>localhost</code> or <code>127.0.0.1</code>, no authentication is needed by default.</p>
+<p>When you access Moltis from a network address (e.g., <code>http://192.168.1.100:13131</code>), a one-time setup code is printed to the terminal. Use it to set up a password or passkey.</p>
+<pre><code class="language-toml">[auth]
+disabled = false                # Set true to disable auth entirely
+
+# Session settings
+session_expiry = 604800         # Session lifetime in seconds (7 days)
+</code></pre>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-warning"></a>
+</div>
+<div>
+<p>Only set <code>disabled = true</code> if Moltis is running on a trusted private network. Never expose an unauthenticated instance to the internet.</p>
+</div>
+</div>
+<h2 id="hooks"><a class="header" href="#hooks">Hooks</a></h2>
+<p>Configure lifecycle hooks:</p>
+<pre><code class="language-toml">[[hooks]]
+name = "my-hook"
+command = "./hooks/my-hook.sh"
+events = ["BeforeToolCall", "AfterToolCall"]
+timeout = 5                     # Timeout in seconds
+
+[hooks.env]
+MY_VAR = "value"               # Environment variables for the hook
+</code></pre>
+<p>See <a href="hooks.html">Hooks</a> for the full hook system documentation.</p>
+<h2 id="mcp-servers"><a class="header" href="#mcp-servers">MCP Servers</a></h2>
+<p>Connect to Model Context Protocol servers:</p>
+<pre><code class="language-toml">[[mcp.servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+
+[[mcp.servers]]
+name = "github"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_TOKEN = "ghp_..." }
+</code></pre>
+<h2 id="telegram-integration"><a class="header" href="#telegram-integration">Telegram Integration</a></h2>
+<pre><code class="language-toml">[telegram]
+enabled = true
+# Token is stored in provider_keys.json, not here
+allowed_users = [123456789]     # Telegram user IDs allowed to chat
+</code></pre>
+<h2 id="tls--https"><a class="header" href="#tls--https">TLS / HTTPS</a></h2>
+<pre><code class="language-toml">[tls]
+enabled = true
+cert_path = "~/.config/moltis/cert.pem"
+key_path = "~/.config/moltis/key.pem"
+# If paths don't exist, a self-signed certificate is generated
+
+# Port for the plain-HTTP redirect / CA-download server.
+# Defaults to the gateway port + 1 when not set.
+# http_redirect_port = 13132
+</code></pre>
+<p>Override via environment variable: <code>MOLTIS_TLS__HTTP_REDIRECT_PORT=8080</code>.</p>
+<h2 id="tailscale-integration"><a class="header" href="#tailscale-integration">Tailscale Integration</a></h2>
+<p>Expose Moltis over your Tailscale network:</p>
+<pre><code class="language-toml">[tailscale]
+enabled = true
+mode = "serve"                  # "serve" (private) or "funnel" (public)
+</code></pre>
+<h2 id="observability"><a class="header" href="#observability">Observability</a></h2>
+<pre><code class="language-toml">[telemetry]
+enabled = true
+otlp_endpoint = "http://localhost:4317"  # OpenTelemetry collector
+</code></pre>
+<h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
+<p>All settings can be overridden via environment variables:</p>
+<div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>MOLTIS_CONFIG_DIR</code></td><td>Configuration directory</td></tr>
+<tr><td><code>MOLTIS_DATA_DIR</code></td><td>Data directory</td></tr>
+<tr><td><code>MOLTIS_PORT</code></td><td>Gateway port</td></tr>
+<tr><td><code>MOLTIS_HOST</code></td><td>Listen address</td></tr>
+</tbody></table>
+</div>
+<h2 id="cli-flags"><a class="header" href="#cli-flags">CLI Flags</a></h2>
+<pre><code class="language-bash">moltis --config-dir /path/to/config --data-dir /path/to/data
+</code></pre>
+<h2 id="complete-example"><a class="header" href="#complete-example">Complete Example</a></h2>
+<pre><code class="language-toml">[gateway]
+port = 13131
+host = "0.0.0.0"
+
+[agent]
+name = "Atlas"
+model = "claude-sonnet-4-20250514"
+timeout = 600
+max_iterations = 25
+
+[providers]
+default = "anthropic"
+
+[tools.exec.sandbox]
+enabled = true
+backend = "docker"
+base_image = "ubuntu:25.10"
+packages = ["curl", "git", "jq", "python3", "nodejs"]
+
+[memory]
+enabled = true
+
+[auth]
+disabled = false
+
+[[hooks]]
+name = "audit-log"
+command = "./hooks/audit.sh"
+events = ["BeforeToolCall"]
+timeout = 5
+</code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="installation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
 
-                            <a rel="next prefetch" href="quickstart.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="providers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -319,8 +404,11 @@ moltis
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="installation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
 
-                    <a rel="next prefetch" href="quickstart.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="providers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
