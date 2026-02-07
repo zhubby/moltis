@@ -118,7 +118,7 @@ Requires an active GitHub Copilot subscription.
 1. Get an API key from [console.x.ai](https://console.x.ai)
 2. Enter it in Settings → Providers → xAI
 
-Available models: `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`, `grok-2`, `grok-2-mini`
+Default models: `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`, `grok-2`, `grok-2-mini`
 
 ```json
 {
@@ -127,6 +127,11 @@ Available models: `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`, `g
     "model": "grok-3"
   }
 }
+```
+
+```admonish tip title="Dynamic Model Discovery"
+Moltis can fetch the latest available models from xAI's API at startup.
+This ensures you always have access to new models as they're released.
 ```
 
 ### Ollama (Local Models)

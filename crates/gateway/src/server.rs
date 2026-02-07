@@ -344,6 +344,21 @@ pub async fn start_gateway(
     let registry = Arc::new(tokio::sync::RwLock::new(
         ProviderRegistry::from_env_with_config(&effective_providers),
     ));
+
+    // Refresh xAI models dynamically from the API if configured.
+    {
+        let mut reg = registry.write().await;
+        match reg.refresh_xai_models(&effective_providers).await {
+            Ok(count) if count > 0 => {
+                tracing::info!("Refreshed {count} xAI models from API");
+            },
+            Ok(_) => {}, // No models fetched, using hardcoded fallback
+            Err(e) => {
+                tracing::debug!("Using hardcoded xAI models (API refresh failed: {e})");
+            },
+        }
+    }
+
     let provider_summary = registry.read().await.provider_summary();
 
     // Create shared approval manager.

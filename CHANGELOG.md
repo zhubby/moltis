@@ -117,7 +117,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   require PWA installation (Safari doesn't support push in browser mode)
 
 - **xAI Grok Provider**: Full support for xAI's Grok models via OpenAI-compatible API
-  - Models: grok-3, grok-3-fast, grok-3-mini, grok-3-mini-fast, grok-2, grok-2-mini
+  - Dynamic model discovery via `/v1/models` API endpoint
+  - Fallback models: grok-3, grok-3-fast, grok-3-mini, grok-3-mini-fast, grok-2, grok-2-mini
   - 131k context window
   - Full tool calling support
 

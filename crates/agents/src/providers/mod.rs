@@ -964,6 +964,148 @@ impl ProviderRegistry {
             },
         )
     }
+
+    /// Fetch and register models dynamically from xAI's `/v1/models` endpoint.
+    ///
+    /// This replaces the hardcoded model list with live data from the API.
+    /// If the API call fails, the existing models remain unchanged.
+    ///
+    /// Returns the number of models registered, or an error message.
+    pub async fn refresh_xai_models(&mut self, config: &ProvidersConfig) -> Result<usize, String> {
+        let Some(key) = resolve_api_key(config, "xai", "XAI_API_KEY") else {
+            return Err("No xAI API key configured".into());
+        };
+
+        let base_url = config
+            .get("xai")
+            .and_then(|e| e.base_url.clone())
+            .or_else(|| std::env::var("XAI_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.x.ai/v1".into());
+
+        let alias = config.get("xai").and_then(|e| e.alias.clone());
+        let provider_label = alias.unwrap_or_else(|| "xai".into());
+
+        // Fetch models from the API
+        let models = fetch_openai_compat_models(&base_url, &key).await?;
+
+        // Filter to only chat/text models (exclude embedding, image, etc.)
+        let chat_models: Vec<_> = models
+            .into_iter()
+            .filter(|m| {
+                // Include models that look like chat models
+                m.id.starts_with("grok-")
+                    || m.id.contains("chat")
+                    || m.object == "model"
+                        && !m.id.contains("embed")
+                        && !m.id.contains("image")
+                        && !m.id.contains("vision")
+            })
+            .collect();
+
+        if chat_models.is_empty() {
+            return Err("No chat models found in xAI API response".into());
+        }
+
+        // Remove existing xAI models before re-registering
+        self.models.retain(|m| m.provider != provider_label);
+        self.providers
+            .retain(|_, p| p.name() != provider_label.as_str());
+
+        let mut count = 0;
+        for model in &chat_models {
+            if self.providers.contains_key(&model.id) {
+                continue;
+            }
+
+            let display_name = model
+                .id
+                .strip_prefix("grok-")
+                .map(|s| format!("Grok {}", titlecase(s)))
+                .unwrap_or_else(|| model.id.clone());
+
+            let provider = Arc::new(openai::OpenAiProvider::new_with_name(
+                key.clone(),
+                model.id.clone(),
+                base_url.clone(),
+                provider_label.clone(),
+            ));
+
+            self.register(
+                ModelInfo {
+                    id: model.id.clone(),
+                    provider: provider_label.clone(),
+                    display_name,
+                },
+                provider,
+            );
+            count += 1;
+        }
+
+        Ok(count)
+    }
+}
+
+/// Model info returned by OpenAI-compatible `/v1/models` endpoint.
+#[derive(Debug, serde::Deserialize)]
+struct ApiModelInfo {
+    id: String,
+    #[serde(default)]
+    object: String,
+}
+
+/// Response from OpenAI-compatible `/v1/models` endpoint.
+#[derive(Debug, serde::Deserialize)]
+struct ModelsResponse {
+    data: Vec<ApiModelInfo>,
+}
+
+/// Fetch the list of available models from an OpenAI-compatible API.
+async fn fetch_openai_compat_models(
+    base_url: &str,
+    api_key: &secrecy::Secret<String>,
+) -> Result<Vec<ApiModelInfo>, String> {
+    use secrecy::ExposeSecret;
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .header(
+            "Authorization",
+            format!("Bearer {}", api_key.expose_secret()),
+        )
+        .header("User-Agent", "moltis/1.0")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch models: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("API returned {status}: {body}"));
+    }
+
+    let models: ModelsResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse models response: {e}"))?;
+
+    Ok(models.data)
+}
+
+/// Convert a hyphenated string to title case (e.g., "3-mini-fast" -> "3 Mini Fast").
+fn titlecase(s: &str) -> String {
+    s.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -1566,5 +1708,31 @@ mod tests {
 
         let reg = ProviderRegistry::from_env_with_config(&config);
         assert!(!reg.list_models().iter().any(|m| m.provider == "local-llm"));
+    }
+
+    #[test]
+    fn titlecase_converts_hyphenated_strings() {
+        assert_eq!(super::titlecase("3-mini-fast"), "3 Mini Fast");
+        assert_eq!(super::titlecase("grok-3"), "Grok 3");
+        assert_eq!(super::titlecase("hello"), "Hello");
+        assert_eq!(super::titlecase(""), "");
+    }
+
+    #[test]
+    fn models_response_parses_correctly() {
+        let json = r#"{"data": [{"id": "grok-3", "object": "model"}, {"id": "grok-2", "object": "model"}]}"#;
+        let response: super::ModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.data[0].id, "grok-3");
+        assert_eq!(response.data[1].id, "grok-2");
+    }
+
+    #[test]
+    fn models_response_handles_missing_object_field() {
+        let json = r#"{"data": [{"id": "grok-3"}]}"#;
+        let response: super::ModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.data.len(), 1);
+        assert_eq!(response.data[0].id, "grok-3");
+        assert_eq!(response.data[0].object, ""); // default
     }
 }
