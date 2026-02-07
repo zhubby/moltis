@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **WhatsApp Business Cloud API channel**: Receive and respond to WhatsApp messages via Meta's Cloud API. Configure phone number ID, access token, app secret, and verify token through the web UI Channels page. Webhook endpoint at `/api/webhooks/whatsapp/:account_id` handles signature verification and message routing. Behind `whatsapp-business` feature flag (enabled by default).
 - **Hooks Web UI**: New `/hooks` page to manage lifecycle hooks from the browser
   - View all discovered hooks with eligibility status, source, and events
   - Enable/disable hooks without removing files (persisted across restarts)
