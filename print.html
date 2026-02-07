@@ -753,6 +753,41 @@ command = "./hooks/audit.sh"
 events = ["BeforeToolCall"]
 timeout = 5
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="local-pr-validation"><a class="header" href="#local-pr-validation">Local PR Validation</a></h1>
+<p>Moltis uses a local-first pull request flow: contributors run validation checks
+on their own machine and publish the results to GitHub commit statuses.</p>
+<h2 id="why-this-exists"><a class="header" href="#why-this-exists">Why this exists</a></h2>
+<ul>
+<li>Faster feedback for Rust-heavy branches (no long runner queues for every PR push)</li>
+<li>Better parity with a developer’s local environment while iterating</li>
+<li>Clear visibility in the PR UI (<code>fmt</code>, <code>biome</code>, <code>zizmor</code>, <code>clippy</code>, <code>test</code>)</li>
+</ul>
+<h2 id="run-local-validation-for-a-pr"><a class="header" href="#run-local-validation-for-a-pr">Run local validation for a PR</a></h2>
+<p>Use the PR number:</p>
+<pre><code class="language-bash">./scripts/local-validate-pr.sh 63
+</code></pre>
+<p>The script publishes status checks for the current PR head commit:</p>
+<ul>
+<li><code>local/fmt</code></li>
+<li><code>local/biome</code></li>
+<li><code>local/zizmor</code></li>
+<li><code>local/lint</code></li>
+<li><code>local/test</code></li>
+</ul>
+<p>The PR workflow verifies these contexts and surfaces them as checks in the PR.</p>
+<h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
+<ul>
+<li>On macOS without CUDA (<code>nvcc</code>), the script automatically falls back to
+non-CUDA lint/test defaults for local runs.</li>
+<li><code>zizmor</code> is installed automatically (Homebrew on macOS, apt on Linux) when
+not already available.</li>
+<li><code>zizmor</code> is advisory in local runs and does not block lint/test execution.</li>
+<li>Test output is suppressed unless tests fail.</li>
+</ul>
+<h2 id="merge-and-release-safety"><a class="header" href="#merge-and-release-safety">Merge and release safety</a></h2>
+<p>This local-first flow is for pull requests. Full CI still runs on GitHub
+runners for non-PR events (for example push to <code>main</code>, scheduled runs, and
+release paths).</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="llm-providers-1"><a class="header" href="#llm-providers-1">LLM Providers</a></h1>
 <p>Moltis supports 30+ LLM providers through a trait-based architecture. Configure providers through the web UI or directly in configuration files.</p>
 <h2 id="supported-providers"><a class="header" href="#supported-providers">Supported Providers</a></h2>
@@ -3560,6 +3595,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li><strong>Contributor docs: local PR validation</strong>: Added documentation for the <code>./scripts/local-validate-pr.sh &lt;PR_ID&gt;</code> workflow, including published local status contexts, platform behavior, and CI fallback expectations.</li>
 <li><strong>Hooks Web UI</strong>: New <code>/hooks</code> page to manage lifecycle hooks from the browser
 <ul>
 <li>View all discovered hooks with eligibility status, source, and events</li>
