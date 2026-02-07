@@ -341,7 +341,6 @@ mod tests {
             emoji: Some("🦜".into()),
             creature: Some("parrot".into()),
             vibe: Some("cheerful and curious".into()),
-            ..Default::default()
         };
         let user = UserProfile {
             name: Some("Alice".into()),
