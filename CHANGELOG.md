@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Trusted Network Mode**: New `network` sandbox policy with three levels (`blocked`, `trusted`, `open`) replacing the binary `no_network` flag. In `trusted` mode, containers join an isolated Docker network where outbound traffic is filtered through an HTTP CONNECT proxy against a domain allowlist. Features include:
+  - Domain pattern matching: exact (`github.com`), wildcard subdomain (`*.github.com`), or full wildcard (`*`)
+  - Interactive approval: unlisted domains trigger a WebSocket broadcast; operators approve/deny via toast notification
+  - Session-scoped approvals: approved domains are remembered for the session
+  - Backward compatible: `no_network: true` maps to `blocked`, `false` to `open`
+  - Metrics: `domain_checks_total`, `domain_approval_*`, `proxy_connections_*`, `proxy_requests_total`, `proxy_bytes_transferred_total`
 - **Hooks Web UI**: New `/hooks` page to manage lifecycle hooks from the browser
   - View all discovered hooks with eligibility status, source, and events
   - Enable/disable hooks without removing files (persisted across restarts)
