@@ -190,8 +190,79 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
-<li><strong>Contributor docs: local PR validation</strong>: Added documentation for the <code>./scripts/local-validate-pr.sh &lt;PR_ID&gt;</code> workflow, including published local status contexts, platform behavior, and CI fallback expectations.</li>
-<li><strong>Hooks Web UI</strong>: New <code>/hooks</code> page to manage lifecycle hooks from the browser
+<li>
+<p><strong>Browser Sandbox Mode</strong>: Run browser in isolated Docker containers for security</p>
+<ul>
+<li>Automatic container lifecycle management</li>
+<li>Uses <code>browserless/chrome</code> image by default (configurable via <code>sandbox_image</code>)</li>
+<li>Container readiness detection via HTTP endpoint probing</li>
+<li>Browser sandbox mode automatically follows the session’s sandbox mode
+(no separate <code>browser.sandbox</code> config - sandboxed sessions use sandboxed browser)</li>
+</ul>
+</li>
+<li>
+<p><strong>Memory-Based Browser Pool Limits</strong>: Browser instances now limited by system memory</p>
+<ul>
+<li><code>max_instances = 0</code> (default) allows unlimited instances, limited only by memory</li>
+<li><code>memory_limit_percent = 90</code> blocks new instances when system memory exceeds threshold</li>
+<li>Idle browsers cleaned up automatically before blocking</li>
+<li>Set <code>max_instances &gt; 0</code> for hard limit if preferred</li>
+</ul>
+</li>
+<li>
+<p><strong>Automatic Browser Session Tracking</strong>: Browser tool automatically reuses sessions</p>
+<ul>
+<li>Session ID is tracked internally and injected when LLM doesn’t provide one</li>
+<li>Prevents pool exhaustion from LLMs forgetting to pass session_id</li>
+<li>Session cleared on explicit “close” action</li>
+</ul>
+</li>
+<li>
+<p><strong>HiDPI Screenshot Support</strong>: Screenshots scale correctly on Retina displays</p>
+<ul>
+<li><code>device_scale_factor</code> config (default: 2.0) for high-DPI rendering</li>
+<li>Screenshot display in UI scales according to device pixel ratio</li>
+<li>Viewport increased to 2560×1440 for sharper captures</li>
+</ul>
+</li>
+<li>
+<p><strong>Enhanced Screenshot Lightbox</strong>:</p>
+<ul>
+<li>Scrollable container for viewing long/tall screenshots</li>
+<li>Download button at top of lightbox</li>
+<li>Visible ✕ close button instead of text hint</li>
+<li>Proper scaling for HiDPI displays</li>
+</ul>
+</li>
+<li>
+<p><strong>Telegram Screenshot Support</strong>: Browser screenshots sent to Telegram channels</p>
+<ul>
+<li>Automatic retry as document when image dimensions exceed Telegram limits</li>
+<li>Error messages sent to channel when screenshot delivery fails</li>
+<li>Handles <code>PHOTO_INVALID_DIMENSIONS</code> and <code>PHOTO_SAVE_FILE_INVALID</code> errors</li>
+</ul>
+</li>
+<li>
+<p><strong>Telegram Tool Status Notifications</strong>: See what’s happening during long operations</p>
+<ul>
+<li>Tool execution messages sent to Telegram (e.g., “🌐 Navigating to…”,
+“💻 Running: <code>git status</code>”, “📸 Taking screenshot…”)</li>
+<li>Messages sent silently (no notification sound) to avoid spam</li>
+<li>Typing indicator automatically re-sent after status messages</li>
+<li>Supports browser, exec, web_fetch, web_search, and memory tools</li>
+</ul>
+</li>
+<li>
+<p><strong>Log Target Display</strong>: Logs now include the crate/module path for easier debugging</p>
+<ul>
+<li>Example: <code>INFO moltis_gateway::chat: tool execution succeeded tool=browser</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Contributor docs: local PR validation</strong>: Added documentation for the <code>./scripts/local-validate-pr.sh &lt;PR_ID&gt;</code> workflow, including published local status contexts, platform behavior, and CI fallback expectations.</p>
+</li>
+<li>
+<p><strong>Hooks Web UI</strong>: New <code>/hooks</code> page to manage lifecycle hooks from the browser</p>
 <ul>
 <li>View all discovered hooks with eligibility status, source, and events</li>
 <li>Enable/disable hooks without removing files (persisted across restarts)</li>
@@ -202,8 +273,12 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>RPC methods: <code>hooks.list</code>, <code>hooks.enable</code>, <code>hooks.disable</code>, <code>hooks.save</code>, <code>hooks.reload</code></li>
 </ul>
 </li>
-<li><strong>Deploy platform detection</strong>: New <code>MOLTIS_DEPLOY_PLATFORM</code> env var hides local-only providers (local-llm, Ollama) on cloud deployments. Pre-configured in Fly.io, DigitalOcean, and Render deploy templates.</li>
-<li><strong>Telegram OTP self-approval</strong>: Non-allowlisted DM users receive a 6-digit verification code instead of being silently ignored. Correct code entry auto-approves the user to the allowlist. Includes flood protection (non-code messages silently ignored), lockout after 3 failed attempts (configurable cooldown), and 5-minute code expiry. OTP codes visible in web UI Senders tab. Controlled by <code>otp_self_approval</code> (default: true) and <code>otp_cooldown_secs</code> (default: 300) config fields.</li>
+<li>
+<p><strong>Deploy platform detection</strong>: New <code>MOLTIS_DEPLOY_PLATFORM</code> env var hides local-only providers (local-llm, Ollama) on cloud deployments. Pre-configured in Fly.io, DigitalOcean, and Render deploy templates.</p>
+</li>
+<li>
+<p><strong>Telegram OTP self-approval</strong>: Non-allowlisted DM users receive a 6-digit verification code instead of being silently ignored. Correct code entry auto-approves the user to the allowlist. Includes flood protection (non-code messages silently ignored), lockout after 3 failed attempts (configurable cooldown), and 5-minute code expiry. OTP codes visible in web UI Senders tab. Controlled by <code>otp_self_approval</code> (default: true) and <code>otp_cooldown_secs</code> (default: 300) config fields.</p>
+</li>
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
@@ -224,6 +299,11 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>Sandbox UX on unsupported hosts</strong>: Disable sandbox controls in chat/images when no runtime backend is detected, with a tooltip explaining cloud deploy limitations.</li>
 <li><strong>Telegram OTP code echoed to LLM</strong>: After OTP self-approval, the verification code message was re-processed as a regular chat message because <code>sender_approve</code> restarted the bot polling loop (resetting the Telegram update offset). Sender approve/deny now hot-update the in-memory config without restarting the bot.</li>
 <li><strong>Empty allowlist bypassed access control</strong>: When <code>dm_policy = Allowlist</code> and all entries were removed, the empty list was treated as “allow everyone” instead of “deny everyone”. An explicit Allowlist policy with an empty list now correctly denies all access.</li>
+<li><strong>Browser sandbox timeout</strong>: Sandboxed browsers now use the configured
+<code>navigation_timeout_ms</code> (default 30s) instead of a shorter internal timeout.
+Previously, sandboxed browser connections could time out prematurely.</li>
+<li><strong>Tall screenshot lightbox</strong>: Full-page screenshots now display at proper size
+with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Telegram typing indicator for long responses</strong>: Channel replies now wait for outbound delivery tasks to finish before chat completion returns, so periodic <code>typing...</code> updates continue until the Telegram message is actually sent.</li>
 </ul>
 <h2 id="0110---2026-02-06"><a class="header" href="#0110---2026-02-06">[0.1.10] - 2026-02-06</a></h2>
@@ -325,6 +405,33 @@ with deploy buttons in the README</p>
 require PWA installation (Safari doesn’t support push in browser mode)</p>
 </li>
 <li>
+<p><strong>Browser Screenshot Thumbnails</strong>: Screenshots from the browser tool now display as
+clickable thumbnails in the chat UI</p>
+<ul>
+<li>Click to view fullscreen in a lightbox overlay</li>
+<li>Press Escape or click anywhere to close</li>
+<li>Thumbnails are 200×150px max with hover effects</li>
+</ul>
+</li>
+<li>
+<p><strong>Improved Browser Detection</strong>: Better cross-platform browser detection</p>
+<ul>
+<li>Checks macOS app bundles before PATH (avoids broken Homebrew chromium wrapper)</li>
+<li>Supports Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Arc</li>
+<li>Shows platform-specific installation instructions when no browser found</li>
+<li>Custom path via <code>chrome_path</code> config or <code>CHROME</code> environment variable</li>
+</ul>
+</li>
+<li>
+<p><strong>Vision Support for Screenshots</strong>: Vision-capable models can now interpret
+browser screenshots instead of having them stripped from context</p>
+<ul>
+<li>Screenshots sent as multimodal image content blocks for GPT-4o, Claude, Gemini</li>
+<li>Non-vision models continue to receive <code>[base64 data removed]</code> placeholder</li>
+<li><code>supports_vision()</code> trait method added to <code>LlmProvider</code> for capability detection</li>
+</ul>
+</li>
+<li>
 <p><strong>Session state store</strong>: per-session key-value persistence scoped by
 namespace, backed by SQLite (<code>session_state</code> tool).</p>
 </li>
@@ -420,6 +527,14 @@ registration.</p>
 <li>Missing space in Safari install instructions (“usingFile” → “using File”)</li>
 <li><strong>WebSocket origin validation</strong> now treats <code>.localhost</code> subdomains
 (e.g. <code>moltis.localhost</code>) as loopback equivalents per RFC 6761.</li>
+<li><strong>Browser tool schema enforcement</strong>: Added <code>strict: true</code> and <code>additionalProperties: false</code>
+to OpenAI-compatible tool schemas, improving model compliance with required fields</li>
+<li><strong>Browser tool defaults</strong>: When model sends URL without action, defaults to <code>navigate</code>
+instead of erroring</li>
+<li><strong>Chat message ordering</strong>: Fixed interleaving of text and tool cards when streaming;
+messages now appear in correct chronological order</li>
+<li><strong>Tool passthrough in ProviderChain</strong>: Fixed tools not being passed to fallback
+providers when using provider chains</li>
 <li>Fork/branch icon in session sidebar now renders cleanly at 16px (replaced
 complex git-branch SVG with simple trunk+branch path).</li>
 <li>Deleting a forked session now navigates to the parent session instead of
@@ -452,6 +567,8 @@ discovers and includes them alongside registry skills.</li>
 <ul>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
 <li>Updated CLAUDE.md with cargo feature policy (features enabled by default)</li>
+<li>Updated browser-automation.md with browser detection, screenshot display, and
+model error handling sections</li>
 <li>Rewrote session-branching.md with accurate fork details, UI methods, RPC
 API, inheritance table, and deletion behavior.</li>
 </ul>

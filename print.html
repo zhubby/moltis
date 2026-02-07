@@ -1829,10 +1829,406 @@ memory_limit = "512M"
 cpu_quota = 1.0
 pids_max = 256
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="browser-automation"><a class="header" href="#browser-automation">Browser Automation</a></h1>
+<p>Moltis provides full browser automation via Chrome DevTools Protocol (CDP),
+enabling agents to interact with JavaScript-heavy websites, fill forms,
+click buttons, and capture screenshots.</p>
+<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<p>Browser automation is useful when you need to:</p>
+<ul>
+<li>Interact with SPAs (Single Page Applications)</li>
+<li>Fill forms and click buttons</li>
+<li>Navigate sites that require JavaScript rendering</li>
+<li>Take screenshots of pages</li>
+<li>Execute JavaScript in page context</li>
+<li>Maintain session state across multiple interactions</li>
+</ul>
+<p>For simple page content retrieval (static HTML), prefer <code>web_fetch</code> as it’s
+faster and more lightweight.</p>
+<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<pre><code>┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│   BrowserTool   │────▶│  BrowserManager │────▶│   BrowserPool    │
+│   (AgentTool)   │     │   (actions)     │     │   (instances)    │
+└─────────────────┘     └─────────────────┘     └──────────────────┘
+                                                         │
+                                                         ▼
+                                                ┌──────────────────┐
+                                                │  Chrome/Chromium │
+                                                │     via CDP      │
+                                                └──────────────────┘
+</code></pre>
+<h3 id="components"><a class="header" href="#components">Components</a></h3>
+<ul>
+<li><strong>BrowserTool</strong> (<code>crates/tools/src/browser.rs</code>) - AgentTool wrapper for LLM</li>
+<li><strong>BrowserManager</strong> (<code>crates/browser/src/manager.rs</code>) - High-level action API</li>
+<li><strong>BrowserPool</strong> (<code>crates/browser/src/pool.rs</code>) - Chrome instance management</li>
+<li><strong>Snapshot</strong> (<code>crates/browser/src/snapshot.rs</code>) - DOM element extraction</li>
+</ul>
+<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
+<p>Browser automation is <strong>enabled by default</strong>. To customize, add to your <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[tools.browser]
+enabled = true              # Enable browser support
+headless = true             # Run without visible window (default)
+viewport_width = 2560       # Default viewport width
+viewport_height = 1440      # Default viewport height
+device_scale_factor = 2.0   # HiDPI/Retina scaling (1.0 = standard, 2.0 = Retina)
+
+# Pool management
+max_instances = 0           # 0 = unlimited (limited by memory), &gt;0 = hard limit
+memory_limit_percent = 90   # Block new instances when memory exceeds this %
+idle_timeout_secs = 300     # Close idle browsers after 5 min
+navigation_timeout_ms = 30000  # Page load timeout
+
+# Optional customization
+# chrome_path = "/path/to/chrome"  # Custom Chrome path
+# user_agent = "Custom UA"         # Custom user agent
+# chrome_args = ["--disable-extensions"]  # Extra args
+
+# Sandbox image (browser sandbox mode follows session sandbox mode)
+sandbox_image = "browserless/chrome"  # Container image for sandboxed sessions
+# allowed_domains = ["example.com", "*.trusted.org"]  # Restrict navigation
+</code></pre>
+<h3 id="memory-based-pool-limits"><a class="header" href="#memory-based-pool-limits">Memory-Based Pool Limits</a></h3>
+<p>By default, browser instances are limited by system memory rather than a fixed count:</p>
+<ul>
+<li><code>max_instances = 0</code> (default): Unlimited instances, blocked only when memory
+exceeds <code>memory_limit_percent</code></li>
+<li><code>memory_limit_percent = 90</code>: New browsers blocked when system memory &gt; 90%</li>
+<li>Set <code>max_instances &gt; 0</code> for a hard limit if you prefer fixed constraints</li>
+</ul>
+<p>This allows multiple chat sessions to each have their own browser without
+artificial limits, while protecting system stability when memory is constrained.</p>
+<h3 id="domain-restrictions"><a class="header" href="#domain-restrictions">Domain Restrictions</a></h3>
+<p>For improved security, you can restrict which domains the browser can navigate to:</p>
+<pre><code class="language-toml">[tools.browser]
+allowed_domains = [
+    "docs.example.com",    # Exact match
+    "*.github.com",        # Wildcard: matches any subdomain
+    "localhost",           # Allow localhost
+]
+</code></pre>
+<p>When <code>allowed_domains</code> is set, any navigation to a domain not in the list will
+be blocked with an error. Wildcards (<code>*.domain.com</code>) match any subdomain and
+also the base domain itself.</p>
+<h2 id="tool-usage"><a class="header" href="#tool-usage">Tool Usage</a></h2>
+<h3 id="actions"><a class="header" href="#actions">Actions</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Action</th><th>Description</th><th>Required Params</th></tr></thead><tbody>
+<tr><td><code>navigate</code></td><td>Go to a URL</td><td><code>url</code></td></tr>
+<tr><td><code>snapshot</code></td><td>Get DOM with element refs</td><td>-</td></tr>
+<tr><td><code>screenshot</code></td><td>Capture page image</td><td><code>full_page</code> (optional)</td></tr>
+<tr><td><code>click</code></td><td>Click element by ref</td><td><code>ref_</code></td></tr>
+<tr><td><code>type</code></td><td>Type into element</td><td><code>ref_</code>, <code>text</code></td></tr>
+<tr><td><code>scroll</code></td><td>Scroll page/element</td><td><code>x</code>, <code>y</code>, <code>ref_</code> (optional)</td></tr>
+<tr><td><code>evaluate</code></td><td>Run JavaScript</td><td><code>code</code></td></tr>
+<tr><td><code>wait</code></td><td>Wait for element</td><td><code>selector</code> or <code>ref_</code></td></tr>
+<tr><td><code>get_url</code></td><td>Get current URL</td><td>-</td></tr>
+<tr><td><code>get_title</code></td><td>Get page title</td><td>-</td></tr>
+<tr><td><code>back</code></td><td>Go back in history</td><td>-</td></tr>
+<tr><td><code>forward</code></td><td>Go forward in history</td><td>-</td></tr>
+<tr><td><code>refresh</code></td><td>Reload the page</td><td>-</td></tr>
+<tr><td><code>close</code></td><td>Close browser session</td><td>-</td></tr>
+</tbody></table>
+</div>
+<h3 id="automatic-session-tracking"><a class="header" href="#automatic-session-tracking">Automatic Session Tracking</a></h3>
+<p>The browser tool automatically tracks and reuses session IDs. After a <code>navigate</code>
+action creates a session, subsequent actions will reuse it without needing to
+pass <code>session_id</code> explicitly:</p>
+<pre><code class="language-json">// 1. Navigate (creates session)
+{ "action": "navigate", "url": "https://example.com" }
+
+// 2. Snapshot (session_id auto-injected)
+{ "action": "snapshot" }
+
+// 3. Click (session_id auto-injected)
+{ "action": "click", "ref_": 1 }
+
+// 4. Screenshot (session_id auto-injected)
+{ "action": "screenshot" }
+
+// 5. Close (clears tracked session)
+{ "action": "close" }
+</code></pre>
+<p>This prevents pool exhaustion from LLMs that forget to pass the session_id.</p>
+<h3 id="workflow-example"><a class="header" href="#workflow-example">Workflow Example</a></h3>
+<pre><code class="language-json">// 1. Navigate to a page
+{
+  "action": "navigate",
+  "url": "https://example.com/login"
+}
+// Returns: { "session_id": "browser-abc123", "url": "https://..." }
+
+// 2. Get interactive elements (session_id optional - auto-tracked)
+{
+  "action": "snapshot"
+}
+// Returns element refs like:
+// { "elements": [
+//   { "ref_": 1, "tag": "input", "role": "textbox", "placeholder": "Email" },
+//   { "ref_": 2, "tag": "input", "role": "textbox", "placeholder": "Password" },
+//   { "ref_": 3, "tag": "button", "role": "button", "text": "Sign In" }
+// ]}
+
+// 3. Fill in the form
+{
+  "action": "type",
+  "ref_": 1,
+  "text": "user@example.com"
+}
+
+{
+  "action": "type",
+  "ref_": 2,
+  "text": "password123"
+}
+
+// 4. Click the submit button
+{
+  "action": "click",
+  "ref_": 3
+}
+
+// 5. Take a screenshot of the result
+{
+  "action": "screenshot"
+}
+// Returns: { "screenshot": "data:image/png;base64,..." }
+</code></pre>
+<h2 id="element-reference-system"><a class="header" href="#element-reference-system">Element Reference System</a></h2>
+<p>The snapshot action extracts interactive elements and assigns them numeric
+references. This approach (inspired by <a href="https://docs.openclaw.ai">OpenClaw</a>)
+provides:</p>
+<ul>
+<li><strong>Stability</strong>: References don’t break with minor page updates</li>
+<li><strong>Security</strong>: No CSS selectors exposed to the model</li>
+<li><strong>Reliability</strong>: Elements identified by role/content, not fragile paths</li>
+</ul>
+<h3 id="extracted-element-info"><a class="header" href="#extracted-element-info">Extracted Element Info</a></h3>
+<pre><code class="language-json">{
+  "ref_": 1,
+  "tag": "button",
+  "role": "button",
+  "text": "Submit",
+  "href": null,
+  "placeholder": null,
+  "value": null,
+  "aria_label": "Submit form",
+  "visible": true,
+  "interactive": true,
+  "bounds": { "x": 100, "y": 200, "width": 80, "height": 40 }
+}
+</code></pre>
+<h2 id="comparison-browser-vs-web-fetch"><a class="header" href="#comparison-browser-vs-web-fetch">Comparison: Browser vs Web Fetch</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Feature</th><th><code>web_fetch</code></th><th><code>browser</code></th></tr></thead><tbody>
+<tr><td>Speed</td><td>Fast</td><td>Slower</td></tr>
+<tr><td>Resources</td><td>Minimal</td><td>Chrome instance</td></tr>
+<tr><td>JavaScript</td><td>No</td><td>Yes</td></tr>
+<tr><td>Forms/clicks</td><td>No</td><td>Yes</td></tr>
+<tr><td>Screenshots</td><td>No</td><td>Yes</td></tr>
+<tr><td>Sessions</td><td>No</td><td>Yes</td></tr>
+<tr><td>Use case</td><td>Static content</td><td>Interactive sites</td></tr>
+</tbody></table>
+</div>
+<p><strong>When to use <code>web_fetch</code>:</strong></p>
+<ul>
+<li>Reading documentation</li>
+<li>Fetching API responses</li>
+<li>Scraping static HTML</li>
+</ul>
+<p><strong>When to use <code>browser</code>:</strong></p>
+<ul>
+<li>Logging into websites</li>
+<li>Filling forms</li>
+<li>Interacting with SPAs</li>
+<li>Sites that require JavaScript</li>
+<li>Taking screenshots</li>
+</ul>
+<h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
+<p>When the <code>metrics</code> feature is enabled, the browser module records:</p>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_browser_instances_active</code></td><td>Currently running browsers</td></tr>
+<tr><td><code>moltis_browser_instances_created_total</code></td><td>Total browsers launched</td></tr>
+<tr><td><code>moltis_browser_instances_destroyed_total</code></td><td>Total browsers closed</td></tr>
+<tr><td><code>moltis_browser_screenshots_total</code></td><td>Screenshots taken</td></tr>
+<tr><td><code>moltis_browser_navigation_duration_seconds</code></td><td>Page load time histogram</td></tr>
+<tr><td><code>moltis_browser_errors_total</code></td><td>Errors by type</td></tr>
+</tbody></table>
+</div>
+<h2 id="sandbox-mode"><a class="header" href="#sandbox-mode">Sandbox Mode</a></h2>
+<p>Browser sandbox mode <strong>automatically follows the session’s sandbox mode</strong>. When
+a chat session uses sandbox mode (controlled by <code>[tools.exec.sandbox]</code>), the
+browser tool will also run in a sandboxed container. When the session is not
+sandboxed, the browser runs directly on the host.</p>
+<h3 id="host-mode"><a class="header" href="#host-mode">Host Mode</a></h3>
+<p>When the session is not sandboxed (or sandbox mode is “off”), Chrome runs
+directly on the host machine. This is faster but the browser has full access
+to the host network and filesystem.</p>
+<h3 id="sandbox-mode-1"><a class="header" href="#sandbox-mode-1">Sandbox Mode</a></h3>
+<p>When the session is sandboxed, Chrome runs inside a Docker container with:</p>
+<ul>
+<li><strong>Network isolation</strong>: Browser can access the internet but not local services</li>
+<li><strong>Filesystem isolation</strong>: No access to host filesystem</li>
+<li><strong>Automatic lifecycle</strong>: Container started/stopped with browser session</li>
+<li><strong>Readiness detection</strong>: Waits for Chrome to be fully ready before connecting</li>
+</ul>
+<pre><code class="language-toml">[tools.browser]
+sandbox_image = "browserless/chrome"  # Container image for sandboxed sessions
+</code></pre>
+<p>Requirements:</p>
+<ul>
+<li>Docker or Apple Container must be installed and running</li>
+<li>The container image is pulled automatically on first use</li>
+<li>Session sandbox mode must be enabled (<code>[tools.exec.sandbox] mode = "all"</code>)</li>
+</ul>
+<h3 id="exec-tool-scripts"><a class="header" href="#exec-tool-scripts">Exec Tool Scripts</a></h3>
+<p>If agents need to run browser automation <strong>scripts</strong> (Puppeteer, Playwright,
+Selenium) inside the command sandbox, Chromium is included in the default
+sandbox packages:</p>
+<pre><code class="language-bash"># Inside sandbox (via exec tool)
+chromium --headless --no-sandbox --dump-dom https://example.com
+</code></pre>
+<p>Or use Puppeteer/Playwright in a Node.js script executed via the <code>exec</code> tool.</p>
+<h2 id="security-considerations-1"><a class="header" href="#security-considerations-1">Security Considerations</a></h2>
+<h3 id="prompt-injection-risk"><a class="header" href="#prompt-injection-risk">Prompt Injection Risk</a></h3>
+<p><strong>Important</strong>: Web pages can contain content designed to manipulate LLM behavior
+(prompt injection). When the browser tool returns page content to the LLM,
+malicious sites could attempt to inject instructions.</p>
+<p><strong>Mitigations</strong>:</p>
+<ol>
+<li>
+<p><strong>Domain restrictions</strong>: Use <code>allowed_domains</code> to limit navigation to trusted
+sites only. This is the most effective mitigation.</p>
+</li>
+<li>
+<p><strong>Review returned content</strong>: The snapshot action returns element text which
+could contain injected prompts. Be cautious with untrusted sites.</p>
+</li>
+<li>
+<p><strong>Sandbox mode</strong>: Use sandboxed sessions to run the browser in an isolated
+Docker container for additional security. Browser sandbox follows session
+sandbox mode automatically.</p>
+</li>
+</ol>
+<h3 id="other-security-considerations"><a class="header" href="#other-security-considerations">Other Security Considerations</a></h3>
+<ol>
+<li>
+<p><strong>Host vs Sandbox mode</strong>: Browser sandbox mode follows the session’s sandbox
+mode. For sandboxed sessions, the browser runs in a Docker container with
+network/filesystem isolation. For non-sandboxed sessions, the browser runs
+on the host with <code>--no-sandbox</code> for container compatibility.</p>
+</li>
+<li>
+<p><strong>Resource limits</strong>: Browser instances are limited by memory usage (default:
+block when &gt; 90% used). Set <code>max_instances &gt; 0</code> for a hard limit.</p>
+</li>
+<li>
+<p><strong>Idle cleanup</strong>: Browsers are automatically closed after <code>idle_timeout_secs</code>
+of inactivity.</p>
+</li>
+<li>
+<p><strong>Network access</strong>: In host mode, the browser has full network access. In
+sandbox mode, the browser can reach the internet but not local services.
+Use firewall rules for additional restrictions.</p>
+</li>
+<li>
+<p><strong>Sandbox scripts</strong>: Browser scripts running in the exec sandbox (Puppeteer,
+Playwright) inherit sandbox network restrictions (<code>no_network: true</code> by default).</p>
+</li>
+</ol>
+<h2 id="browser-detection"><a class="header" href="#browser-detection">Browser Detection</a></h2>
+<p>Moltis automatically detects installed Chromium-based browsers in the following order:</p>
+<ol>
+<li><strong>Custom path</strong> from <code>chrome_path</code> config</li>
+<li><strong>CHROME environment variable</strong></li>
+<li><strong>Platform-specific app bundles</strong> (macOS/Windows)
+<ul>
+<li>macOS: <code>/Applications/Google Chrome.app</code>, <code>/Applications/Chromium.app</code>, etc.</li>
+<li>Windows: <code>C:\Program Files\Google\Chrome\Application\chrome.exe</code>, etc.</li>
+</ul>
+</li>
+<li><strong>PATH executables</strong> (fallback): <code>chrome</code>, <code>chromium</code>, <code>msedge</code>, <code>brave</code>, etc.</li>
+</ol>
+<p>If no browser is found, Moltis displays platform-specific installation instructions.</p>
+<h3 id="supported-browsers"><a class="header" href="#supported-browsers">Supported Browsers</a></h3>
+<p>Any Chromium-based browser works:</p>
+<ul>
+<li>Google Chrome</li>
+<li>Chromium</li>
+<li>Microsoft Edge</li>
+<li>Brave</li>
+<li>Opera</li>
+<li>Vivaldi</li>
+<li>Arc (macOS)</li>
+</ul>
+<h2 id="screenshot-display"><a class="header" href="#screenshot-display">Screenshot Display</a></h2>
+<p>When the browser tool takes a screenshot, it’s displayed in the chat UI:</p>
+<ul>
+<li><strong>Thumbnail view</strong>: Screenshots appear as clickable thumbnails (200×150px max)</li>
+<li><strong>Fullscreen lightbox</strong>: Click to view full-size with dark overlay</li>
+<li><strong>Scrollable view</strong>: Long screenshots can be scrolled within the lightbox</li>
+<li><strong>Download button</strong>: Save screenshot to disk (top of lightbox)</li>
+<li><strong>Close button</strong>: Click ✕ button, click outside, or press Escape to close</li>
+<li><strong>HiDPI scaling</strong>: Screenshots display at correct size on Retina displays</li>
+</ul>
+<p>Screenshots are base64-encoded PNGs returned in the tool result. The
+<code>device_scale_factor</code> config (default: 2.0) controls the rendering resolution
+for high-DPI displays.</p>
+<h3 id="telegram-integration-1"><a class="header" href="#telegram-integration-1">Telegram Integration</a></h3>
+<p>When using the Telegram channel, screenshots are automatically sent to the chat:</p>
+<ul>
+<li>Images sent as photos when dimensions are within Telegram limits</li>
+<li>Automatically retried as documents for oversized images (aspect ratio &gt; 20)</li>
+<li>Error messages sent to channel if delivery fails</li>
+</ul>
+<h2 id="handling-model-errors"><a class="header" href="#handling-model-errors">Handling Model Errors</a></h2>
+<p>Some models (particularly Claude via GitHub Copilot) occasionally send malformed
+tool calls with missing required fields. Moltis handles this gracefully:</p>
+<ul>
+<li><strong>Default action</strong>: If <code>url</code> is provided but <code>action</code> is missing, defaults to
+<code>navigate</code></li>
+<li><strong>Automatic retry</strong>: The agent loop retries with corrected arguments</li>
+<li><strong>Muted error display</strong>: Validation errors show as muted/informational cards
+in the UI (60% opacity, gray text) to indicate they’re expected, not alarming</li>
+</ul>
+<h2 id="troubleshooting-4"><a class="header" href="#troubleshooting-4">Troubleshooting</a></h2>
+<h3 id="browser-not-launching"><a class="header" href="#browser-not-launching">Browser not launching</a></h3>
+<ul>
+<li>Ensure Chrome/Chromium is installed</li>
+<li>Check <code>chrome_path</code> in config if using custom location</li>
+<li>Set <code>CHROME</code> environment variable to specify browser path</li>
+<li>On Linux, install dependencies: <code>apt-get install chromium-browser</code></li>
+<li>On macOS, if using Homebrew Chromium, prefer installing Google Chrome or Brave
+(the Homebrew chromium wrapper can be unreliable)</li>
+</ul>
+<h3 id="elements-not-found"><a class="header" href="#elements-not-found">Elements not found</a></h3>
+<ul>
+<li>Use <code>snapshot</code> to see available elements</li>
+<li>Elements must be visible in the viewport</li>
+<li>Some elements may need scrolling first</li>
+</ul>
+<h3 id="timeouts"><a class="header" href="#timeouts">Timeouts</a></h3>
+<ul>
+<li>Increase <code>navigation_timeout_ms</code> for slow pages</li>
+<li>Use <code>wait</code> action to wait for dynamic content</li>
+<li>Check network connectivity</li>
+</ul>
+<h3 id="high-memory-usage"><a class="header" href="#high-memory-usage">High memory usage</a></h3>
+<ul>
+<li>Browser instances are now limited by memory (blocks at 90% by default)</li>
+<li>Set <code>max_instances &gt; 0</code> for a hard limit if preferred</li>
+<li>Lower <code>idle_timeout_secs</code> to clean up faster</li>
+<li>Consider enabling headless mode if not already</li>
+</ul>
+<h3 id="pool-exhaustion"><a class="header" href="#pool-exhaustion">Pool exhaustion</a></h3>
+<ul>
+<li>Browser tool now auto-tracks session IDs, preventing pool exhaustion from
+LLMs that forget to pass session_id</li>
+<li>If you still hit limits, check <code>memory_limit_percent</code> threshold</li>
+<li>Use <code>close</code> action when done to free up sessions</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="session-state"><a class="header" href="#session-state">Session State</a></h1>
 <p>Moltis provides a per-session key-value store that allows skills, extensions,
 and the agent itself to persist context across messages within a session.</p>
-<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+<h2 id="overview-1"><a class="header" href="#overview-1">Overview</a></h2>
 <p>Session state is scoped to a <code>(session_key, namespace, key)</code> triple, backed by
 SQLite. Each entry stores a string value and is automatically timestamped.</p>
 <p>The agent accesses state through the <code>session_state</code> tool, which supports three
@@ -1966,7 +2362,7 @@ do not propagate to the fork, and vice versa.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="skill-self-extension"><a class="header" href="#skill-self-extension">Skill Self-Extension</a></h1>
 <p>Moltis can create, update, and delete skills at runtime through agent tools,
 enabling the system to extend its own capabilities during a conversation.</p>
-<h2 id="overview-1"><a class="header" href="#overview-1">Overview</a></h2>
+<h2 id="overview-2"><a class="header" href="#overview-2">Overview</a></h2>
 <p>Three agent tools manage project-local skills:</p>
 <div class="table-wrapper"><table><thead><tr><th>Tool</th><th>Description</th></tr></thead><tbody>
 <tr><td><code>create_skill</code></td><td>Write a new <code>SKILL.md</code> to <code>.moltis/skills/&lt;name&gt;/</code></td></tr>
@@ -2129,7 +2525,7 @@ before deleting a skill.</p>
 }
 </code></pre>
 <p>Clicking a notification will open or focus the app and navigate to the relevant chat.</p>
-<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
+<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
 <h3 id="feature-flag-1"><a class="header" href="#feature-flag-1">Feature Flag</a></h3>
 <p>Push notifications are controlled by the <code>push-notifications</code> feature flag, which is enabled by default. To disable:</p>
 <pre><code class="language-toml"># In your Cargo.toml or when building
@@ -2168,7 +2564,7 @@ moltis-gateway = { default-features = false, features = ["web-ui", "tls"] }
 </tbody></table>
 </div>
 <p>Note: iOS push notifications require iOS 16.4 or later and the app must be installed as a PWA.</p>
-<h2 id="troubleshooting-4"><a class="header" href="#troubleshooting-4">Troubleshooting</a></h2>
+<h2 id="troubleshooting-5"><a class="header" href="#troubleshooting-5">Troubleshooting</a></h2>
 <h3 id="notifications-not-working"><a class="header" href="#notifications-not-working">Notifications Not Working</a></h3>
 <ol>
 <li><strong>Check permissions</strong>: Ensure notifications are allowed in browser/OS settings</li>
@@ -2202,7 +2598,7 @@ moltis-gateway = { default-features = false, features = ["web-ui", "tls"] }
 <p>Moltis is designed with a defense-in-depth security model. This document
 explains the key security features and provides guidance for production
 deployments.</p>
-<h2 id="overview-2"><a class="header" href="#overview-2">Overview</a></h2>
+<h2 id="overview-3"><a class="header" href="#overview-3">Overview</a></h2>
 <p>Moltis runs AI agents that can execute code and interact with external systems.
 This power requires multiple layers of protection:</p>
 <ol>
@@ -2555,7 +2951,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t moltis:local .
 <p>OrbStack on macOS works identically to Docker — use the same socket path
 (<code>/var/run/docker.sock</code>). OrbStack’s lightweight Linux VM provides good
 isolation with lower resource usage than Docker Desktop.</p>
-<h2 id="troubleshooting-5"><a class="header" href="#troubleshooting-5">Troubleshooting</a></h2>
+<h2 id="troubleshooting-6"><a class="header" href="#troubleshooting-6">Troubleshooting</a></h2>
 <h3 id="cannot-connect-to-docker-daemon"><a class="header" href="#cannot-connect-to-docker-daemon">“Cannot connect to Docker daemon”</a></h3>
 <p>The Docker socket is not mounted or the Moltis user doesn’t have permission
 to access it. Verify:</p>
@@ -2728,12 +3124,12 @@ the gateway is ready. Configure your provider’s health check to use:</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="streaming-architecture"><a class="header" href="#streaming-architecture">Streaming Architecture</a></h1>
 <p>This document explains how streaming responses work in Moltis, from the LLM
 provider through to the web UI.</p>
-<h2 id="overview-3"><a class="header" href="#overview-3">Overview</a></h2>
+<h2 id="overview-4"><a class="header" href="#overview-4">Overview</a></h2>
 <p>Moltis supports real-time token streaming for LLM responses, providing a much
 better user experience than waiting for the complete response. Streaming works
 even when tools are enabled, allowing users to see text as it arrives while
 tool calls are accumulated and executed.</p>
-<h2 id="components"><a class="header" href="#components">Components</a></h2>
+<h2 id="components-1"><a class="header" href="#components-1">Components</a></h2>
 <h3 id="1-streamevent-enum-cratesagentssrcmodelrs"><a class="header" href="#1-streamevent-enum-cratesagentssrcmodelrs">1. StreamEvent Enum (<code>crates/agents/src/model.rs</code>)</a></h3>
 <p>The <code>StreamEvent</code> enum defines all events that can occur during a streaming
 LLM response:</p>
@@ -2926,7 +3322,7 @@ several tools at once</li>
 <p>Moltis uses <a href="https://github.com/launchbadge/sqlx">sqlx</a> for database access and its
 built-in migration system for schema management. Each crate owns its migrations,
 keeping schema definitions close to the code that uses them.</p>
-<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
 <p>Each crate that uses SQLite has its own <code>migrations/</code> directory and exposes a
 <code>run_migrations()</code> function. The gateway orchestrates running all migrations at
 startup in the correct dependency order.</p>
@@ -3110,7 +3506,7 @@ async fn test_session_operations() {
 <span class="boring">}</span></code></pre></pre>
 <p>The <code>init()</code> methods are retained (marked <code>#[doc(hidden)]</code>) specifically for tests.
 In production, migrations handle schema creation.</p>
-<h2 id="troubleshooting-6"><a class="header" href="#troubleshooting-6">Troubleshooting</a></h2>
+<h2 id="troubleshooting-7"><a class="header" href="#troubleshooting-7">Troubleshooting</a></h2>
 <h3 id="failed-to-run-migrations"><a class="header" href="#failed-to-run-migrations">“failed to run migrations”</a></h3>
 <ol>
 <li>Check file permissions on <code>~/.moltis/</code></li>
@@ -3148,7 +3544,7 @@ cargo run  # Creates fresh database with all migrations
 <p>Moltis includes comprehensive observability support through Prometheus metrics and
 tracing integration. This document explains how to enable, configure, and use
 these features.</p>
-<h2 id="overview-4"><a class="header" href="#overview-4">Overview</a></h2>
+<h2 id="overview-5"><a class="header" href="#overview-5">Overview</a></h2>
 <p>The metrics system is built on the <a href="https://docs.rs/metrics"><code>metrics</code></a> crate
 facade, which provides a unified interface similar to the <code>log</code> crate. When the
 <code>prometheus</code> feature is enabled, metrics are exported in Prometheus text format
@@ -3494,7 +3890,7 @@ pub mod my_feature {
 
 counter!(my_feature::OPERATIONS_TOTAL).increment(1);
 <span class="boring">}</span></code></pre></pre>
-<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
+<h2 id="configuration-6"><a class="header" href="#configuration-6">Configuration</a></h2>
 <p>Metrics configuration in <code>moltis.toml</code>:</p>
 <pre><code class="language-toml">[metrics]
 enabled = true              # Enable metrics collection (default: true)
@@ -3513,7 +3909,7 @@ labels = { env = "prod" }   # Add custom labels to all metrics
 <li><strong>Feature-gate everything</strong>: Use <code>#[cfg(feature = "metrics")]</code> to ensure zero overhead when disabled</li>
 <li><strong>Use predefined buckets</strong>: The <code>buckets</code> module has standard histogram buckets for common metric types</li>
 </ol>
-<h2 id="troubleshooting-7"><a class="header" href="#troubleshooting-7">Troubleshooting</a></h2>
+<h2 id="troubleshooting-8"><a class="header" href="#troubleshooting-8">Troubleshooting</a></h2>
 <h3 id="metrics-not-appearing"><a class="header" href="#metrics-not-appearing">Metrics not appearing</a></h3>
 <ol>
 <li>Verify the <code>metrics</code> feature is enabled at compile time</li>
@@ -3526,7 +3922,7 @@ labels = { env = "prod" }   # Add custom labels to all metrics
 <li>Ensure the <code>prometheus</code> feature is enabled (it’s separate from <code>metrics</code>)</li>
 <li>Check your build: <code>cargo build --features prometheus</code></li>
 </ol>
-<h3 id="high-memory-usage"><a class="header" href="#high-memory-usage">High memory usage</a></h3>
+<h3 id="high-memory-usage-1"><a class="header" href="#high-memory-usage-1">High memory usage</a></h3>
 <ul>
 <li>Check for high-cardinality labels (many unique label combinations)</li>
 <li>Consider reducing histogram bucket counts</li>
@@ -3595,8 +3991,79 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
-<li><strong>Contributor docs: local PR validation</strong>: Added documentation for the <code>./scripts/local-validate-pr.sh &lt;PR_ID&gt;</code> workflow, including published local status contexts, platform behavior, and CI fallback expectations.</li>
-<li><strong>Hooks Web UI</strong>: New <code>/hooks</code> page to manage lifecycle hooks from the browser
+<li>
+<p><strong>Browser Sandbox Mode</strong>: Run browser in isolated Docker containers for security</p>
+<ul>
+<li>Automatic container lifecycle management</li>
+<li>Uses <code>browserless/chrome</code> image by default (configurable via <code>sandbox_image</code>)</li>
+<li>Container readiness detection via HTTP endpoint probing</li>
+<li>Browser sandbox mode automatically follows the session’s sandbox mode
+(no separate <code>browser.sandbox</code> config - sandboxed sessions use sandboxed browser)</li>
+</ul>
+</li>
+<li>
+<p><strong>Memory-Based Browser Pool Limits</strong>: Browser instances now limited by system memory</p>
+<ul>
+<li><code>max_instances = 0</code> (default) allows unlimited instances, limited only by memory</li>
+<li><code>memory_limit_percent = 90</code> blocks new instances when system memory exceeds threshold</li>
+<li>Idle browsers cleaned up automatically before blocking</li>
+<li>Set <code>max_instances &gt; 0</code> for hard limit if preferred</li>
+</ul>
+</li>
+<li>
+<p><strong>Automatic Browser Session Tracking</strong>: Browser tool automatically reuses sessions</p>
+<ul>
+<li>Session ID is tracked internally and injected when LLM doesn’t provide one</li>
+<li>Prevents pool exhaustion from LLMs forgetting to pass session_id</li>
+<li>Session cleared on explicit “close” action</li>
+</ul>
+</li>
+<li>
+<p><strong>HiDPI Screenshot Support</strong>: Screenshots scale correctly on Retina displays</p>
+<ul>
+<li><code>device_scale_factor</code> config (default: 2.0) for high-DPI rendering</li>
+<li>Screenshot display in UI scales according to device pixel ratio</li>
+<li>Viewport increased to 2560×1440 for sharper captures</li>
+</ul>
+</li>
+<li>
+<p><strong>Enhanced Screenshot Lightbox</strong>:</p>
+<ul>
+<li>Scrollable container for viewing long/tall screenshots</li>
+<li>Download button at top of lightbox</li>
+<li>Visible ✕ close button instead of text hint</li>
+<li>Proper scaling for HiDPI displays</li>
+</ul>
+</li>
+<li>
+<p><strong>Telegram Screenshot Support</strong>: Browser screenshots sent to Telegram channels</p>
+<ul>
+<li>Automatic retry as document when image dimensions exceed Telegram limits</li>
+<li>Error messages sent to channel when screenshot delivery fails</li>
+<li>Handles <code>PHOTO_INVALID_DIMENSIONS</code> and <code>PHOTO_SAVE_FILE_INVALID</code> errors</li>
+</ul>
+</li>
+<li>
+<p><strong>Telegram Tool Status Notifications</strong>: See what’s happening during long operations</p>
+<ul>
+<li>Tool execution messages sent to Telegram (e.g., “🌐 Navigating to…”,
+“💻 Running: <code>git status</code>”, “📸 Taking screenshot…”)</li>
+<li>Messages sent silently (no notification sound) to avoid spam</li>
+<li>Typing indicator automatically re-sent after status messages</li>
+<li>Supports browser, exec, web_fetch, web_search, and memory tools</li>
+</ul>
+</li>
+<li>
+<p><strong>Log Target Display</strong>: Logs now include the crate/module path for easier debugging</p>
+<ul>
+<li>Example: <code>INFO moltis_gateway::chat: tool execution succeeded tool=browser</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Contributor docs: local PR validation</strong>: Added documentation for the <code>./scripts/local-validate-pr.sh &lt;PR_ID&gt;</code> workflow, including published local status contexts, platform behavior, and CI fallback expectations.</p>
+</li>
+<li>
+<p><strong>Hooks Web UI</strong>: New <code>/hooks</code> page to manage lifecycle hooks from the browser</p>
 <ul>
 <li>View all discovered hooks with eligibility status, source, and events</li>
 <li>Enable/disable hooks without removing files (persisted across restarts)</li>
@@ -3607,8 +4074,12 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li>RPC methods: <code>hooks.list</code>, <code>hooks.enable</code>, <code>hooks.disable</code>, <code>hooks.save</code>, <code>hooks.reload</code></li>
 </ul>
 </li>
-<li><strong>Deploy platform detection</strong>: New <code>MOLTIS_DEPLOY_PLATFORM</code> env var hides local-only providers (local-llm, Ollama) on cloud deployments. Pre-configured in Fly.io, DigitalOcean, and Render deploy templates.</li>
-<li><strong>Telegram OTP self-approval</strong>: Non-allowlisted DM users receive a 6-digit verification code instead of being silently ignored. Correct code entry auto-approves the user to the allowlist. Includes flood protection (non-code messages silently ignored), lockout after 3 failed attempts (configurable cooldown), and 5-minute code expiry. OTP codes visible in web UI Senders tab. Controlled by <code>otp_self_approval</code> (default: true) and <code>otp_cooldown_secs</code> (default: 300) config fields.</li>
+<li>
+<p><strong>Deploy platform detection</strong>: New <code>MOLTIS_DEPLOY_PLATFORM</code> env var hides local-only providers (local-llm, Ollama) on cloud deployments. Pre-configured in Fly.io, DigitalOcean, and Render deploy templates.</p>
+</li>
+<li>
+<p><strong>Telegram OTP self-approval</strong>: Non-allowlisted DM users receive a 6-digit verification code instead of being silently ignored. Correct code entry auto-approves the user to the allowlist. Includes flood protection (non-code messages silently ignored), lockout after 3 failed attempts (configurable cooldown), and 5-minute code expiry. OTP codes visible in web UI Senders tab. Controlled by <code>otp_self_approval</code> (default: true) and <code>otp_cooldown_secs</code> (default: 300) config fields.</p>
+</li>
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
@@ -3629,6 +4100,11 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>Sandbox UX on unsupported hosts</strong>: Disable sandbox controls in chat/images when no runtime backend is detected, with a tooltip explaining cloud deploy limitations.</li>
 <li><strong>Telegram OTP code echoed to LLM</strong>: After OTP self-approval, the verification code message was re-processed as a regular chat message because <code>sender_approve</code> restarted the bot polling loop (resetting the Telegram update offset). Sender approve/deny now hot-update the in-memory config without restarting the bot.</li>
 <li><strong>Empty allowlist bypassed access control</strong>: When <code>dm_policy = Allowlist</code> and all entries were removed, the empty list was treated as “allow everyone” instead of “deny everyone”. An explicit Allowlist policy with an empty list now correctly denies all access.</li>
+<li><strong>Browser sandbox timeout</strong>: Sandboxed browsers now use the configured
+<code>navigation_timeout_ms</code> (default 30s) instead of a shorter internal timeout.
+Previously, sandboxed browser connections could time out prematurely.</li>
+<li><strong>Tall screenshot lightbox</strong>: Full-page screenshots now display at proper size
+with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Telegram typing indicator for long responses</strong>: Channel replies now wait for outbound delivery tasks to finish before chat completion returns, so periodic <code>typing...</code> updates continue until the Telegram message is actually sent.</li>
 </ul>
 <h2 id="0110---2026-02-06"><a class="header" href="#0110---2026-02-06">[0.1.10] - 2026-02-06</a></h2>
@@ -3730,6 +4206,33 @@ with deploy buttons in the README</p>
 require PWA installation (Safari doesn’t support push in browser mode)</p>
 </li>
 <li>
+<p><strong>Browser Screenshot Thumbnails</strong>: Screenshots from the browser tool now display as
+clickable thumbnails in the chat UI</p>
+<ul>
+<li>Click to view fullscreen in a lightbox overlay</li>
+<li>Press Escape or click anywhere to close</li>
+<li>Thumbnails are 200×150px max with hover effects</li>
+</ul>
+</li>
+<li>
+<p><strong>Improved Browser Detection</strong>: Better cross-platform browser detection</p>
+<ul>
+<li>Checks macOS app bundles before PATH (avoids broken Homebrew chromium wrapper)</li>
+<li>Supports Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Arc</li>
+<li>Shows platform-specific installation instructions when no browser found</li>
+<li>Custom path via <code>chrome_path</code> config or <code>CHROME</code> environment variable</li>
+</ul>
+</li>
+<li>
+<p><strong>Vision Support for Screenshots</strong>: Vision-capable models can now interpret
+browser screenshots instead of having them stripped from context</p>
+<ul>
+<li>Screenshots sent as multimodal image content blocks for GPT-4o, Claude, Gemini</li>
+<li>Non-vision models continue to receive <code>[base64 data removed]</code> placeholder</li>
+<li><code>supports_vision()</code> trait method added to <code>LlmProvider</code> for capability detection</li>
+</ul>
+</li>
+<li>
 <p><strong>Session state store</strong>: per-session key-value persistence scoped by
 namespace, backed by SQLite (<code>session_state</code> tool).</p>
 </li>
@@ -3825,6 +4328,14 @@ registration.</p>
 <li>Missing space in Safari install instructions (“usingFile” → “using File”)</li>
 <li><strong>WebSocket origin validation</strong> now treats <code>.localhost</code> subdomains
 (e.g. <code>moltis.localhost</code>) as loopback equivalents per RFC 6761.</li>
+<li><strong>Browser tool schema enforcement</strong>: Added <code>strict: true</code> and <code>additionalProperties: false</code>
+to OpenAI-compatible tool schemas, improving model compliance with required fields</li>
+<li><strong>Browser tool defaults</strong>: When model sends URL without action, defaults to <code>navigate</code>
+instead of erroring</li>
+<li><strong>Chat message ordering</strong>: Fixed interleaving of text and tool cards when streaming;
+messages now appear in correct chronological order</li>
+<li><strong>Tool passthrough in ProviderChain</strong>: Fixed tools not being passed to fallback
+providers when using provider chains</li>
 <li>Fork/branch icon in session sidebar now renders cleanly at 16px (replaced
 complex git-branch SVG with simple trunk+branch path).</li>
 <li>Deleting a forked session now navigates to the parent session instead of
@@ -3857,6 +4368,8 @@ discovers and includes them alongside registry skills.</li>
 <ul>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
 <li>Updated CLAUDE.md with cargo feature policy (features enabled by default)</li>
+<li>Updated browser-automation.md with browser detection, screenshot display, and
+model error handling sections</li>
 <li>Rewrote session-branching.md with accurate fork details, UI methods, RPC
 API, inheritance table, and deletion behavior.</li>
 </ul>
