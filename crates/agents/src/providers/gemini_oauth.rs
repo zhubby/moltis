@@ -27,6 +27,9 @@ use {
 
 use crate::model::{CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage};
 
+// Re-export GeminiModelInfo from the api-key provider for shared use
+pub use super::gemini::GeminiModelInfo;
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com";
@@ -95,6 +98,12 @@ impl GeminiOAuthProvider {
         flow.refresh(refresh_token).await
     }
 
+    /// List available models using stored OAuth credentials.
+    pub async fn list_available_models(&self) -> anyhow::Result<Vec<GeminiModelInfo>> {
+        let token = self.get_valid_token().await?;
+        list_models_with_token(&token, GEMINI_API_BASE).await
+    }
+
     /// Get a valid access token, refreshing if needed.
     async fn get_valid_token(&self) -> anyhow::Result<String> {
         let tokens = self.token_store.load(PROVIDER_NAME).ok_or_else(|| {
@@ -142,6 +151,105 @@ pub fn has_stored_tokens() -> bool {
 pub fn save_tokens(tokens: &OAuthTokens) -> anyhow::Result<()> {
     TokenStore::new().save(PROVIDER_NAME, tokens)?;
     Ok(())
+}
+
+// ── Model Listing ────────────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListModelsResponse {
+    models: Vec<GeminiModelInfo>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+/// List available Gemini models using OAuth authentication.
+///
+/// Returns models that support text generation, sorted by name.
+/// Requires stored OAuth tokens from a prior authentication.
+pub async fn list_models_oauth() -> anyhow::Result<Vec<GeminiModelInfo>> {
+    let store = TokenStore::new();
+    let tokens = store
+        .load(PROVIDER_NAME)
+        .ok_or_else(|| anyhow::anyhow!("not logged in to gemini-oauth — run OAuth flow first"))?;
+
+    // Check if token needs refresh
+    let access_token = if needs_token_refresh(&tokens) {
+        let config = load_oauth_config(PROVIDER_NAME)
+            .ok_or_else(|| anyhow::anyhow!("gemini-oauth configuration not found"))?;
+
+        if let Some(ref refresh_token) = tokens.refresh_token {
+            let flow = OAuthFlow::new(config);
+            let new_tokens = flow.refresh(refresh_token.expose_secret()).await?;
+            store.save(PROVIDER_NAME, &new_tokens)?;
+            new_tokens.access_token.expose_secret().clone()
+        } else {
+            anyhow::bail!("token expired and no refresh token available");
+        }
+    } else {
+        tokens.access_token.expose_secret().clone()
+    };
+
+    list_models_with_token(&access_token, GEMINI_API_BASE).await
+}
+
+/// List available Gemini models with an OAuth access token and custom base URL.
+pub async fn list_models_with_token(
+    access_token: &str,
+    base_url: &str,
+) -> anyhow::Result<Vec<GeminiModelInfo>> {
+    let client = reqwest::Client::new();
+    let mut all_models = Vec::new();
+    let mut page_token: Option<String> = None;
+
+    loop {
+        let mut url = format!("{}/v1beta/models", base_url);
+        if let Some(ref token) = page_token {
+            url.push_str(&format!("?pageToken={}", token));
+        }
+
+        let resp = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to list Gemini models: HTTP {status}: {body}");
+        }
+
+        let list_resp: ListModelsResponse = resp.json().await?;
+        all_models.extend(list_resp.models);
+
+        match list_resp.next_page_token {
+            Some(token) if !token.is_empty() => page_token = Some(token),
+            _ => break,
+        }
+    }
+
+    // Filter to models that support generation and sort by name
+    let mut models: Vec<_> = all_models
+        .into_iter()
+        .filter(|m| m.supports_generation())
+        .collect();
+    models.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(models)
+}
+
+/// Check if the stored token needs refresh (within REFRESH_THRESHOLD_SECS of expiry).
+fn needs_token_refresh(tokens: &OAuthTokens) -> bool {
+    if let Some(expires_at) = tokens.expires_at {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        now + REFRESH_THRESHOLD_SECS >= expires_at
+    } else {
+        false
+    }
 }
 
 /// Known Gemini models available via OAuth.
@@ -691,5 +799,151 @@ mod tests {
     fn context_window_uses_lookup() {
         let provider = GeminiOAuthProvider::new("gemini-2.0-flash".into());
         assert_eq!(provider.context_window(), 1_000_000);
+    }
+
+    #[test]
+    fn gemini_model_info_model_id_strips_prefix() {
+        let info = GeminiModelInfo {
+            name: "models/gemini-2.0-flash".into(),
+            display_name: "Gemini 2.0 Flash".into(),
+            input_token_limit: 1_000_000,
+            output_token_limit: 8192,
+            supported_generation_methods: vec!["generateContent".into()],
+        };
+        assert_eq!(info.model_id(), "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn gemini_model_info_model_id_handles_no_prefix() {
+        let info = GeminiModelInfo {
+            name: "gemini-2.0-flash".into(),
+            display_name: "Gemini 2.0 Flash".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec![],
+        };
+        assert_eq!(info.model_id(), "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn gemini_model_info_supports_generation() {
+        let info = GeminiModelInfo {
+            name: "models/gemini-2.0-flash".into(),
+            display_name: "".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec!["generateContent".into(), "embedContent".into()],
+        };
+        assert!(info.supports_generation());
+
+        let info_no_gen = GeminiModelInfo {
+            name: "models/text-embedding".into(),
+            display_name: "".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec!["embedContent".into()],
+        };
+        assert!(!info_no_gen.supports_generation());
+    }
+
+    #[test]
+    fn needs_token_refresh_returns_false_when_no_expiry() {
+        use secrecy::Secret;
+        let tokens = OAuthTokens {
+            access_token: Secret::new("test".into()),
+            refresh_token: None,
+            expires_at: None,
+        };
+        assert!(!needs_token_refresh(&tokens));
+    }
+
+    #[test]
+    fn needs_token_refresh_returns_true_when_expired() {
+        use secrecy::Secret;
+        // Token that expired 10 minutes ago
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = OAuthTokens {
+            access_token: Secret::new("test".into()),
+            refresh_token: None,
+            expires_at: Some(now - 600),
+        };
+        assert!(needs_token_refresh(&tokens));
+    }
+
+    #[test]
+    fn needs_token_refresh_returns_true_within_threshold() {
+        use secrecy::Secret;
+        // Token expiring in 2 minutes (within 5-minute threshold)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = OAuthTokens {
+            access_token: Secret::new("test".into()),
+            refresh_token: None,
+            expires_at: Some(now + 120),
+        };
+        assert!(needs_token_refresh(&tokens));
+    }
+
+    #[test]
+    fn needs_token_refresh_returns_false_when_fresh() {
+        use secrecy::Secret;
+        // Token expiring in 1 hour
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let tokens = OAuthTokens {
+            access_token: Secret::new("test".into()),
+            refresh_token: None,
+            expires_at: Some(now + 3600),
+        };
+        assert!(!needs_token_refresh(&tokens));
+    }
+
+    #[test]
+    fn list_models_response_deserializes() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-2.0-flash",
+                    "displayName": "Gemini 2.0 Flash",
+                    "inputTokenLimit": 1000000,
+                    "outputTokenLimit": 8192,
+                    "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+                }
+            ],
+            "nextPageToken": "abc123"
+        }"#;
+        let resp: ListModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.models.len(), 1);
+        assert_eq!(resp.models[0].model_id(), "gemini-2.0-flash");
+        assert_eq!(resp.models[0].display_name, "Gemini 2.0 Flash");
+        assert_eq!(resp.models[0].input_token_limit, 1_000_000);
+        assert!(resp.models[0].supports_generation());
+        assert_eq!(resp.next_page_token, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn list_models_response_handles_missing_fields() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-test"
+                }
+            ]
+        }"#;
+        let resp: ListModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.models.len(), 1);
+        assert_eq!(resp.models[0].model_id(), "gemini-test");
+        assert_eq!(resp.models[0].display_name, "");
+        assert_eq!(resp.models[0].input_token_limit, 0);
+        assert_eq!(resp.models[0].output_token_limit, 0);
+        assert!(!resp.models[0].supports_generation());
+        assert!(resp.next_page_token.is_none());
     }
 }

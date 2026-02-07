@@ -6,6 +6,102 @@ use tracing::{debug, trace, warn};
 
 use crate::model::{CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage};
 
+/// Information about a Gemini model returned from the API.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiModelInfo {
+    /// Full resource name (e.g., "models/gemini-2.0-flash")
+    pub name: String,
+    /// Human-readable display name
+    #[serde(default)]
+    pub display_name: String,
+    /// Maximum input tokens (context window)
+    #[serde(default)]
+    pub input_token_limit: u32,
+    /// Maximum output tokens
+    #[serde(default)]
+    pub output_token_limit: u32,
+    /// Supported generation methods (e.g., "generateContent", "streamGenerateContent")
+    #[serde(default)]
+    pub supported_generation_methods: Vec<String>,
+}
+
+impl GeminiModelInfo {
+    /// Extract the model ID from the full resource name.
+    /// E.g., "models/gemini-2.0-flash" -> "gemini-2.0-flash"
+    pub fn model_id(&self) -> &str {
+        self.name.strip_prefix("models/").unwrap_or(&self.name)
+    }
+
+    /// Check if this model supports text generation.
+    pub fn supports_generation(&self) -> bool {
+        self.supported_generation_methods
+            .iter()
+            .any(|m| m == "generateContent")
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListModelsResponse {
+    models: Vec<GeminiModelInfo>,
+    #[serde(default)]
+    next_page_token: Option<String>,
+}
+
+/// List available Gemini models using an API key.
+///
+/// Returns models that support text generation, sorted by name.
+pub async fn list_models(api_key: &str) -> anyhow::Result<Vec<GeminiModelInfo>> {
+    list_models_with_base_url(api_key, "https://generativelanguage.googleapis.com").await
+}
+
+/// List available Gemini models with a custom base URL.
+pub async fn list_models_with_base_url(
+    api_key: &str,
+    base_url: &str,
+) -> anyhow::Result<Vec<GeminiModelInfo>> {
+    let client = reqwest::Client::new();
+    let mut all_models = Vec::new();
+    let mut page_token: Option<String> = None;
+
+    loop {
+        let mut url = format!("{}/v1beta/models", base_url);
+        if let Some(ref token) = page_token {
+            url.push_str(&format!("?pageToken={}", token));
+        }
+
+        let resp = client
+            .get(&url)
+            .header("x-goog-api-key", api_key)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to list Gemini models: HTTP {status}: {body}");
+        }
+
+        let list_resp: ListModelsResponse = resp.json().await?;
+        all_models.extend(list_resp.models);
+
+        match list_resp.next_page_token {
+            Some(token) if !token.is_empty() => page_token = Some(token),
+            _ => break,
+        }
+    }
+
+    // Filter to models that support generation and sort by name
+    let mut models: Vec<_> = all_models
+        .into_iter()
+        .filter(|m| m.supports_generation())
+        .collect();
+    models.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(models)
+}
+
 pub struct GeminiProvider {
     api_key: secrecy::Secret<String>,
     model: String,
@@ -21,6 +117,11 @@ impl GeminiProvider {
             base_url,
             client: reqwest::Client::new(),
         }
+    }
+
+    /// List available models using this provider's API key.
+    pub async fn list_available_models(&self) -> anyhow::Result<Vec<GeminiModelInfo>> {
+        list_models_with_base_url(self.api_key.expose_secret(), &self.base_url).await
     }
 }
 
@@ -658,5 +759,109 @@ mod tests {
             "https://example.com".into(),
         );
         assert_eq!(provider.context_window(), 1_000_000);
+    }
+
+    // ── Model listing tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn gemini_model_info_model_id_strips_prefix() {
+        let info = GeminiModelInfo {
+            name: "models/gemini-2.0-flash".into(),
+            display_name: "Gemini 2.0 Flash".into(),
+            input_token_limit: 1_000_000,
+            output_token_limit: 8192,
+            supported_generation_methods: vec!["generateContent".into()],
+        };
+        assert_eq!(info.model_id(), "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn gemini_model_info_model_id_handles_no_prefix() {
+        let info = GeminiModelInfo {
+            name: "gemini-2.0-flash".into(),
+            display_name: "".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec![],
+        };
+        assert_eq!(info.model_id(), "gemini-2.0-flash");
+    }
+
+    #[test]
+    fn gemini_model_info_supports_generation() {
+        let info = GeminiModelInfo {
+            name: "models/gemini-2.0-flash".into(),
+            display_name: "".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec!["generateContent".into(), "embedContent".into()],
+        };
+        assert!(info.supports_generation());
+    }
+
+    #[test]
+    fn gemini_model_info_not_generation_model() {
+        let info = GeminiModelInfo {
+            name: "models/text-embedding".into(),
+            display_name: "".into(),
+            input_token_limit: 0,
+            output_token_limit: 0,
+            supported_generation_methods: vec!["embedContent".into()],
+        };
+        assert!(!info.supports_generation());
+    }
+
+    #[test]
+    fn list_models_response_deserializes() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-2.0-flash",
+                    "displayName": "Gemini 2.0 Flash",
+                    "inputTokenLimit": 1000000,
+                    "outputTokenLimit": 8192,
+                    "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]
+                }
+            ],
+            "nextPageToken": "abc123"
+        }"#;
+        let resp: ListModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.models.len(), 1);
+        assert_eq!(resp.models[0].model_id(), "gemini-2.0-flash");
+        assert_eq!(resp.models[0].display_name, "Gemini 2.0 Flash");
+        assert_eq!(resp.models[0].input_token_limit, 1_000_000);
+        assert!(resp.models[0].supports_generation());
+        assert_eq!(resp.next_page_token, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn list_models_response_handles_missing_fields() {
+        let json = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-test"
+                }
+            ]
+        }"#;
+        let resp: ListModelsResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.models.len(), 1);
+        assert_eq!(resp.models[0].model_id(), "gemini-test");
+        assert_eq!(resp.models[0].display_name, "");
+        assert_eq!(resp.models[0].input_token_limit, 0);
+        assert_eq!(resp.models[0].output_token_limit, 0);
+        assert!(!resp.models[0].supports_generation());
+        assert!(resp.next_page_token.is_none());
+    }
+
+    #[test]
+    fn list_models_response_handles_empty_next_page_token() {
+        let json = r#"{
+            "models": [],
+            "nextPageToken": ""
+        }"#;
+        let resp: ListModelsResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.models.is_empty());
+        // Empty string should be treated as no token (our code checks for this)
+        assert_eq!(resp.next_page_token, Some("".to_string()));
     }
 }
