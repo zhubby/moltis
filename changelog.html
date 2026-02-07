@@ -286,6 +286,10 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <li><strong>Release packaging</strong>: Derive release artifact versions from the Git tag (<code>vX.Y.Z</code>) in CI, and sync package metadata during release jobs to prevent filename/version drift.</li>
 <li><strong>Versioning</strong>: Bump workspace and snap baseline version to <code>0.2.0</code>.</li>
 <li><strong>Onboarding auth flow</strong>: Route first-run setup directly into <code>/onboarding</code> and remove the separate <code>/setup</code> web UI page.</li>
+<li><strong>Exec approval policy wiring</strong>: Gateway now initializes exec approval mode/security level/allowlist from <code>moltis.toml</code> (<code>tools.exec.*</code>) instead of always using hardcoded defaults.</li>
+<li><strong>Runtime tool enforcement</strong>: Chat runs now apply configured tool policy (<code>tools.policy</code>) and skill <code>allowed_tools</code> constraints when selecting callable tools.</li>
+<li><strong>Skill trust lifecycle</strong>: Installed marketplace skills/plugins now track a <code>trusted</code> state and must be trusted before they can be enabled; the skills UI now surfaces untrusted status and supports trust-before-enable.</li>
+<li><strong>Git metadata via gitoxide</strong>: Gateway now resolves branch names, repo HEAD SHAs, and commit timestamps using <code>gix</code> (gitoxide) instead of shelling out to <code>git</code> for those read-only operations.</li>
 </ul>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
@@ -305,6 +309,31 @@ Previously, sandboxed browser connections could time out prematurely.</li>
 <li><strong>Tall screenshot lightbox</strong>: Full-page screenshots now display at proper size
 with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Telegram typing indicator for long responses</strong>: Channel replies now wait for outbound delivery tasks to finish before chat completion returns, so periodic <code>typing...</code> updates continue until the Telegram message is actually sent.</li>
+<li><strong>Skills dependency install safety</strong>: <code>skills.install_dep</code> now requires explicit user confirmation and blocks host installs when sandbox mode is disabled (unless explicitly overridden in the RPC call).</li>
+</ul>
+<h3 id="security"><a class="header" href="#security">Security</a></h3>
+<ul>
+<li><strong>Asset response hardening</strong>: Static assets now set <code>X-Content-Type-Options: nosniff</code>, and SVG responses include a restrictive <code>Content-Security-Policy</code> (<code>script-src 'none'</code>, <code>object-src 'none'</code>) to reduce stored-XSS risk if user-controlled SVGs are ever introduced.</li>
+<li><strong>Archive extraction hardening</strong>: Skills/plugin tarball installs now reject unsafe archive paths (<code>..</code>, absolute/path-prefix escapes) and reject symlink/hardlink archive entries to prevent path traversal and link-based escapes.</li>
+<li><strong>Install provenance</strong>: Installed skill/plugin repo manifests now persist a pinned <code>commit_sha</code> (resolved from clone or API fallback) for future trust drift detection.</li>
+<li><strong>Re-trust on source drift</strong>: If an installed git-backed repo’s HEAD commit changes from the pinned <code>commit_sha</code>, the gateway now marks its skills untrusted+disabled and requires trust again before re-enabling; the UI surfaces this as <code>source changed</code>.</li>
+<li><strong>Security audit trail</strong>: Skill/plugin install, remove, trust, enable/disable, dependency install, and source-drift events are now appended to <code>~/.moltis/logs/security-audit.jsonl</code> for incident review.</li>
+<li><strong>Emergency kill switch</strong>: Added <code>skills.emergency_disable</code> to immediately disable all installed third-party skills and plugins; exposed in the Skills UI as a one-click emergency action.</li>
+<li><strong>Risky dependency install blocking</strong>: <code>skills.install_dep</code> now blocks suspicious install command patterns by default (e.g. piped shell payloads, base64 decode chains, quarantine bypass) unless explicitly overridden with <code>allow_risky_install=true</code>.</li>
+<li><strong>Provenance visibility</strong>: Skills UI now displays pinned install commit SHA in repo and detail views to make source provenance easier to verify.</li>
+<li><strong>Recent-commit risk warnings</strong>: Skill/plugin detail views now include commit links and commit-age indicators, with a prominent warning banner when the pinned commit is very recent.</li>
+<li><strong>Installer subprocess reduction</strong>: Skills/plugins install paths now avoid <code>git</code> subprocess clone attempts and use GitHub tarball installs with pinned commit metadata.</li>
+<li><strong>Install resilience for rapid multi-repo installs</strong>: Skills/plugins install now auto-clean stale on-disk directories that are missing from manifest state, and tar extraction skips link entries instead of failing the whole install.</li>
+<li><strong>Orphaned repo visibility</strong>: Skills/plugins repo listing now surfaces manifest-missing directories found on disk as <code>orphaned</code> entries and allows removing them from the UI.</li>
+<li><strong>Protected seed skills</strong>: Discovered template skills (<code>template-skill</code> / <code>template</code>) are now marked protected and cannot be deleted from the web UI.</li>
+<li><strong>License review links</strong>: Skill/plugin license badges now link directly to repository license files when detectable (e.g. <code>LICENSE.txt</code>, <code>LICENSE.md</code>, <code>LICENSE</code>).</li>
+<li><strong>Example skill seeding</strong>: Gateway now seeds <code>~/.moltis/skills/template-skill/SKILL.md</code> on startup when missing, so users always have a starter personal skill template.</li>
+<li><strong>Memory indexing scope tightened</strong>: Memory sync now indexes only <code>MEMORY.md</code> / <code>memory.md</code> and <code>memory/</code> content by default (instead of scanning the entire data root), reducing irrelevant indexing noise from installed skills/plugins.</li>
+<li><strong>Ollama embedding bootstrap</strong>: When using Ollama for memory embeddings, gateway now auto-attempts to pull missing embedding models (default <code>nomic-embed-text</code>) via Ollama HTTP API.</li>
+</ul>
+<h3 id="documentation"><a class="header" href="#documentation">Documentation</a></h3>
+<ul>
+<li>Added <code>docs/src/skills-security.md</code> with third-party skills/plugin hardening guidance (trust lifecycle, provenance pinning, source-drift re-trust, risky install guards, emergency disable, and security audit logging).</li>
 </ul>
 <h2 id="0110---2026-02-06"><a class="header" href="#0110---2026-02-06">[0.1.10] - 2026-02-06</a></h2>
 <h3 id="changed-1"><a class="header" href="#changed-1">Changed</a></h3>
@@ -563,7 +592,7 @@ only returned manifest-based registry skills. Personal and project-local
 skills were never shown in the navigation or skills page. The endpoint now
 discovers and includes them alongside registry skills.</li>
 </ul>
-<h3 id="documentation"><a class="header" href="#documentation">Documentation</a></h3>
+<h3 id="documentation-1"><a class="header" href="#documentation-1">Documentation</a></h3>
 <ul>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
 <li>Updated CLAUDE.md with cargo feature policy (features enabled by default)</li>
