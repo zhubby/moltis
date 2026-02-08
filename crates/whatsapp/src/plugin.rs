@@ -467,6 +467,7 @@ fn handle_sidecar_message(
                     channel_type: ChannelType::WhatsappWeb,
                     sender_name,
                     username: None,
+                    message_kind: None,
                     model: config.as_ref().and_then(|c| c.model.clone()),
                 };
                 tokio::spawn(async move {

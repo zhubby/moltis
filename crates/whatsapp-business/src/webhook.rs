@@ -240,6 +240,7 @@ pub async fn process_webhook(
                         channel_type: ChannelType::Whatsapp,
                         sender_name,
                         username: None,
+                        message_kind: None,
                         model: config.model.clone(),
                     };
                     sink.dispatch_to_chat(&text, reply_target, meta).await;
