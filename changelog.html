@@ -188,6 +188,7 @@
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
+<h2 id="028---2026-02-07"><a class="header" href="#028---2026-02-07">[0.2.8] - 2026-02-07</a></h2>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
 <li><strong>Unified plugins and skills into a single system</strong>: Plugins and skills were separate
@@ -197,9 +198,16 @@ Codex) are managed through a single <code>skills-manifest.json</code> and <code>
 directory. The <code>/plugins</code> page has been removed — everything is accessible from the
 <code>/skills</code> page. A one-time startup migration automatically moves data from the old
 plugins manifest and directory into the new unified location.</li>
+<li><strong>Default config template voice list narrowed</strong>: New generated configs now include a
+<code>[voice]</code> section with provider-list allowlists limited to ElevenLabs for TTS and
+Mistral + ElevenLabs for STT.</li>
 </ul>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
+<li><strong>Update checker repository configuration</strong>: The update checker now reads
+<code>server.update_repository_url</code> from <code>moltis.toml</code>, defaults new configs to
+<code>https://github.com/moltis-org/moltis</code>, and treats an omitted/commented value
+as explicitly disabled.</li>
 <li><strong>Mistral and other providers rejecting requests with HTTP 422</strong>: Session metadata fields
 (<code>created_at</code>, <code>model</code>, <code>provider</code>, <code>inputTokens</code>, <code>outputTokens</code>) were leaking into
 provider API request bodies. Mistral’s strict validation rejected the extra <code>created_at</code>
@@ -207,9 +215,46 @@ field. Replaced <code>Vec&lt;serde_json::Value&gt;</code> with a typed <code>Cha
 <code>LlmProvider</code> trait — metadata can no longer leak because the type only contains
 LLM-relevant fields (<code>role</code>, <code>content</code>, <code>tool_calls</code>). Conversion from persisted JSON
 happens once at the gateway boundary via <code>values_to_chat_messages()</code>.</li>
+<li><strong>Chat skill creation not persisting new skills</strong>: Runtime tool filtering incorrectly
+applied the union of discovered skill <code>allowed_tools</code> to all chat turns, which could
+hide <code>create_skill</code>/<code>update_skill</code> and leave only a subset (for example <code>web_fetch</code>).
+Chat runs now use configured tool policy for runtime filtering without globally
+restricting tools based on discovered skill metadata.</li>
 </ul>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li>
+<p><strong>Voice Provider Management UI</strong>: Configure TTS and STT providers from Settings &gt; Voice</p>
+<ul>
+<li>Auto-detection of API keys from environment variables and LLM provider configs</li>
+<li>Toggle switches to enable/disable providers without removing configuration</li>
+<li>Local binary detection for whisper.cpp, piper, and sherpa-onnx</li>
+<li>Server availability checks for Coqui TTS and Voxtral Local</li>
+<li>Setup instructions modal for local provider installation</li>
+<li>Shared Google Cloud API key between TTS and STT</li>
+</ul>
+</li>
+<li>
+<p><strong>Voice provider UI allowlists</strong>: Added <code>voice.tts.providers</code> and <code>voice.stt.providers</code>
+config lists to control which TTS/STT providers are shown in the Settings UI.
+Empty lists keep current behavior and show all providers.</p>
+</li>
+<li>
+<p><strong>New TTS Providers</strong>:</p>
+<ul>
+<li>Google Cloud Text-to-Speech (380+ voices, 50+ languages)</li>
+<li>Piper (fast local neural TTS, runs offline)</li>
+<li>Coqui TTS (high-quality neural TTS with voice cloning)</li>
+</ul>
+</li>
+<li>
+<p><strong>New STT Providers</strong>:</p>
+<ul>
+<li>ElevenLabs Scribe (90+ languages, word timestamps, speaker diarization)</li>
+<li>Mistral AI Voxtral (cloud-based, 13 languages)</li>
+<li>Voxtral Local via vLLM (self-hosted with OpenAI-compatible API)</li>
+</ul>
+</li>
 <li>
 <p><strong>Browser Sandbox Mode</strong>: Run browser in isolated Docker containers for security</p>
 <ul>
@@ -628,6 +673,7 @@ discovers and includes them alongside registry skills.</li>
 </ul>
 <h3 id="documentation-1"><a class="header" href="#documentation-1">Documentation</a></h3>
 <ul>
+<li>Added voice.md with TTS/STT provider documentation and setup guides</li>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
 <li>Updated CLAUDE.md with cargo feature policy (features enabled by default)</li>
 <li>Updated browser-automation.md with browser detection, screenshot display, and

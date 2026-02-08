@@ -1853,6 +1853,563 @@ memory_limit = "512M"
 cpu_quota = 1.0
 pids_max = 256
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="voice-services"><a class="header" href="#voice-services">Voice Services</a></h1>
+<p>Moltis provides text-to-speech (TTS) and speech-to-text (STT) capabilities
+through the <code>moltis-voice</code> crate and gateway integration.</p>
+<h2 id="feature-flag-1"><a class="header" href="#feature-flag-1">Feature Flag</a></h2>
+<p>Voice services are behind the <code>voice</code> cargo feature, enabled by default:</p>
+<pre><code class="language-toml"># Cargo.toml (gateway crate)
+[features]
+default = ["voice", ...]
+voice = ["dep:moltis-voice"]
+</code></pre>
+<p>To disable voice features at compile time:</p>
+<pre><code class="language-bash">cargo build --no-default-features --features "file-watcher,tailscale,tls,web-ui"
+</code></pre>
+<p>When disabled:</p>
+<ul>
+<li>TTS/STT RPC methods are not registered</li>
+<li>Voice settings section is hidden in the UI</li>
+<li>Microphone button is hidden in the chat interface</li>
+<li><code>voice_enabled: false</code> is set in the gon data</li>
+</ul>
+<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────────┐
+│                      Voice Crate                            │
+│                   (crates/voice/)                           │
+├─────────────────────────────────────────────────────────────┤
+│  TtsProvider trait         │  SttProvider trait             │
+│  ├─ ElevenLabsTts          │  ├─ WhisperStt (OpenAI)        │
+│  ├─ OpenAiTts              │  ├─ GroqStt (Groq)             │
+│  ├─ GoogleTts              │  ├─ DeepgramStt                │
+│  ├─ PiperTts (local)       │  ├─ GoogleStt                  │
+│  └─ CoquiTts (local)       │  ├─ MistralStt                 │
+│                            │  ├─ VoxtralLocalStt (local)    │
+│                            │  ├─ WhisperCliStt (local)      │
+│                            │  └─ SherpaOnnxStt (local)      │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Gateway Services                         │
+│                (crates/gateway/src/voice.rs)                │
+├─────────────────────────────────────────────────────────────┤
+│  LiveTtsService            │  LiveSttService                │
+│  (wraps TTS providers)     │  (wraps STT providers)         │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     RPC Methods                             │
+├─────────────────────────────────────────────────────────────┤
+│  tts.status, tts.providers, tts.enable, tts.disable,        │
+│  tts.convert, tts.setProvider                               │
+│  stt.status, stt.providers, stt.transcribe, stt.setProvider │
+└─────────────────────────────────────────────────────────────┘
+</code></pre>
+<h2 id="text-to-speech-tts"><a class="header" href="#text-to-speech-tts">Text-to-Speech (TTS)</a></h2>
+<h3 id="supported-providers-1"><a class="header" href="#supported-providers-1">Supported Providers</a></h3>
+<p>Moltis supports 5 TTS providers: 3 cloud-based and 2 local.</p>
+<h4 id="cloud-providers"><a class="header" href="#cloud-providers">Cloud Providers</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Model</th><th>Latency</th><th>Notes</th></tr></thead><tbody>
+<tr><td>ElevenLabs</td><td><code>eleven_flash_v2_5</code></td><td>~75ms</td><td>Lowest latency, voice cloning</td></tr>
+<tr><td>ElevenLabs</td><td><code>eleven_turbo_v2_5</code></td><td>~250ms</td><td>Higher quality</td></tr>
+<tr><td>OpenAI</td><td><code>tts-1</code></td><td>~200ms</td><td>Real-time optimized</td></tr>
+<tr><td>OpenAI</td><td><code>tts-1-hd</code></td><td>~400ms</td><td>Higher quality</td></tr>
+<tr><td>Google Cloud</td><td>Various</td><td>~150ms</td><td>380+ voices, 50+ languages</td></tr>
+</tbody></table>
+</div>
+<h4 id="local-providers"><a class="header" href="#local-providers">Local Providers</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Binary/Server</th><th>Notes</th></tr></thead><tbody>
+<tr><td>Piper</td><td><code>piper</code> binary</td><td>Fast neural TTS, many voices, runs offline</td></tr>
+<tr><td>Coqui TTS</td><td>TTS server</td><td>High-quality neural TTS with voice cloning</td></tr>
+</tbody></table>
+</div>
+<h3 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h3>
+<p>Set API keys via environment variables:</p>
+<pre><code class="language-bash">export ELEVENLABS_API_KEY=your-key-here
+export OPENAI_API_KEY=your-key-here
+</code></pre>
+<p>Or configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.tts]
+enabled = true
+provider = "elevenlabs"  # or "openai"
+providers = []           # Optional UI allowlist, empty = show all TTS providers
+auto = "off"             # "always", "off", "inbound", "tagged"
+max_text_length = 2000
+
+[voice.tts.elevenlabs]
+api_key = "sk-..."
+voice_id = "21m00Tcm4TlvDq8ikWAM"  # Rachel (default)
+model = "eleven_flash_v2_5"
+stability = 0.5
+similarity_boost = 0.75
+
+[voice.tts.openai]
+api_key = "sk-..."
+voice = "alloy"  # alloy, echo, fable, onyx, nova, shimmer
+model = "tts-1"
+speed = 1.0
+
+[voice.tts.google]
+api_key = "..."  # Google Cloud API key
+voice = "en-US-Neural2-D"  # See Google Cloud TTS voices
+language_code = "en-US"
+speaking_rate = 1.0
+
+# Local providers - no API key required
+
+[voice.tts.piper]
+# binary_path = "/usr/local/bin/piper"  # optional, searches PATH
+model_path = "~/.moltis/models/en_US-lessac-medium.onnx"  # required
+# config_path = "~/.moltis/models/en_US-lessac-medium.onnx.json"  # optional
+# speaker_id = 0  # for multi-speaker models
+# length_scale = 1.0  # speaking rate (lower = faster)
+
+[voice.tts.coqui]
+endpoint = "http://localhost:5002"  # Coqui TTS server
+# model = "tts_models/en/ljspeech/tacotron2-DDC"  # optional
+</code></pre>
+<h3 id="local-tts-provider-setup"><a class="header" href="#local-tts-provider-setup">Local TTS Provider Setup</a></h3>
+<h4 id="piper-tts"><a class="header" href="#piper-tts">Piper TTS</a></h4>
+<p>Piper is a fast, local neural text-to-speech system that runs entirely offline.</p>
+<ol>
+<li>
+<p>Install Piper:</p>
+<pre><code class="language-bash"># Via pip
+pip install piper-tts
+
+# Or download pre-built binaries from:
+# https://github.com/rhasspy/piper/releases
+</code></pre>
+</li>
+<li>
+<p>Download a voice model from <a href="https://github.com/rhasspy/piper#voices">Piper Voices</a>:</p>
+<pre><code class="language-bash">mkdir -p ~/.moltis/models
+curl -L -o ~/.moltis/models/en_US-lessac-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+</code></pre>
+</li>
+<li>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.tts]
+provider = "piper"
+
+[voice.tts.piper]
+model_path = "~/.moltis/models/en_US-lessac-medium.onnx"
+</code></pre>
+</li>
+</ol>
+<h4 id="coqui-tts"><a class="header" href="#coqui-tts">Coqui TTS</a></h4>
+<p>Coqui TTS is a high-quality neural TTS with voice cloning capabilities.</p>
+<ol>
+<li>
+<p>Install and start the server:</p>
+<pre><code class="language-bash"># Via pip
+pip install TTS
+tts-server --model_name tts_models/en/ljspeech/tacotron2-DDC
+
+# Or via Docker
+docker run -p 5002:5002 ghcr.io/coqui-ai/tts
+</code></pre>
+</li>
+<li>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.tts]
+provider = "coqui"
+
+[voice.tts.coqui]
+endpoint = "http://localhost:5002"
+</code></pre>
+</li>
+</ol>
+<p>Browse available models at <a href="https://github.com/coqui-ai/TTS#available-models">Coqui TTS Models</a>.</p>
+<h3 id="rpc-methods"><a class="header" href="#rpc-methods">RPC Methods</a></h3>
+<h4 id="ttsstatus"><a class="header" href="#ttsstatus"><code>tts.status</code></a></h4>
+<p>Get current TTS status.</p>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{
+  "enabled": true,
+  "provider": "elevenlabs",
+  "auto": "off",
+  "maxTextLength": 2000,
+  "configured": true
+}
+</code></pre>
+<h4 id="ttsproviders"><a class="header" href="#ttsproviders"><code>tts.providers</code></a></h4>
+<p>List available TTS providers.</p>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">[
+  { "id": "elevenlabs", "name": "ElevenLabs", "configured": true },
+  { "id": "openai", "name": "OpenAI", "configured": false }
+]
+</code></pre>
+<h4 id="ttsenable"><a class="header" href="#ttsenable"><code>tts.enable</code></a></h4>
+<p>Enable TTS with optional provider selection.</p>
+<p><strong>Request:</strong></p>
+<pre><code class="language-json">{ "provider": "elevenlabs" }
+</code></pre>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{ "enabled": true, "provider": "elevenlabs" }
+</code></pre>
+<h4 id="ttsdisable"><a class="header" href="#ttsdisable"><code>tts.disable</code></a></h4>
+<p>Disable TTS.</p>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{ "enabled": false }
+</code></pre>
+<h4 id="ttsconvert"><a class="header" href="#ttsconvert"><code>tts.convert</code></a></h4>
+<p>Convert text to speech.</p>
+<p><strong>Request:</strong></p>
+<pre><code class="language-json">{
+  "text": "Hello, how can I help you today?",
+  "provider": "elevenlabs",
+  "voiceId": "21m00Tcm4TlvDq8ikWAM",
+  "model": "eleven_flash_v2_5",
+  "format": "mp3",
+  "speed": 1.0,
+  "stability": 0.5,
+  "similarityBoost": 0.75
+}
+</code></pre>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{
+  "audio": "base64-encoded-audio-data",
+  "format": "mp3",
+  "mimeType": "audio/mpeg",
+  "durationMs": 2500,
+  "size": 45000
+}
+</code></pre>
+<p><strong>Audio Formats:</strong></p>
+<ul>
+<li><code>mp3</code> (default) - Widely compatible</li>
+<li><code>opus</code> / <code>ogg</code> - Good for Telegram voice notes</li>
+<li><code>aac</code> - Apple devices</li>
+<li><code>pcm</code> - Raw audio</li>
+</ul>
+<h4 id="ttssetprovider"><a class="header" href="#ttssetprovider"><code>tts.setProvider</code></a></h4>
+<p>Change the active TTS provider.</p>
+<p><strong>Request:</strong></p>
+<pre><code class="language-json">{ "provider": "openai" }
+</code></pre>
+<h3 id="auto-speak-modes"><a class="header" href="#auto-speak-modes">Auto-Speak Modes</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Mode</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>always</code></td><td>Speak all AI responses</td></tr>
+<tr><td><code>off</code></td><td>Never auto-speak (default)</td></tr>
+<tr><td><code>inbound</code></td><td>Only when user sent voice input</td></tr>
+<tr><td><code>tagged</code></td><td>Only with explicit <code>[[tts]]</code> markup</td></tr>
+</tbody></table>
+</div>
+<h2 id="speech-to-text-stt"><a class="header" href="#speech-to-text-stt">Speech-to-Text (STT)</a></h2>
+<h3 id="supported-providers-2"><a class="header" href="#supported-providers-2">Supported Providers</a></h3>
+<p>Moltis supports 8 STT providers: 5 cloud-based and 3 local.</p>
+<h4 id="cloud-providers-1"><a class="header" href="#cloud-providers-1">Cloud Providers</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Model</th><th>Notes</th></tr></thead><tbody>
+<tr><td>OpenAI Whisper</td><td><code>whisper-1</code></td><td>Best accuracy, handles accents, noise, technical terms</td></tr>
+<tr><td>Groq</td><td><code>whisper-large-v3-turbo</code></td><td>Ultra-fast Whisper inference on Groq hardware</td></tr>
+<tr><td>Deepgram</td><td><code>nova-3</code></td><td>Fast and accurate with smart formatting</td></tr>
+<tr><td>Google Cloud</td><td>Various</td><td>Supports 125+ languages</td></tr>
+<tr><td>Mistral AI</td><td><code>voxtral-mini-latest</code></td><td>Fast Voxtral transcription with 13 languages</td></tr>
+</tbody></table>
+</div>
+<h4 id="local-providers-1"><a class="header" href="#local-providers-1">Local Providers</a></h4>
+<div class="table-wrapper"><table><thead><tr><th>Provider</th><th>Binary/Server</th><th>Notes</th></tr></thead><tbody>
+<tr><td>Voxtral (Local)</td><td>vLLM server</td><td>Run Voxtral locally via vLLM with OpenAI-compatible API</td></tr>
+<tr><td>whisper.cpp</td><td><code>whisper-cli</code></td><td>Local Whisper inference via C++ port</td></tr>
+<tr><td>sherpa-onnx</td><td><code>sherpa-onnx-offline</code></td><td>Local offline STT via ONNX runtime</td></tr>
+</tbody></table>
+</div>
+<h3 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h3>
+<pre><code class="language-toml">[voice.stt]
+enabled = true
+provider = "whisper"  # or "groq", "deepgram", "google", "mistral", "whisper-cli", "sherpa-onnx"
+providers = []        # Optional UI allowlist, empty = show all STT providers
+
+# Cloud providers - API key required
+[voice.stt.whisper]
+api_key = "sk-..."  # Uses OPENAI_API_KEY if not set
+model = "whisper-1"
+language = "en"     # Optional ISO 639-1 hint
+
+[voice.stt.groq]
+api_key = "gsk_..."
+model = "whisper-large-v3-turbo"  # default
+language = "en"
+
+[voice.stt.deepgram]
+api_key = "..."
+model = "nova-3"  # default
+language = "en"
+smart_format = true
+
+[voice.stt.google]
+api_key = "..."
+language = "en-US"
+# model = "latest_long"  # optional
+
+[voice.stt.mistral]
+api_key = "..."
+model = "voxtral-mini-latest"  # default
+language = "en"
+
+# Local providers - no API key, requires server or binary
+
+# Voxtral local via vLLM server
+[voice.stt.voxtral_local]
+# endpoint = "http://localhost:8000"  # default vLLM endpoint
+# model = "mistralai/Voxtral-Mini-3B-2507"  # optional, server default
+# language = "en"  # optional
+
+[voice.stt.whisper_cli]
+# binary_path = "/usr/local/bin/whisper-cli"  # optional, searches PATH
+model_path = "~/.moltis/models/ggml-base.en.bin"  # required
+language = "en"
+
+[voice.stt.sherpa_onnx]
+# binary_path = "/usr/local/bin/sherpa-onnx-offline"  # optional
+model_dir = "~/.moltis/models/sherpa-onnx-whisper-tiny.en"  # required
+language = "en"
+</code></pre>
+<h3 id="local-provider-setup"><a class="header" href="#local-provider-setup">Local Provider Setup</a></h3>
+<h4 id="voxtral-via-vllm"><a class="header" href="#voxtral-via-vllm">Voxtral via vLLM</a></h4>
+<p>Voxtral is an open-weights model from Mistral AI that can run locally using vLLM.
+It supports 13 languages with fast transcription.</p>
+<p><strong>Requirements:</strong></p>
+<ul>
+<li>Python 3.10+</li>
+<li>CUDA-capable GPU with ~9.5GB VRAM (or CPU with more memory)</li>
+<li>vLLM with audio support</li>
+</ul>
+<p><strong>Setup:</strong></p>
+<ol>
+<li>
+<p>Install vLLM with audio support:</p>
+<pre><code class="language-bash">pip install "vllm[audio]"
+</code></pre>
+</li>
+<li>
+<p>Start the vLLM server:</p>
+<pre><code class="language-bash">vllm serve mistralai/Voxtral-Mini-3B-2507 \
+  --tokenizer_mode mistral \
+  --config_format mistral \
+  --load_format mistral
+</code></pre>
+<p>The server exposes an OpenAI-compatible endpoint at <code>http://localhost:8000</code>.</p>
+</li>
+<li>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.stt]
+provider = "voxtral-local"
+
+[voice.stt.voxtral_local]
+# Default endpoint works if vLLM is running locally
+# endpoint = "http://localhost:8000"
+</code></pre>
+</li>
+</ol>
+<p><strong>Supported Languages:</strong>
+English, French, German, Spanish, Portuguese, Italian, Dutch, Polish, Swedish,
+Norwegian, Danish, Finnish, Arabic</p>
+<p><strong>Note:</strong> Unlike the embedded local providers (whisper.cpp, sherpa-onnx), this
+requires running vLLM as a separate server process. The model is downloaded
+automatically on first vLLM startup.</p>
+<h4 id="whispercpp"><a class="header" href="#whispercpp">whisper.cpp</a></h4>
+<ol>
+<li>
+<p>Install the binary:</p>
+<pre><code class="language-bash"># macOS
+brew install whisper-cpp
+
+# From source: https://github.com/ggerganov/whisper.cpp
+</code></pre>
+</li>
+<li>
+<p>Download a model from <a href="https://huggingface.co/ggerganov/whisper.cpp">Hugging Face</a>:</p>
+<pre><code class="language-bash">mkdir -p ~/.moltis/models
+curl -L -o ~/.moltis/models/ggml-base.en.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+</code></pre>
+</li>
+<li>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.stt]
+provider = "whisper-cli"
+
+[voice.stt.whisper_cli]
+model_path = "~/.moltis/models/ggml-base.en.bin"
+</code></pre>
+</li>
+</ol>
+<h4 id="sherpa-onnx"><a class="header" href="#sherpa-onnx">sherpa-onnx</a></h4>
+<ol>
+<li>
+<p>Install following the <a href="https://k2-fsa.github.io/sherpa/onnx/install.html">official docs</a></p>
+</li>
+<li>
+<p>Download a model from the <a href="https://k2-fsa.github.io/sherpa/onnx/pretrained_models/index.html">model list</a></p>
+</li>
+<li>
+<p>Configure in <code>moltis.toml</code>:</p>
+<pre><code class="language-toml">[voice.stt]
+provider = "sherpa-onnx"
+
+[voice.stt.sherpa_onnx]
+model_dir = "~/.moltis/models/sherpa-onnx-whisper-tiny.en"
+</code></pre>
+</li>
+</ol>
+<h3 id="rpc-methods-1"><a class="header" href="#rpc-methods-1">RPC Methods</a></h3>
+<h4 id="sttstatus"><a class="header" href="#sttstatus"><code>stt.status</code></a></h4>
+<p>Get current STT status.</p>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{
+  "enabled": true,
+  "provider": "whisper",
+  "configured": true
+}
+</code></pre>
+<h4 id="sttproviders"><a class="header" href="#sttproviders"><code>stt.providers</code></a></h4>
+<p>List available STT providers.</p>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">[
+  { "id": "whisper", "name": "OpenAI Whisper", "configured": true },
+  { "id": "groq", "name": "Groq", "configured": false },
+  { "id": "deepgram", "name": "Deepgram", "configured": false },
+  { "id": "google", "name": "Google Cloud", "configured": false },
+  { "id": "mistral", "name": "Mistral AI", "configured": false },
+  { "id": "voxtral-local", "name": "Voxtral (Local)", "configured": false },
+  { "id": "whisper-cli", "name": "whisper.cpp", "configured": false },
+  { "id": "sherpa-onnx", "name": "sherpa-onnx", "configured": false }
+]
+</code></pre>
+<h4 id="stttranscribe"><a class="header" href="#stttranscribe"><code>stt.transcribe</code></a></h4>
+<p>Transcribe audio to text.</p>
+<p><strong>Request:</strong></p>
+<pre><code class="language-json">{
+  "audio": "base64-encoded-audio-data",
+  "format": "mp3",
+  "language": "en",
+  "prompt": "Technical discussion about Rust programming"
+}
+</code></pre>
+<p><strong>Response:</strong></p>
+<pre><code class="language-json">{
+  "text": "Hello, how are you today?",
+  "language": "en",
+  "confidence": null,
+  "durationSeconds": 2.5,
+  "words": [
+    { "word": "Hello", "start": 0.0, "end": 0.5 },
+    { "word": "how", "start": 0.6, "end": 0.8 },
+    { "word": "are", "start": 0.9, "end": 1.0 },
+    { "word": "you", "start": 1.1, "end": 1.3 },
+    { "word": "today", "start": 1.4, "end": 1.8 }
+  ]
+}
+</code></pre>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>audio</code> (required): Base64-encoded audio data</li>
+<li><code>format</code>: Audio format (<code>mp3</code>, <code>opus</code>, <code>ogg</code>, <code>aac</code>, <code>pcm</code>)</li>
+<li><code>language</code>: ISO 639-1 code to improve accuracy</li>
+<li><code>prompt</code>: Context hint (terminology, topic)</li>
+</ul>
+<h4 id="sttsetprovider"><a class="header" href="#sttsetprovider"><code>stt.setProvider</code></a></h4>
+<p>Change the active STT provider.</p>
+<p><strong>Request:</strong></p>
+<pre><code class="language-json">{ "provider": "groq" }
+</code></pre>
+<p>Valid provider IDs: <code>whisper</code>, <code>groq</code>, <code>deepgram</code>, <code>google</code>, <code>mistral</code>, <code>voxtral-local</code>, <code>whisper-cli</code>, <code>sherpa-onnx</code></p>
+<h2 id="code-structure"><a class="header" href="#code-structure">Code Structure</a></h2>
+<h3 id="voice-crate-cratesvoice"><a class="header" href="#voice-crate-cratesvoice">Voice Crate (<code>crates/voice/</code>)</a></h3>
+<pre><code>src/
+├── lib.rs           # Crate entry, re-exports
+├── config.rs        # VoiceConfig, TtsConfig, SttConfig
+├── tts/
+│   ├── mod.rs       # TtsProvider trait, AudioFormat, types
+│   ├── elevenlabs.rs # ElevenLabs implementation
+│   ├── openai.rs    # OpenAI TTS implementation
+│   ├── google.rs    # Google Cloud TTS implementation
+│   ├── piper.rs     # Piper local TTS implementation
+│   └── coqui.rs     # Coqui TTS server implementation
+└── stt/
+    ├── mod.rs          # SttProvider trait, Transcript types
+    ├── whisper.rs      # OpenAI Whisper implementation
+    ├── groq.rs         # Groq Whisper implementation
+    ├── deepgram.rs     # Deepgram implementation
+    ├── google.rs       # Google Cloud Speech-to-Text
+    ├── mistral.rs      # Mistral AI Voxtral cloud implementation
+    ├── voxtral_local.rs # Voxtral via local vLLM server
+    ├── cli_utils.rs    # Shared utilities for CLI providers
+    ├── whisper_cli.rs  # whisper.cpp CLI wrapper
+    └── sherpa_onnx.rs  # sherpa-onnx CLI wrapper
+</code></pre>
+<h3 id="key-traits"><a class="header" href="#key-traits">Key Traits</a></h3>
+<pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>/// Text-to-Speech provider trait
+#[async_trait]
+pub trait TtsProvider: Send + Sync {
+    fn id(&amp;self) -&gt; &amp;'static str;
+    fn name(&amp;self) -&gt; &amp;'static str;
+    fn is_configured(&amp;self) -&gt; bool;
+    async fn voices(&amp;self) -&gt; Result&lt;Vec&lt;Voice&gt;&gt;;
+    async fn synthesize(&amp;self, request: SynthesizeRequest) -&gt; Result&lt;AudioOutput&gt;;
+}
+
+/// Speech-to-Text provider trait
+#[async_trait]
+pub trait SttProvider: Send + Sync {
+    fn id(&amp;self) -&gt; &amp;'static str;
+    fn name(&amp;self) -&gt; &amp;'static str;
+    fn is_configured(&amp;self) -&gt; bool;
+    async fn transcribe(&amp;self, request: TranscribeRequest) -&gt; Result&lt;Transcript&gt;;
+}
+<span class="boring">}</span></code></pre></pre>
+<h3 id="gateway-integration-cratesgatewaysrcvoicers"><a class="header" href="#gateway-integration-cratesgatewaysrcvoicers">Gateway Integration (<code>crates/gateway/src/voice.rs</code>)</a></h3>
+<ul>
+<li><code>LiveTtsService</code>: Wraps TTS providers, implements <code>TtsService</code> trait</li>
+<li><code>LiveSttService</code>: Wraps STT providers, implements <code>SttService</code> trait</li>
+<li><code>NoopSttService</code>: No-op for when STT is not configured</li>
+</ul>
+<h2 id="security-1"><a class="header" href="#security-1">Security</a></h2>
+<ul>
+<li>API keys are stored using <code>secrecy::Secret&lt;String&gt;</code> to prevent accidental logging</li>
+<li>Debug output redacts all secret values</li>
+<li>Keys can be set via environment variables or config file</li>
+</ul>
+<h2 id="adding-new-providers"><a class="header" href="#adding-new-providers">Adding New Providers</a></h2>
+<h3 id="tts-provider"><a class="header" href="#tts-provider">TTS Provider</a></h3>
+<ol>
+<li>Create <code>crates/voice/src/tts/newprovider.rs</code></li>
+<li>Implement <code>TtsProvider</code> trait</li>
+<li>Re-export from <code>crates/voice/src/tts/mod.rs</code></li>
+<li>Add to <code>LiveTtsService</code> in gateway</li>
+</ol>
+<h3 id="stt-provider"><a class="header" href="#stt-provider">STT Provider</a></h3>
+<ol>
+<li>Create <code>crates/voice/src/stt/newprovider.rs</code></li>
+<li>Implement <code>SttProvider</code> trait</li>
+<li>Re-export from <code>crates/voice/src/stt/mod.rs</code></li>
+<li>Add to <code>LiveSttService</code> in gateway</li>
+</ol>
+<h2 id="web-ui-integration"><a class="header" href="#web-ui-integration">Web UI Integration</a></h2>
+<p>The voice feature integrates with the web UI:</p>
+<ul>
+<li><strong>Microphone button</strong>: Record voice input in the chat interface</li>
+<li><strong>Settings page</strong>: Configure and enable/disable voice providers</li>
+<li><strong>Auto-detection</strong>: API keys are detected from environment variables and LLM provider configs</li>
+<li><strong>Toggle switches</strong>: Enable/disable providers without removing configuration</li>
+<li><strong>Setup instructions</strong>: Step-by-step guides for local provider installation</li>
+</ul>
+<h2 id="future-enhancements"><a class="header" href="#future-enhancements">Future Enhancements</a></h2>
+<ul>
+<li><strong>Streaming TTS</strong>: Chunked audio delivery for lower latency</li>
+<li><strong>VoiceWake</strong>: Wake word detection and continuous listening</li>
+<li><strong>Audio playback</strong>: Play TTS responses directly in the chat</li>
+<li><strong>Channel Integration</strong>: Auto-transcribe Telegram voice messages</li>
+<li><strong>Per-Agent Voices</strong>: Different voices for different agents</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="browser-automation"><a class="header" href="#browser-automation">Browser Automation</a></h1>
 <p>Moltis provides full browser automation via Chrome DevTools Protocol (CDP),
 enabling agents to interact with JavaScript-heavy websites, fill forms,
@@ -1869,7 +2426,7 @@ click buttons, and capture screenshots.</p>
 </ul>
 <p>For simple page content retrieval (static HTML), prefer <code>web_fetch</code> as it’s
 faster and more lightweight.</p>
-<h2 id="architecture-2"><a class="header" href="#architecture-2">Architecture</a></h2>
+<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
 <pre><code>┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
 │   BrowserTool   │────▶│  BrowserManager │────▶│   BrowserPool    │
 │   (AgentTool)   │     │   (actions)     │     │   (instances)    │
@@ -1888,7 +2445,7 @@ faster and more lightweight.</p>
 <li><strong>BrowserPool</strong> (<code>crates/browser/src/pool.rs</code>) - Chrome instance management</li>
 <li><strong>Snapshot</strong> (<code>crates/browser/src/snapshot.rs</code>) - DOM element extraction</li>
 </ul>
-<h2 id="configuration-4"><a class="header" href="#configuration-4">Configuration</a></h2>
+<h2 id="configuration-6"><a class="header" href="#configuration-6">Configuration</a></h2>
 <p>Browser automation is <strong>enabled by default</strong>. To customize, add to your <code>moltis.toml</code>:</p>
 <pre><code class="language-toml">[tools.browser]
 enabled = true              # Enable browser support
@@ -2549,8 +3106,8 @@ before deleting a skill.</p>
 }
 </code></pre>
 <p>Clicking a notification will open or focus the app and navigate to the relevant chat.</p>
-<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
-<h3 id="feature-flag-1"><a class="header" href="#feature-flag-1">Feature Flag</a></h3>
+<h2 id="configuration-7"><a class="header" href="#configuration-7">Configuration</a></h2>
+<h3 id="feature-flag-2"><a class="header" href="#feature-flag-2">Feature Flag</a></h3>
 <p>Push notifications are controlled by the <code>push-notifications</code> feature flag, which is enabled by default. To disable:</p>
 <pre><code class="language-toml"># In your Cargo.toml or when building
 [dependencies]
@@ -3410,7 +3967,7 @@ several tools at once</li>
 <p>Moltis uses <a href="https://github.com/launchbadge/sqlx">sqlx</a> for database access and its
 built-in migration system for schema management. Each crate owns its migrations,
 keeping schema definitions close to the code that uses them.</p>
-<h2 id="architecture-3"><a class="header" href="#architecture-3">Architecture</a></h2>
+<h2 id="architecture-4"><a class="header" href="#architecture-4">Architecture</a></h2>
 <p>Each crate that uses SQLite has its own <code>migrations/</code> directory and exposes a
 <code>run_migrations()</code> function. The gateway orchestrates running all migrations at
 startup in the correct dependency order.</p>
@@ -3978,7 +4535,7 @@ pub mod my_feature {
 
 counter!(my_feature::OPERATIONS_TOTAL).increment(1);
 <span class="boring">}</span></code></pre></pre>
-<h2 id="configuration-6"><a class="header" href="#configuration-6">Configuration</a></h2>
+<h2 id="configuration-8"><a class="header" href="#configuration-8">Configuration</a></h2>
 <p>Metrics configuration in <code>moltis.toml</code>:</p>
 <pre><code class="language-toml">[metrics]
 enabled = true              # Enable metrics collection (default: true)
@@ -4077,6 +4634,7 @@ tools grouped by origin.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
+<h2 id="028---2026-02-07"><a class="header" href="#028---2026-02-07">[0.2.8] - 2026-02-07</a></h2>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
 <li><strong>Unified plugins and skills into a single system</strong>: Plugins and skills were separate
@@ -4086,9 +4644,16 @@ Codex) are managed through a single <code>skills-manifest.json</code> and <code>
 directory. The <code>/plugins</code> page has been removed — everything is accessible from the
 <code>/skills</code> page. A one-time startup migration automatically moves data from the old
 plugins manifest and directory into the new unified location.</li>
+<li><strong>Default config template voice list narrowed</strong>: New generated configs now include a
+<code>[voice]</code> section with provider-list allowlists limited to ElevenLabs for TTS and
+Mistral + ElevenLabs for STT.</li>
 </ul>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
+<li><strong>Update checker repository configuration</strong>: The update checker now reads
+<code>server.update_repository_url</code> from <code>moltis.toml</code>, defaults new configs to
+<code>https://github.com/moltis-org/moltis</code>, and treats an omitted/commented value
+as explicitly disabled.</li>
 <li><strong>Mistral and other providers rejecting requests with HTTP 422</strong>: Session metadata fields
 (<code>created_at</code>, <code>model</code>, <code>provider</code>, <code>inputTokens</code>, <code>outputTokens</code>) were leaking into
 provider API request bodies. Mistral’s strict validation rejected the extra <code>created_at</code>
@@ -4096,9 +4661,46 @@ field. Replaced <code>Vec&lt;serde_json::Value&gt;</code> with a typed <code>Cha
 <code>LlmProvider</code> trait — metadata can no longer leak because the type only contains
 LLM-relevant fields (<code>role</code>, <code>content</code>, <code>tool_calls</code>). Conversion from persisted JSON
 happens once at the gateway boundary via <code>values_to_chat_messages()</code>.</li>
+<li><strong>Chat skill creation not persisting new skills</strong>: Runtime tool filtering incorrectly
+applied the union of discovered skill <code>allowed_tools</code> to all chat turns, which could
+hide <code>create_skill</code>/<code>update_skill</code> and leave only a subset (for example <code>web_fetch</code>).
+Chat runs now use configured tool policy for runtime filtering without globally
+restricting tools based on discovered skill metadata.</li>
 </ul>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li>
+<p><strong>Voice Provider Management UI</strong>: Configure TTS and STT providers from Settings &gt; Voice</p>
+<ul>
+<li>Auto-detection of API keys from environment variables and LLM provider configs</li>
+<li>Toggle switches to enable/disable providers without removing configuration</li>
+<li>Local binary detection for whisper.cpp, piper, and sherpa-onnx</li>
+<li>Server availability checks for Coqui TTS and Voxtral Local</li>
+<li>Setup instructions modal for local provider installation</li>
+<li>Shared Google Cloud API key between TTS and STT</li>
+</ul>
+</li>
+<li>
+<p><strong>Voice provider UI allowlists</strong>: Added <code>voice.tts.providers</code> and <code>voice.stt.providers</code>
+config lists to control which TTS/STT providers are shown in the Settings UI.
+Empty lists keep current behavior and show all providers.</p>
+</li>
+<li>
+<p><strong>New TTS Providers</strong>:</p>
+<ul>
+<li>Google Cloud Text-to-Speech (380+ voices, 50+ languages)</li>
+<li>Piper (fast local neural TTS, runs offline)</li>
+<li>Coqui TTS (high-quality neural TTS with voice cloning)</li>
+</ul>
+</li>
+<li>
+<p><strong>New STT Providers</strong>:</p>
+<ul>
+<li>ElevenLabs Scribe (90+ languages, word timestamps, speaker diarization)</li>
+<li>Mistral AI Voxtral (cloud-based, 13 languages)</li>
+<li>Voxtral Local via vLLM (self-hosted with OpenAI-compatible API)</li>
+</ul>
+</li>
 <li>
 <p><strong>Browser Sandbox Mode</strong>: Run browser in isolated Docker containers for security</p>
 <ul>
@@ -4234,7 +4836,7 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Telegram typing indicator for long responses</strong>: Channel replies now wait for outbound delivery tasks to finish before chat completion returns, so periodic <code>typing...</code> updates continue until the Telegram message is actually sent.</li>
 <li><strong>Skills dependency install safety</strong>: <code>skills.install_dep</code> now requires explicit user confirmation and blocks host installs when sandbox mode is disabled (unless explicitly overridden in the RPC call).</li>
 </ul>
-<h3 id="security-1"><a class="header" href="#security-1">Security</a></h3>
+<h3 id="security-2"><a class="header" href="#security-2">Security</a></h3>
 <ul>
 <li><strong>Asset response hardening</strong>: Static assets now set <code>X-Content-Type-Options: nosniff</code>, and SVG responses include a restrictive <code>Content-Security-Policy</code> (<code>script-src 'none'</code>, <code>object-src 'none'</code>) to reduce stored-XSS risk if user-controlled SVGs are ever introduced.</li>
 <li><strong>Archive extraction hardening</strong>: Skills/plugin tarball installs now reject unsafe archive paths (<code>..</code>, absolute/path-prefix escapes) and reject symlink/hardlink archive entries to prevent path traversal and link-based escapes.</li>
@@ -4517,6 +5119,7 @@ discovers and includes them alongside registry skills.</li>
 </ul>
 <h3 id="documentation-2"><a class="header" href="#documentation-2">Documentation</a></h3>
 <ul>
+<li>Added voice.md with TTS/STT provider documentation and setup guides</li>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
 <li>Updated CLAUDE.md with cargo feature policy (features enabled by default)</li>
 <li>Updated browser-automation.md with browser detection, screenshot display, and
