@@ -237,6 +237,7 @@ async fn handle_message(
             channel_type: moltis_channels::ChannelType::Xmpp,
             sender_name: sender_name.clone(),
             username: username.clone(),
+            message_kind: None,
             model: config.model.clone(),
         };
         sink.dispatch_to_chat(&cleaned_body, reply_target, meta)

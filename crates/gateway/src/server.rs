@@ -52,6 +52,7 @@ use crate::{
     state::GatewayState,
     update_check::{
         UPDATE_CHECK_INTERVAL, fetch_update_availability, github_latest_release_api_url,
+        resolve_repository_url,
     },
     ws::handle_connection,
 };
@@ -466,6 +467,17 @@ pub async fn start_gateway(
     // When local-llm feature is disabled, this variable is not needed since
     // the only usage is also feature-gated.
 
+    // Wire live voice services when the feature is enabled.
+    #[cfg(feature = "voice")]
+    {
+        use crate::voice::{LiveSttService, LiveTtsService, SttServiceConfig};
+
+        // Services read fresh config from disk on each operation,
+        // so we just need to create the instances here.
+        services.tts = Arc::new(LiveTtsService::new(moltis_voice::TtsConfig::default()));
+        services.stt = Arc::new(LiveSttService::new(SttServiceConfig::default()));
+    }
+
     if !registry.read().await.is_empty() {
         services = services.with_model(Arc::new(LiveModelService::new(Arc::clone(&registry))));
     }
@@ -517,7 +529,21 @@ pub async fn start_gateway(
 
     // Initialize data directory and SQLite database.
     let data_dir = data_dir.unwrap_or_else(moltis_config::data_dir);
-    std::fs::create_dir_all(&data_dir).ok();
+    std::fs::create_dir_all(&data_dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create data directory {}: {e}",
+            data_dir.display()
+        )
+    });
+
+    let config_dir =
+        moltis_config::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".moltis"));
+    std::fs::create_dir_all(&config_dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create config directory {}: {e}",
+            config_dir.display()
+        )
+    });
 
     // Enable log persistence so entries survive restarts.
     if let Some(ref buf) = log_buffer {
@@ -1627,6 +1653,14 @@ pub async fn start_gateway(
             moltis_tools::session_state::SessionStateTool::new(Arc::clone(&session_state_store)),
         ));
 
+        // Register built-in voice tools for explicit TTS/STT calls in agents.
+        tool_registry.register(Box::new(crate::voice_agent_tools::SpeakTool::new(
+            Arc::clone(&state.services.tts),
+        )));
+        tool_registry.register(Box::new(crate::voice_agent_tools::TranscribeTool::new(
+            Arc::clone(&state.services.stt),
+        )));
+
         // Register skill management tools for agent self-extension.
         // Use data_dir so created skills land in the configured workspace root.
         {
@@ -2045,15 +2079,22 @@ pub async fn start_gateway(
 
     // Spawn periodic update check against latest GitHub release.
     let update_state = Arc::clone(&state);
+    let update_repository_url =
+        resolve_repository_url(config.server.update_repository_url.as_deref());
     tokio::spawn(async move {
-        let latest_release_api_url =
-            match github_latest_release_api_url(env!("CARGO_PKG_REPOSITORY")) {
+        let latest_release_api_url = match update_repository_url {
+            Some(repository_url) => match github_latest_release_api_url(&repository_url) {
                 Ok(url) => url,
                 Err(e) => {
                     warn!("update checker disabled: {e}");
                     return;
                 },
-            };
+            },
+            None => {
+                info!("update checker disabled: server.update_repository_url is not configured");
+                return;
+            },
+        };
 
         let client = match reqwest::Client::builder()
             .user_agent(format!("moltis-gateway/{}", update_state.version))
@@ -2635,6 +2676,7 @@ struct GonData {
     cron_status: moltis_cron::types::CronStatus,
     heartbeat_config: moltis_config::schema::HeartbeatConfig,
     heartbeat_runs: Vec<moltis_cron::types::CronRunRecord>,
+    voice_enabled: bool,
     /// Non-main git branch name, if running from a git checkout on a
     /// non-default branch. `None` when on `main`/`master` or outside a repo.
     git_branch: Option<String>,
@@ -2769,6 +2811,7 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         cron_status,
         heartbeat_config,
         heartbeat_runs,
+        voice_enabled: cfg!(feature = "voice"),
         git_branch: detect_git_branch(),
         mem: collect_mem_snapshot(),
         deploy_platform: gw.deploy_platform.clone(),
