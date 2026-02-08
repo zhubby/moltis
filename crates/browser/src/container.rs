@@ -51,9 +51,20 @@ impl BrowserContainer {
     /// Start a new browser container using the auto-detected backend.
     ///
     /// Returns a container instance with the host port for CDP connections.
-    pub fn start(image: &str, viewport_width: u32, viewport_height: u32) -> Result<Self> {
+    pub fn start(
+        image: &str,
+        viewport_width: u32,
+        viewport_height: u32,
+        extension_arg: Option<&str>,
+    ) -> Result<Self> {
         let backend = detect_backend()?;
-        Self::start_with_backend(backend, image, viewport_width, viewport_height)
+        Self::start_with_backend(
+            backend,
+            image,
+            viewport_width,
+            viewport_height,
+            extension_arg,
+        )
     }
 
     /// Start a new browser container with a specific backend.
@@ -62,6 +73,7 @@ impl BrowserContainer {
         image: &str,
         viewport_width: u32,
         viewport_height: u32,
+        extension_arg: Option<&str>,
     ) -> Result<Self> {
         if !backend.is_available() {
             bail!(
@@ -81,13 +93,21 @@ impl BrowserContainer {
         );
 
         let container_id = match backend {
-            ContainerBackend::Docker => {
-                start_docker_container(image, host_port, viewport_width, viewport_height)?
-            },
+            ContainerBackend::Docker => start_docker_container(
+                image,
+                host_port,
+                viewport_width,
+                viewport_height,
+                extension_arg,
+            )?,
             #[cfg(target_os = "macos")]
-            ContainerBackend::AppleContainer => {
-                start_apple_container(image, host_port, viewport_width, viewport_height)?
-            },
+            ContainerBackend::AppleContainer => start_apple_container(
+                image,
+                host_port,
+                viewport_width,
+                viewport_height,
+                extension_arg,
+            )?,
         };
 
         debug!(
@@ -183,6 +203,27 @@ impl BrowserContainer {
     pub fn backend(&self) -> ContainerBackend {
         self.backend
     }
+
+    /// Validate that each extension directory contains a manifest inside the container.
+    pub fn verify_extension_manifests(&self, extension_paths: &[String]) -> Result<()> {
+        let cli = self.backend.cli();
+        for path in extension_paths {
+            let manifest_path = format!("{path}/manifest.json");
+            let status = Command::new(cli)
+                .args(["exec", &self.container_id, "test", "-f", &manifest_path])
+                .status()
+                .with_context(|| {
+                    format!("failed to validate extension manifest in container: {manifest_path}")
+                })?;
+            if !status.success() {
+                bail!(
+                    "extension manifest not found in sandbox image: {}",
+                    manifest_path
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Drop for BrowserContainer {
@@ -197,7 +238,9 @@ fn start_docker_container(
     host_port: u16,
     viewport_width: u32,
     viewport_height: u32,
+    extension_arg: Option<&str>,
 ) -> Result<String> {
+    let launch_args = build_launch_args(viewport_width, viewport_height, extension_arg)?;
     let output = Command::new("docker")
         .args([
             "run",
@@ -206,10 +249,7 @@ fn start_docker_container(
             "-p",
             &format!("{}:3000", host_port), // Map CDP port
             "-e",
-            &format!(
-                "DEFAULT_LAUNCH_ARGS=[\"--window-size={},{}\"]",
-                viewport_width, viewport_height
-            ),
+            &format!("DEFAULT_LAUNCH_ARGS={launch_args}"),
             "-e",
             "MAX_CONCURRENT_SESSIONS=1", // One session per container
             "-e",
@@ -240,9 +280,12 @@ fn start_apple_container(
     host_port: u16,
     viewport_width: u32,
     viewport_height: u32,
+    extension_arg: Option<&str>,
 ) -> Result<String> {
     // Generate a unique container name
     let container_name = format!("moltis-browser-{}", uuid::Uuid::new_v4().as_simple());
+
+    let launch_args = build_launch_args(viewport_width, viewport_height, extension_arg)?;
 
     // Apple Container uses different syntax for port mapping and env vars
     let output = Command::new("container")
@@ -254,10 +297,7 @@ fn start_apple_container(
             "-p",
             &format!("{}:3000", host_port),
             "-e",
-            &format!(
-                "DEFAULT_LAUNCH_ARGS=[\"--window-size={},{}\"]",
-                viewport_width, viewport_height
-            ),
+            &format!("DEFAULT_LAUNCH_ARGS={launch_args}"),
             "-e",
             "MAX_CONCURRENT_SESSIONS=1",
             "-e",
@@ -273,6 +313,19 @@ fn start_apple_container(
     }
 
     Ok(container_name)
+}
+
+fn build_launch_args(
+    viewport_width: u32,
+    viewport_height: u32,
+    extension_arg: Option<&str>,
+) -> Result<String> {
+    let mut args = vec![format!("--window-size={viewport_width},{viewport_height}")];
+    if let Some(extension_paths) = extension_arg {
+        args.push(format!("--disable-extensions-except={extension_paths}"));
+        args.push(format!("--load-extension={extension_paths}"));
+    }
+    serde_json::to_string(&args).context("failed to serialize DEFAULT_LAUNCH_ARGS")
 }
 
 /// Detect the best available container backend.

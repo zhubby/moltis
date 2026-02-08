@@ -348,6 +348,13 @@ pub struct BrowserConfig {
     /// Additional Chrome arguments.
     #[serde(default)]
     pub chrome_args: Vec<String>,
+    /// Allowlist of sandbox extension directories that can be auto-loaded.
+    /// If empty, any path in `default_extensions` is accepted.
+    #[serde(default)]
+    pub extension_allowlist: Vec<String>,
+    /// Unpacked Chrome extension directories to load at sandbox browser start.
+    #[serde(default)]
+    pub default_extensions: Vec<String>,
     /// Docker image to use for sandboxed browser.
     /// Sandbox mode is controlled per-session via the request, not globally.
     #[serde(default = "default_sandbox_image")]
@@ -376,6 +383,8 @@ impl Default for BrowserConfig {
             navigation_timeout_ms: 30000,
             user_agent: None,
             chrome_args: Vec::new(),
+            extension_allowlist: Vec::new(),
+            default_extensions: Vec::new(),
             sandbox_image: default_sandbox_image(),
             allowed_domains: Vec::new(),
         }
@@ -397,6 +406,8 @@ impl From<&moltis_config::schema::BrowserConfig> for BrowserConfig {
             navigation_timeout_ms: cfg.navigation_timeout_ms,
             user_agent: cfg.user_agent.clone(),
             chrome_args: cfg.chrome_args.clone(),
+            extension_allowlist: cfg.extension_allowlist.clone(),
+            default_extensions: cfg.default_extensions.clone(),
             sandbox_image: cfg.sandbox_image.clone(),
             allowed_domains: cfg.allowed_domains.clone(),
         }

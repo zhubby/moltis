@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`moltis auth reset-identity` now fully resets onboarding state**: The command now removes workspace `IDENTITY.md` and `USER.md` in addition to clearing `identity`/`user` fields in config, ensuring onboarding is shown again on next load.
+
+### Added
+
+- **Sandbox browser default extension list support**: Added `tools.browser.extension_allowlist` and `tools.browser.default_extensions` config fields so trusted unpacked extensions can be auto-loaded at sandbox browser startup, with manifest validation inside the container image.
+
 ## [0.2.8] - 2026-02-07
 
 ### Changed

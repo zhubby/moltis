@@ -310,15 +310,36 @@ impl BrowserPool {
             BrowserError::LaunchFailed(format!("failed to ensure browser image: {e}"))
         })?;
 
+        let extensions = select_sandbox_extensions(
+            &self.config.default_extensions,
+            &self.config.extension_allowlist,
+        );
+        let extension_arg = if extensions.is_empty() {
+            None
+        } else {
+            Some(extensions.join(","))
+        };
+
         // Start the container
         let container = BrowserContainer::start(
             &self.config.sandbox_image,
             self.config.viewport_width,
             self.config.viewport_height,
+            extension_arg.as_deref(),
         )
         .map_err(|e| {
             BrowserError::LaunchFailed(format!("failed to start browser container: {e}"))
         })?;
+
+        if !extensions.is_empty() {
+            container
+                .verify_extension_manifests(&extensions)
+                .map_err(|e| {
+                    BrowserError::LaunchFailed(format!(
+                        "failed to validate sandbox browser extensions: {e}"
+                    ))
+                })?;
+        }
 
         let ws_url = container.websocket_url();
         info!(
@@ -463,6 +484,30 @@ impl BrowserPool {
     }
 }
 
+fn select_sandbox_extensions(
+    default_extensions: &[String],
+    extension_allowlist: &[String],
+) -> Vec<String> {
+    let mut enabled = Vec::new();
+    for extension in default_extensions {
+        let path = extension.trim();
+        if path.is_empty() {
+            continue;
+        }
+
+        if !extension_allowlist.is_empty()
+            && !extension_allowlist.iter().any(|allowed| allowed == path)
+        {
+            warn!(path, "skipping extension path not in extension_allowlist");
+            continue;
+        }
+
+        enabled.push(path.to_string());
+    }
+
+    enabled
+}
+
 /// Generate a random session ID.
 fn generate_session_id() -> String {
     use rand::Rng;
@@ -481,5 +526,29 @@ mod tests {
         let id2 = generate_session_id();
         assert_ne!(id1, id2);
         assert!(id1.starts_with("browser-"));
+    }
+
+    #[test]
+    fn test_select_sandbox_extensions_keeps_paths() {
+        let paths = vec!["/opt/ext1".to_string(), "/opt/ext2".to_string()];
+        let selected = select_sandbox_extensions(&paths, &[]);
+
+        assert_eq!(selected, paths);
+    }
+
+    #[test]
+    fn test_select_sandbox_extensions_applies_allowlist() {
+        let allowed = "/opt/allowed".to_string();
+        let blocked = "/opt/blocked".to_string();
+        let selected =
+            select_sandbox_extensions(&[allowed.clone(), blocked], std::slice::from_ref(&allowed));
+
+        assert_eq!(selected, vec![allowed]);
+    }
+
+    #[test]
+    fn test_select_sandbox_extensions_skips_empty_entries() {
+        let selected = select_sandbox_extensions(&["  ".to_string(), "/opt/ext".to_string()], &[]);
+        assert_eq!(selected, vec!["/opt/ext".to_string()]);
     }
 }

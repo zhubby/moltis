@@ -640,6 +640,16 @@ pub struct BrowserConfig {
     /// Additional Chrome arguments.
     #[serde(default)]
     pub chrome_args: Vec<String>,
+    /// Allowlist of sandbox extension directories that can be auto-loaded.
+    ///
+    /// If empty, any path in `default_extensions` is accepted.
+    #[serde(default)]
+    pub extension_allowlist: Vec<String>,
+    /// Unpacked Chrome extension directories to load at sandbox browser start.
+    ///
+    /// Entries must be paths inside the sandbox image containing `manifest.json`.
+    #[serde(default)]
+    pub default_extensions: Vec<String>,
     /// Docker image to use for sandboxed browser.
     /// Default: "browserless/chrome" - a purpose-built headless Chrome container.
     /// Sandbox mode is controlled per-session via the request, not globally.
@@ -671,6 +681,8 @@ impl Default for BrowserConfig {
             navigation_timeout_ms: 30000,
             user_agent: None,
             chrome_args: Vec::new(),
+            extension_allowlist: Vec::new(),
+            default_extensions: Vec::new(),
             sandbox_image: default_sandbox_image(),
             allowed_domains: Vec::new(),
         }

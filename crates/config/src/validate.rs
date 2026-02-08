@@ -187,6 +187,8 @@ fn build_schema_map() -> KnownKeys {
             ("navigation_timeout_ms", Leaf),
             ("user_agent", Leaf),
             ("chrome_args", Leaf),
+            ("extension_allowlist", Leaf),
+            ("default_extensions", Leaf),
             ("sandbox", Leaf),
             ("sandbox_image", Leaf),
             ("allowed_domains", Leaf),

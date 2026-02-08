@@ -332,7 +332,11 @@ sandbox = false                   # Run browser in Docker/Apple Container for is
 # chrome_path = "/path/to/chrome" # Custom Chrome/Chromium binary path (auto-detected)
 # user_agent = "Custom UA"        # Custom user agent string
 # chrome_args = []                # Extra Chrome command-line arguments
-                                  # Example: ["--disable-extensions", "--disable-gpu"]
+#                                   # Example: ["--disable-extensions", "--disable-gpu"]
+# extension_allowlist = []         # Restrict default_extensions to approved paths
+# default_extensions = []          # Auto-load sandbox extension directories at startup
+#                                   # Paths are inside the sandbox image
+#                                   # Example: ["/opt/moltis/extensions/ublock-origin"]
 
 # Domain restrictions for security.
 # When set, browser will refuse to navigate to domains not in this list.

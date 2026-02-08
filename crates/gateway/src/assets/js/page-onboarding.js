@@ -6,7 +6,7 @@
 
 import { html } from "htm/preact";
 import { render } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { EmojiPicker } from "./emoji-picker.js";
 import { refresh as refreshGon } from "./gon.js";
 import { sendRpc } from "./helpers.js";
@@ -17,6 +17,34 @@ import * as S from "./state.js";
 // ── Step indicator ──────────────────────────────────────────
 
 var STEP_LABELS = ["Security", "Identity", "Provider", "Channel"];
+var hiddenChromeElements = [];
+
+function hideAppChrome() {
+	hiddenChromeElements = [];
+	[
+		document.querySelector("header"),
+		document.getElementById("navPanel"),
+		document.getElementById("sessionsPanel"),
+		document.getElementById("burgerBtn"),
+		document.getElementById("sessionsToggle"),
+		document.getElementById("authDisabledBanner"),
+	].forEach((el) => {
+		if (!el) return;
+		hiddenChromeElements.push({ el, display: el.style.display });
+		el.style.display = "none";
+	});
+}
+
+function restoreAppChrome() {
+	hiddenChromeElements.forEach(({ el, display }) => {
+		el.style.display = display;
+	});
+	hiddenChromeElements = [];
+}
+
+function restartAppFromOnboarding() {
+	window.location.assign("/");
+}
 
 function StepIndicator({ steps, current }) {
 	return html`<div class="onboarding-steps">
@@ -468,8 +496,7 @@ function ProviderStep({ onNext, onBack }) {
 			${
 				oauthInfo?.status === "device"
 					? html`<div class="text-sm text-[var(--text)]">
-					Go to <a href=${oauthInfo.uri} target="_blank" class="text-[var(--accent)] underline">${oauthInfo.uri}</a>
-					and enter code: <strong class="font-mono">${oauthInfo.code}</strong>
+					Go to <a href=${oauthInfo.uri} target="_blank" class="text-[var(--accent)] underline">${oauthInfo.uri}</a> and enter code: <strong class="font-mono">${oauthInfo.code}</strong>
 				</div>`
 					: html`<div class="text-sm text-[var(--muted)]">Waiting for authentication\u2026</div>`
 			}
@@ -659,56 +686,12 @@ function ChannelStep({ onNext, onBack }) {
 	</div>`;
 }
 
-// ── Finish screen ───────────────────────────────────────────
-
-function FinishStep() {
-	return html`<div class="flex flex-col gap-4 items-center text-center py-6">
-		<div class="text-4xl">\u{1f389}</div>
-		<h2 class="text-xl font-medium text-[var(--text-strong)]">You\u2019re all set!</h2>
-		<p class="text-sm text-[var(--muted)]">Your agent is ready to go. Start chatting or customise further in Settings.</p>
-		<button class="provider-btn" onClick=${() => navigate("/chats")}>Get Started</button>
-	</div>`;
-}
-
 // ── Main page component ─────────────────────────────────────
 
 function OnboardingPage() {
 	var [step, setStep] = useState(-1); // -1 = checking
 	var [authNeeded, setAuthNeeded] = useState(false);
 	var [authSkippable, setAuthSkippable] = useState(false);
-	var [finished, setFinished] = useState(false);
-	var headerRef = useRef(null);
-	var navRef = useRef(null);
-	var sessionsPanelRef = useRef(null);
-
-	// Hide nav, header, and banners for standalone experience
-	useEffect(() => {
-		var header = document.querySelector("header");
-		var nav = document.getElementById("navPanel");
-		var sessions = document.getElementById("sessionsPanel");
-		var burger = document.getElementById("burgerBtn");
-		var toggle = document.getElementById("sessionsToggle");
-		var authBanner = document.getElementById("authDisabledBanner");
-		headerRef.current = header;
-		navRef.current = nav;
-		sessionsPanelRef.current = sessions;
-
-		if (header) header.style.display = "none";
-		if (nav) nav.style.display = "none";
-		if (sessions) sessions.style.display = "none";
-		if (burger) burger.style.display = "none";
-		if (toggle) toggle.style.display = "none";
-		if (authBanner) authBanner.style.display = "none";
-
-		return () => {
-			if (header) header.style.display = "";
-			if (nav) nav.style.display = "";
-			if (sessions) sessions.style.display = "";
-			if (burger) burger.style.display = "";
-			if (toggle) toggle.style.display = "";
-			// Don't restore authBanner — app.js will re-show it if needed
-		};
-	}, []);
 
 	// Check auth status to decide whether to show step 0
 	useEffect(() => {
@@ -749,17 +732,13 @@ function OnboardingPage() {
 		</div>`;
 	}
 
-	if (finished) {
-		return html`<div class="onboarding-card"><${FinishStep} /></div>`;
-	}
-
 	// Build step list (auth may be removed)
 	var steps = authNeeded ? STEP_LABELS : STEP_LABELS.slice(1);
 	var stepIndex = authNeeded ? step : step - 1;
 
 	function goNext() {
 		if (step === 3) {
-			setFinished(true);
+			restartAppFromOnboarding();
 		} else {
 			setStep(step + 1);
 		}
@@ -792,11 +771,13 @@ registerPage(
 	"/onboarding",
 	(container) => {
 		containerRef = container;
+		hideAppChrome();
 		container.style.cssText = "display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1rem;";
 		render(html`<${OnboardingPage} />`, container);
 	},
 	() => {
 		if (containerRef) render(null, containerRef);
+		restoreAppChrome();
 		containerRef = null;
 	},
 );

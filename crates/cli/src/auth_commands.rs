@@ -166,8 +166,50 @@ fn reset_identity() -> Result<()> {
         cfg.identity = Default::default();
         cfg.user = Default::default();
     })?;
+
+    let data_dir = moltis_config::data_dir();
+    remove_file_if_exists(&data_dir.join("IDENTITY.md"))?;
+    remove_file_if_exists(&data_dir.join("USER.md"))?;
+
     println!("Identity and user profile cleared. Onboarding will be required on next load.");
     Ok(())
+}
+
+fn remove_file_if_exists(path: &std::path::Path) -> Result<()> {
+    std::fs::remove_file(path).or_else(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            Ok(())
+        } else {
+            Err(err)
+        }
+    })?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remove_file_if_exists;
+
+    #[test]
+    fn remove_file_if_exists_deletes_existing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file_path = dir.path().join("IDENTITY.md");
+        std::fs::write(&file_path, "name: test").expect("write file");
+
+        remove_file_if_exists(&file_path).expect("remove file");
+
+        assert!(!file_path.exists());
+    }
+
+    #[test]
+    fn remove_file_if_exists_ignores_missing_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let file_path = dir.path().join("USER.md");
+
+        remove_file_if_exists(&file_path).expect("missing file should be ok");
+
+        assert!(!file_path.exists());
+    }
 }
 
 async fn reset_password() -> Result<()> {
