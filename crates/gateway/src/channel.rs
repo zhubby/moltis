@@ -606,7 +606,7 @@ impl ChannelService for LiveChannelService {
             warn!(error = %e, account_id, "failed to persist sender approval");
         }
 
-// Hot-update the in-memory config where supported, restart otherwise.
+        // Hot-update the in-memory config where supported, restart otherwise.
         match channel_type {
             "telegram" => {
                 // Telegram supports hot-update (preserves polling offset).
@@ -697,7 +697,7 @@ impl ChannelService for LiveChannelService {
             warn!(error = %e, account_id, "failed to persist sender denial");
         }
 
-// Hot-update the in-memory config where supported, restart otherwise.
+        // Hot-update the in-memory config where supported, restart otherwise.
         match channel_type {
             "telegram" => {
                 // Telegram supports hot-update.

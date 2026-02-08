@@ -264,6 +264,7 @@ impl EventHandler for DiscordHandler {
             channel_type: ChannelType::Discord,
             sender_name: msg.author.global_name.clone(),
             username: Some(msg.author.name.clone()),
+            message_kind: None,
             model: self.config.model.clone(),
         };
 

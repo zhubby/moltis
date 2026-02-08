@@ -381,6 +381,7 @@ async fn handle_message_event(state: &SocketModeState, event: &SlackMessageEvent
         channel_type: ChannelType::Slack,
         sender_name: None,
         username: user_id,
+        message_kind: None,
         model: state.config.model.clone(),
     };
 

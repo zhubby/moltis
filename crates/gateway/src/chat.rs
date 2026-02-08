@@ -2478,8 +2478,7 @@ async fn deliver_channel_replies_to_targets(
                         }
                     },
                 },
-                moltis_channels::ChannelType::Slack
-                | moltis_channels::ChannelType::Discord => {
+                moltis_channels::ChannelType::Slack | moltis_channels::ChannelType::Discord => {
                     if let Err(e) = outbound
                         .send_text(&target.account_id, &target.chat_id, &text)
                         .await
