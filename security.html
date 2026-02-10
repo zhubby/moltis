@@ -364,34 +364,18 @@ WebSocket hijacking (CSWSH). Connections from untrusted origins are rejected.</p
 <p>The <code>web_fetch</code> tool resolves DNS and blocks requests to private IP ranges
 (loopback, RFC 1918, link-local, CGNAT). This prevents server-side request
 forgery attacks.</p>
-<h2 id="three-tier-authentication-model"><a class="header" href="#three-tier-authentication-model">Three-Tier Authentication Model</a></h2>
-<p>Moltis uses a per-request three-tier authentication model that balances
-local development convenience with production security:</p>
+<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<p>Moltis uses a unified auth gate that applies a single <code>check_auth()</code>
+function to every request. This prevents split-brain bugs where different
+code paths disagree on auth status.</p>
+<p>For full details — including the decision matrix, credential types, API
+key scopes, session management endpoints, and WebSocket auth — see the
+dedicated <a href="authentication.html">Authentication</a> page.</p>
+<h3 id="three-tier-model-summary"><a class="header" href="#three-tier-model-summary">Three-Tier Model (summary)</a></h3>
 <div class="table-wrapper"><table><thead><tr><th>Tier</th><th>Condition</th><th>Behaviour</th></tr></thead><tbody>
-<tr><td><strong>1</strong></td><td>Password/passkey is set</td><td>Auth <strong>always</strong> required (any IP)</td></tr>
-<tr><td><strong>2</strong></td><td>No password + direct local connection</td><td>Full access (dev convenience)</td></tr>
-<tr><td><strong>3</strong></td><td>No password + remote/proxied connection</td><td>Onboarding only (setup code required)</td></tr>
-</tbody></table>
-</div>
-<h3 id="how-local-is-determined"><a class="header" href="#how-local-is-determined">How “local” is determined</a></h3>
-<p>Each incoming request is classified as <strong>local</strong> or <strong>remote</strong> using
-four checks that must <strong>all</strong> pass:</p>
-<ol>
-<li><code>MOLTIS_BEHIND_PROXY</code> env var is <strong>not</strong> set (hard override)</li>
-<li>No proxy headers present (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>,
-<code>CF-Connecting-IP</code>, <code>Forwarded</code>)</li>
-<li>The <code>Host</code> header resolves to a loopback address (or is absent)</li>
-<li>The TCP source IP is loopback (<code>127.0.0.1</code>, <code>::1</code>)</li>
-</ol>
-<p>If <strong>any</strong> check fails, the connection is treated as remote.</p>
-<h3 id="practical-implications"><a class="header" href="#practical-implications">Practical implications</a></h3>
-<div class="table-wrapper"><table><thead><tr><th>Scenario</th><th>No password</th><th>Password set</th></tr></thead><tbody>
-<tr><td>Local browser → <code>localhost:18789</code></td><td>Full access</td><td>Auth required</td></tr>
-<tr><td>Local CLI/wscat → <code>localhost:18789</code></td><td>Full access</td><td>Auth required</td></tr>
-<tr><td>Internet → Caddy (with XFF) → <code>127.0.0.1:18789</code></td><td>Onboarding only</td><td>Auth required</td></tr>
-<tr><td>Internet → nginx (with <code>proxy_set_header</code>) → <code>127.0.0.1:18789</code></td><td>Onboarding only</td><td>Auth required</td></tr>
-<tr><td>Internet → bare nginx (<code>proxy_pass</code> only) → <code>127.0.0.1:18789</code></td><td><strong>See below</strong></td><td>Auth required</td></tr>
-<tr><td>Server bound to <code>0.0.0.0</code>, remote client</td><td>Onboarding only</td><td>Auth required</td></tr>
+<tr><td><strong>1</strong></td><td>Password/passkey is configured</td><td>Auth <strong>always</strong> required (any IP)</td></tr>
+<tr><td><strong>2</strong></td><td>No credentials + direct local connection</td><td>Full access (dev convenience)</td></tr>
+<tr><td><strong>3</strong></td><td>No credentials + remote/proxied connection</td><td>Onboarding only (setup code required)</td></tr>
 </tbody></table>
 </div>
 <h2 id="reverse-proxy-deployments"><a class="header" href="#reverse-proxy-deployments">Reverse Proxy Deployments</a></h2>
@@ -488,7 +472,7 @@ public issues for security bugs.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="mobile-pwa.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="authentication.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
@@ -502,7 +486,7 @@ public issues for security bugs.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="mobile-pwa.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="authentication.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
