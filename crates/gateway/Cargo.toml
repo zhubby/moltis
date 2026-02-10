@@ -22,6 +22,7 @@ hostname           = { workspace = true }
 include_dir        = { optional = true, workspace = true }
 moltis-agents      = { workspace = true }
 moltis-browser     = { workspace = true }
+moltis-caldav      = { optional = true, workspace = true }
 moltis-canvas      = { workspace = true }
 moltis-channels    = { workspace = true }
 moltis-common      = { workspace = true }
@@ -77,7 +78,9 @@ openssl     = { workspace = true }
 urlencoding = { workspace = true }
 
 [features]
+caldav = ["dep:moltis-caldav"]
 default = [
+  "caldav",
   "file-watcher",
   "local-llm",
   "metrics",
