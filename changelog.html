@@ -187,6 +187,23 @@
 <p>All notable changes to this project will be documented in this file.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
+<h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
+<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li><strong><code>moltis doctor</code> command</strong>: Comprehensive health check that validates config,
+audits security (file permissions, API keys in config), checks directory and
+database health, verifies provider readiness (API keys via config or env vars),
+inspects TLS certificates, and validates MCP server commands on PATH.</li>
+</ul>
+<h3 id="security"><a class="header" href="#security">Security</a></h3>
+<ul>
+<li><strong>npm install –ignore-scripts</strong>: Skill dependency installation now passes
+<code>--ignore-scripts</code> to npm, preventing supply chain attacks via malicious
+postinstall scripts in npm packages.</li>
+<li><strong>API key scope enforcement</strong>: API keys with empty/no scopes are now denied
+access instead of silently receiving full admin privileges. Keys must specify
+at least one scope explicitly (least-privilege by default).</li>
+</ul>
 <h2 id="041---2026-02-09"><a class="header" href="#041---2026-02-09">[0.4.1] - 2026-02-09</a></h2>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
@@ -194,7 +211,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 fix <code>clippy::unnecessary_unwrap</code> that broke the v0.4.0 release build.</li>
 </ul>
 <h2 id="040---2026-02-09"><a class="header" href="#040---2026-02-09">[0.4.0] - 2026-02-09</a></h2>
-<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
 <ul>
 <li><strong>Auto-import external OAuth tokens</strong>: At startup, auto-detected provider
 tokens (e.g. Codex CLI <code>~/.codex/auth.json</code>) are imported into the central
@@ -310,7 +327,7 @@ binding, fixing <code>get_user_location</code> failures on first Telegram messag
 <li><strong>Cargo.lock sync</strong>: Lock file now matches workspace version.</li>
 </ul>
 <h2 id="030---2026-02-08"><a class="header" href="#030---2026-02-08">[0.3.0] - 2026-02-08</a></h2>
-<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
+<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
 <ul>
 <li>
 <p><strong>Silent replies</strong>: The system prompt instructs the LLM to return an empty
@@ -500,7 +517,7 @@ Rust structs instead of ad-hoc <code>serde_json::Value</code> maps.</li>
 personality bootstrapping.</li>
 </ul>
 <h2 id="029---2026-02-08"><a class="header" href="#029---2026-02-08">[0.2.9] - 2026-02-08</a></h2>
-<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
+<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
 <ul>
 <li><strong>Voice provider policy controls</strong>: Added provider-list allowlists so config templates and runtime voice setup can explicitly limit shown/allowed TTS and STT providers.</li>
 <li><strong>Typed voice provider metadata</strong>: Expanded voice provider metadata and preference handling to use typed flows across gateway and UI paths.</li>
@@ -547,7 +564,7 @@ hide <code>create_skill</code>/<code>update_skill</code> and leave only a subset
 Chat runs now use configured tool policy for runtime filtering without globally
 restricting tools based on discovered skill metadata.</li>
 </ul>
-<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
+<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
 <ul>
 <li>
 <p><strong>Voice Provider Management UI</strong>: Configure TTS and STT providers from Settings &gt; Voice</p>
@@ -716,7 +733,7 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Telegram typing indicator for long responses</strong>: Channel replies now wait for outbound delivery tasks to finish before chat completion returns, so periodic <code>typing...</code> updates continue until the Telegram message is actually sent.</li>
 <li><strong>Skills dependency install safety</strong>: <code>skills.install_dep</code> now requires explicit user confirmation and blocks host installs when sandbox mode is disabled (unless explicitly overridden in the RPC call).</li>
 </ul>
-<h3 id="security"><a class="header" href="#security">Security</a></h3>
+<h3 id="security-1"><a class="header" href="#security-1">Security</a></h3>
 <ul>
 <li><strong>Asset response hardening</strong>: Static assets now set <code>X-Content-Type-Options: nosniff</code>, and SVG responses include a restrictive <code>Content-Security-Policy</code> (<code>script-src 'none'</code>, <code>object-src 'none'</code>) to reduce stored-XSS risk if user-controlled SVGs are ever introduced.</li>
 <li><strong>Archive extraction hardening</strong>: Skills/plugin tarball installs now reject unsafe archive paths (<code>..</code>, absolute/path-prefix escapes) and reject symlink/hardlink archive entries to prevent path traversal and link-based escapes.</li>
@@ -773,7 +790,7 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>CI security</strong>: Add <code>persist-credentials: false</code> to docs workflow checkout (fixes zizmor artipacked warning)</li>
 </ul>
 <h2 id="014---2026-02-06"><a class="header" href="#014---2026-02-06">[0.1.4] - 2026-02-06</a></h2>
-<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
+<h3 id="added-5"><a class="header" href="#added-5">Added</a></h3>
 <ul>
 <li>
 <p><strong><code>--no-tls</code> CLI flag</strong>: <code>--no-tls</code> flag and <code>MOLTIS_NO_TLS</code> environment variable to disable

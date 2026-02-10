@@ -305,24 +305,22 @@ personality to make it more compliant with malicious requests.</p>
 </tbody></table>
 </div>
 <h3 id="api-keys"><a class="header" href="#api-keys">API Keys</a></h3>
-<p>API keys authenticate external tools and scripts connecting to Moltis. Keys can
-have <strong>full access</strong> (all scopes) or be restricted to specific scopes for
-defense-in-depth.</p>
+<p>API keys authenticate external tools and scripts connecting to Moltis. Keys
+<strong>must specify at least one scope</strong> — keys without scopes are denied access
+(least-privilege by default).</p>
 <h4 id="creating-api-keys"><a class="header" href="#creating-api-keys">Creating API Keys</a></h4>
 <p><strong>Web UI</strong>: Settings &gt; Security &gt; API Keys</p>
 <ol>
 <li>Enter a label describing the key’s purpose</li>
-<li>Choose “Full access” or select specific scopes</li>
+<li>Select the required scopes</li>
 <li>Click “Generate key”</li>
 <li><strong>Copy the key immediately</strong> — it’s only shown once</li>
 </ol>
 <p><strong>CLI</strong>:</p>
-<pre><code class="language-bash"># Full access key
-moltis auth create-api-key --label "CI pipeline"
-
-# Scoped key (comma-separated scopes)
+<pre><code class="language-bash"># Scoped key (comma-separated scopes)
 moltis auth create-api-key --label "Monitor" --scopes "operator.read"
 moltis auth create-api-key --label "Automation" --scopes "operator.read,operator.write"
+moltis auth create-api-key --label "CI pipeline" --scopes "operator.admin"
 </code></pre>
 <h4 id="using-api-keys"><a class="header" href="#using-api-keys">Using API Keys</a></h4>
 <p>Pass the key in the <code>connect</code> handshake over WebSocket:</p>
@@ -342,14 +340,14 @@ moltis auth create-api-key --label "Automation" --scopes "operator.read,operator
 <tr><td>Read-only monitoring</td><td><code>operator.read</code></td></tr>
 <tr><td>Automated workflows</td><td><code>operator.read</code>, <code>operator.write</code></td></tr>
 <tr><td>Approval handling</td><td><code>operator.read</code>, <code>operator.approvals</code></td></tr>
-<tr><td>Full automation</td><td>Full access (no scope restrictions)</td></tr>
+<tr><td>Full automation</td><td><code>operator.admin</code></td></tr>
 </tbody></table>
 </div>
 <p><strong>Best practice</strong>: Use the minimum necessary scopes. If a key only needs to
 read status and logs, don’t grant <code>operator.write</code>.</p>
 <h4 id="backward-compatibility"><a class="header" href="#backward-compatibility">Backward Compatibility</a></h4>
-<p>Existing API keys (created before scopes were added) have full access. Newly
-created keys without explicit scopes also have full access.</p>
+<p>Existing API keys created without scopes will be <strong>denied access</strong> until
+scopes are added. Re-create keys with explicit scopes to restore access.</p>
 <h2 id="network-security"><a class="header" href="#network-security">Network Security</a></h2>
 <h3 id="tls-encryption"><a class="header" href="#tls-encryption">TLS Encryption</a></h3>
 <p>HTTPS is enabled by default with auto-generated certificates:</p>
