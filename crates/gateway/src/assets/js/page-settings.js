@@ -9,11 +9,13 @@ import { onEvent } from "./events.js";
 import * as gon from "./gon.js";
 import { refresh as refreshGon } from "./gon.js";
 import { sendRpc } from "./helpers.js";
+import { detectPasskeyName } from "./passkey-detect.js";
 import * as push from "./push.js";
 import { isStandalone } from "./pwa.js";
 import { navigate, registerPrefix } from "./router.js";
 import { connected } from "./signals.js";
 import * as S from "./state.js";
+import { fetchPhrase } from "./tts-phrases.js";
 import { Modal } from "./ui.js";
 
 var identity = signal(null);
@@ -496,6 +498,7 @@ function SecuritySection() {
 	var [pkLoading, setPkLoading] = useState(true);
 	var [editingPk, setEditingPk] = useState(null);
 	var [editingPkName, setEditingPkName] = useState("");
+	var [passkeyOrigins, setPasskeyOrigins] = useState([]);
 
 	var [apiKeys, setApiKeys] = useState([]);
 	var [akLabel, setAkLabel] = useState("");
@@ -516,6 +519,7 @@ function SecuritySection() {
 				if (d?.auth_disabled) setAuthDisabled(true);
 				if (d?.localhost_only) setLocalhostOnly(true);
 				if (d?.has_password === false) setHasPassword(false);
+				if (d?.passkey_origins) setPasskeyOrigins(d.passkey_origins);
 				setAuthLoading(false);
 				rerender();
 			})
@@ -602,7 +606,7 @@ function SecuritySection() {
 			.then(({ cred, challengeId }) => {
 				var body = {
 					challenge_id: challengeId,
-					name: pkName.trim() || "Passkey",
+					name: pkName.trim() || detectPasskeyName(cred),
 					credential: {
 						id: cred.id,
 						rawId: bufToB64(cred.rawId),
@@ -786,7 +790,7 @@ function SecuritySection() {
 				</p>
 				<button type="button" class="provider-btn" style="margin-top:10px;"
 					onClick=${() => {
-						navigate("/onboarding");
+						window.location.assign("/onboarding");
 					}}>Set up authentication</button>
 			</div>
 		</div>`;
@@ -843,6 +847,7 @@ function SecuritySection() {
 		<!-- Passkeys -->
 		<div style="max-width:600px;border-top:1px solid var(--border);padding-top:16px;">
 			<h3 class="text-sm font-medium text-[var(--text-strong)]" style="margin-bottom:8px;">Passkeys</h3>
+			${passkeyOrigins.length > 1 && html`<div class="text-xs text-[var(--muted)]" style="margin-bottom:8px;">Passkeys will work when visiting: ${passkeyOrigins.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</div>`}
 			${
 				pkLoading
 					? html`<div class="text-xs text-[var(--muted)]">Loading\u2026</div>`
@@ -1046,15 +1051,6 @@ function decodeBase64Safe(input) {
 	return bytes;
 }
 
-function encodeBase64Safe(bytes) {
-	var chunk = 0x8000;
-	var str = "";
-	for (var i = 0; i < bytes.length; i += chunk) {
-		str += String.fromCharCode(...bytes.subarray(i, i + chunk));
-	}
-	return btoa(str);
-}
-
 // ── Configuration section ─────────────────────────────────────
 
 function ConfigSection() {
@@ -1190,10 +1186,23 @@ function ConfigSection() {
 		rerender();
 
 		fetch("/api/restart", { method: "POST" })
-			.then((r) => r.json())
-			.then(() => {
-				// Server will restart, wait a bit then start polling for reconnection
-				setTimeout(waitForRestart, 1000);
+			.then((r) =>
+				r
+					.json()
+					.catch(() => ({}))
+					.then((d) => ({ status: r.status, data: d })),
+			)
+			.then(({ status, data }) => {
+				if (status >= 400 && data.error) {
+					// Server refused the restart (e.g. invalid config)
+					setRestarting(false);
+					setErr(data.error);
+					setMsg(null);
+					rerender();
+				} else {
+					// Server will restart, wait a bit then start polling for reconnection
+					setTimeout(waitForRestart, 1000);
+				}
 			})
 			.catch(() => {
 				// Expected - server restarted before response
@@ -1651,141 +1660,6 @@ function TailscaleSection() {
 
 // ── Voice section ────────────────────────────────────────────
 
-// Provider metadata for the add modal
-var VOICE_PROVIDERS = {
-	// STT Cloud
-	whisper: {
-		id: "whisper",
-		name: "OpenAI Whisper",
-		type: "stt",
-		category: "cloud",
-		description: "Best accuracy, handles accents and background noise",
-		keyPlaceholder: "sk-...",
-		keyUrl: "https://platform.openai.com/api-keys",
-		keyUrlLabel: "platform.openai.com/api-keys",
-	},
-	groq: {
-		id: "groq",
-		name: "Groq",
-		type: "stt",
-		category: "cloud",
-		description: "Ultra-fast Whisper inference on Groq hardware",
-		keyPlaceholder: "gsk_...",
-		keyUrl: "https://console.groq.com/keys",
-		keyUrlLabel: "console.groq.com/keys",
-	},
-	deepgram: {
-		id: "deepgram",
-		name: "Deepgram",
-		type: "stt",
-		category: "cloud",
-		description: "Fast and accurate with Nova-3 model",
-		keyPlaceholder: "API key",
-		keyUrl: "https://console.deepgram.com/api-keys",
-		keyUrlLabel: "console.deepgram.com",
-	},
-	google: {
-		id: "google",
-		name: "Google Cloud",
-		type: "stt",
-		category: "cloud",
-		description: "Supports 125+ languages with Google Speech-to-Text",
-		keyPlaceholder: "API key",
-		keyUrl: "https://console.cloud.google.com/apis/credentials",
-		keyUrlLabel: "console.cloud.google.com",
-	},
-	mistral: {
-		id: "mistral",
-		name: "Mistral AI",
-		type: "stt",
-		category: "cloud",
-		description: "Fast Voxtral transcription with 13 language support",
-		keyPlaceholder: "API key",
-		keyUrl: "https://console.mistral.ai/api-keys",
-		keyUrlLabel: "console.mistral.ai",
-	},
-	"elevenlabs-stt": {
-		id: "elevenlabs-stt",
-		name: "ElevenLabs Scribe",
-		type: "stt",
-		category: "cloud",
-		description: "90+ languages, word timestamps. Same API key as ElevenLabs TTS",
-		keyPlaceholder: "API key",
-		keyUrl: "https://elevenlabs.io/app/settings/api-keys",
-		keyUrlLabel: "elevenlabs.io",
-		hint: "If you already have ElevenLabs TTS configured, use the same API key here.",
-	},
-	// STT Local
-	"whisper-cli": {
-		id: "whisper-cli",
-		name: "whisper.cpp",
-		type: "stt",
-		category: "local",
-		description: "Local Whisper inference via whisper-cli",
-	},
-	"sherpa-onnx": {
-		id: "sherpa-onnx",
-		name: "sherpa-onnx",
-		type: "stt",
-		category: "local",
-		description: "Local offline speech recognition via ONNX runtime",
-	},
-	"voxtral-local": {
-		id: "voxtral-local",
-		name: "Voxtral (Local)",
-		type: "stt",
-		category: "local",
-		description: "Run Mistral's Voxtral model locally via vLLM server",
-	},
-	// TTS Cloud
-	elevenlabs: {
-		id: "elevenlabs",
-		name: "ElevenLabs",
-		type: "tts",
-		category: "cloud",
-		description: "Lowest latency (~75ms), natural voices. Same key enables Scribe STT",
-		keyPlaceholder: "API key",
-		keyUrl: "https://elevenlabs.io/app/settings/api-keys",
-		keyUrlLabel: "elevenlabs.io",
-		hint: "This API key also enables ElevenLabs Scribe for speech-to-text.",
-	},
-	openai: {
-		id: "openai",
-		name: "OpenAI TTS",
-		type: "tts",
-		category: "cloud",
-		description: "Good quality, shares API key with Whisper STT",
-		keyPlaceholder: "sk-...",
-		keyUrl: "https://platform.openai.com/api-keys",
-		keyUrlLabel: "platform.openai.com/api-keys",
-	},
-	"google-tts": {
-		id: "google",
-		name: "Google Cloud TTS",
-		type: "tts",
-		category: "cloud",
-		description: "220+ voices, 40+ languages, WaveNet and Neural2 voices",
-		keyPlaceholder: "API key",
-		keyUrl: "https://console.cloud.google.com/apis/credentials",
-		keyUrlLabel: "console.cloud.google.com",
-	},
-	// TTS Local
-	piper: {
-		id: "piper",
-		name: "Piper",
-		type: "tts",
-		category: "local",
-		description: "Fast local TTS, commonly used in Home Assistant",
-	},
-	coqui: {
-		id: "coqui",
-		name: "Coqui TTS",
-		type: "tts",
-		category: "local",
-		description: "Open-source deep learning TTS with many voice models",
-	},
-};
-
 // Voice section signals
 var voiceShowAddModal = signal(false);
 var voiceSelectedProvider = signal(null);
@@ -1859,8 +1733,7 @@ function VoiceSection() {
 	}
 
 	function getUnconfiguredProviders() {
-		var allIds = new Set([...allProviders.tts.map((p) => p.id), ...allProviders.stt.map((p) => p.id)]);
-		return Object.values(VOICE_PROVIDERS).filter((p) => !allIds.has(p.id));
+		return [...allProviders.stt, ...allProviders.tts].filter((p) => !p.available);
 	}
 
 	// Stop active STT recording
@@ -1886,8 +1759,12 @@ function VoiceSection() {
 		if (type === "tts") {
 			// Test TTS by converting sample text to audio and playing it
 			try {
+				var id = gon.get("identity");
+				var user = id?.user_name || "friend";
+				var bot = id?.name || "Moltis";
+				var ttsText = await fetchPhrase("settings", user, bot);
 				var res = await sendRpc("tts.convert", {
-					text: "Hello! This is a test of the text to speech system.",
+					text: ttsText,
 					provider: providerId,
 				});
 				if (res?.ok && res.payload?.audio) {
@@ -1941,24 +1818,36 @@ function VoiceSection() {
 					rerender();
 
 					var audioBlob = new Blob(audioChunks, { type: "audio/webm" });
-					var buffer = await audioBlob.arrayBuffer();
-					var base64 = encodeBase64Safe(new Uint8Array(buffer));
 
-					var sttRes = await sendRpc("stt.transcribe", {
-						audio: base64,
-						format: "webm",
-						provider: providerId,
-					});
+					try {
+						var resp = await fetch(
+							`/api/sessions/${encodeURIComponent(S.activeSessionKey)}/upload?transcribe=true&provider=${encodeURIComponent(providerId)}`,
+							{
+								method: "POST",
+								headers: { "Content-Type": audioBlob.type || "audio/webm" },
+								body: audioBlob,
+							},
+						);
+						var sttRes = await resp.json();
 
-					if (sttRes?.ok && sttRes.payload?.text) {
+						if (sttRes.ok && sttRes.transcription?.text) {
+							setVoiceTestResults((prev) => ({
+								...prev,
+								[providerId]: { text: sttRes.transcription.text, error: null },
+							}));
+						} else {
+							setVoiceTestResults((prev) => ({
+								...prev,
+								[providerId]: {
+									text: null,
+									error: sttRes.transcriptionError || sttRes.error || "STT test failed",
+								},
+							}));
+						}
+					} catch (fetchErr) {
 						setVoiceTestResults((prev) => ({
 							...prev,
-							[providerId]: { text: sttRes.payload.text, error: null },
-						}));
-					} else {
-						setVoiceTestResults((prev) => ({
-							...prev,
-							[providerId]: { text: null, error: sttRes?.error?.message || "STT test failed" },
+							[providerId]: { text: null, error: fetchErr.message || "STT test failed" },
 						}));
 					}
 					setVoiceTesting(null);
@@ -2000,7 +1889,7 @@ function VoiceSection() {
 				<h3 class="text-sm font-medium text-[var(--text-strong)] mb-3">Speech-to-Text (Voice Input)</h3>
 				<div class="flex flex-col gap-2">
 					${allProviders.stt.map((prov) => {
-						var meta = VOICE_PROVIDERS[prov.id] || { name: prov.name, description: "" };
+						var meta = prov;
 						var testState = voiceTesting?.id === prov.id && voiceTesting?.type === "stt" ? voiceTesting : null;
 						var testResult = voiceTestResults[prov.id] || null;
 						return html`<${VoiceProviderRow}
@@ -2023,7 +1912,7 @@ function VoiceSection() {
 				<h3 class="text-sm font-medium text-[var(--text-strong)] mb-3">Text-to-Speech (Audio Responses)</h3>
 				<div class="flex flex-col gap-2">
 					${allProviders.tts.map((prov) => {
-						var meta = VOICE_PROVIDERS[prov.id] || { name: prov.name, description: "" };
+						var meta = prov;
 						var testState = voiceTesting?.id === prov.id && voiceTesting?.type === "tts" ? voiceTesting : null;
 						var testResult = voiceTestResults[prov.id] || null;
 						return html`<${VoiceProviderRow}
@@ -2225,7 +2114,9 @@ function AddVoiceProviderModal({ unconfiguredProviders, voxtralReqs, onSaved }) 
 	var [error, setError] = useState("");
 
 	var selectedProvider = voiceSelectedProvider.value;
-	var providerMeta = selectedProvider ? VOICE_PROVIDERS[selectedProvider] : null;
+	var providerMeta = selectedProvider
+		? unconfiguredProviders.find((p) => p.id === selectedProvider) || voiceSelectedProviderData.value
+		: null;
 	var isElevenLabsProvider = selectedProvider === "elevenlabs" || selectedProvider === "elevenlabs-stt";
 	var supportsTtsVoiceSettings = providerMeta?.type === "tts";
 

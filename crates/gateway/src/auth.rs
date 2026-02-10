@@ -45,7 +45,7 @@ pub struct ApiKeyEntry {
     pub label: String,
     pub key_prefix: String,
     pub created_at: String,
-    /// Scopes granted to this API key. None/empty means full access (operator.admin).
+    /// Scopes granted to this API key. Empty/None means no access (must specify scopes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
 }
@@ -54,7 +54,7 @@ pub struct ApiKeyEntry {
 #[derive(Debug, Clone)]
 pub struct ApiKeyVerification {
     pub key_id: i64,
-    /// Scopes granted to this key. Empty means full access (all scopes).
+    /// Scopes granted to this key. Empty means no access (key must specify scopes).
     pub scopes: Vec<String>,
 }
 
@@ -114,7 +114,7 @@ impl CredentialStore {
             auth_disabled: AtomicBool::new(false),
         };
         store.init().await?;
-        let has = store.has_password().await?;
+        let has = store.has_password().await? || store.has_passkeys().await?;
         store.setup_complete.store(has, Ordering::Relaxed);
         store
             .auth_disabled
@@ -241,6 +241,37 @@ impl CredentialStore {
         Ok(())
     }
 
+    /// Add a password when none exists yet (e.g. after passkey-only setup).
+    ///
+    /// Unlike [`set_initial_password`] this does **not** check or modify the
+    /// setup-complete flag — it only inserts the password row.
+    pub async fn add_password(&self, password: &str) -> anyhow::Result<()> {
+        if self.has_password().await? {
+            anyhow::bail!("password already set");
+        }
+        let hash = hash_password(password)?;
+        sqlx::query("INSERT INTO auth_password (id, password_hash) VALUES (1, ?)")
+            .bind(&hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Mark initial setup as complete without setting a password (e.g. passkey-only setup).
+    ///
+    /// Requires at least one credential (password or passkey) to already exist.
+    pub async fn mark_setup_complete(&self) -> anyhow::Result<()> {
+        let has_password = self.has_password().await?;
+        let has_passkeys = self.has_passkeys().await?;
+        if !has_password && !has_passkeys {
+            anyhow::bail!("cannot mark setup complete without any credentials");
+        }
+        self.setup_complete.store(true, Ordering::Relaxed);
+        self.auth_disabled.store(false, Ordering::Relaxed);
+        self.persist_auth_disabled(false)?;
+        Ok(())
+    }
+
     /// Verify a password against the stored hash.
     pub async fn verify_password(&self, password: &str) -> anyhow::Result<bool> {
         let row: Option<(String,)> =
@@ -315,7 +346,7 @@ impl CredentialStore {
     /// Generate a new API key with optional scopes. Returns (id, raw_key).
     /// The raw key is only shown once — we store only its SHA-256 hash.
     ///
-    /// If `scopes` is None or empty, the key has full access (operator.admin).
+    /// If `scopes` is None or empty, the key will have no access until scopes are set.
     pub async fn create_api_key(
         &self,
         label: &str,
@@ -714,6 +745,7 @@ pub fn resolve_auth(token: Option<String>, password: Option<String>) -> Resolved
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,12 +835,12 @@ mod tests {
         assert!(id > 0);
         assert!(raw_key.starts_with("mk_"));
 
-        // Verify returns Some with empty scopes (full access)
+        // Verify returns Some with empty scopes (no access — key must specify scopes)
         let verification = store.verify_api_key(&raw_key).await.unwrap();
         assert!(verification.is_some());
         let v = verification.unwrap();
         assert_eq!(v.key_id, id);
-        assert!(v.scopes.is_empty()); // empty = full access
+        assert!(v.scopes.is_empty()); // empty = no access
 
         // Invalid key returns None
         assert!(store.verify_api_key("mk_bogus").await.unwrap().is_none());
@@ -860,7 +892,7 @@ mod tests {
         let scoped = keys.iter().find(|k| k.id == id).unwrap();
         let full = keys.iter().find(|k| k.id == id2).unwrap();
         assert_eq!(scoped.scopes, Some(scopes));
-        assert!(full.scopes.is_none());
+        assert!(full.scopes.is_none()); // None = no scopes specified (no access)
 
         // Verify both keys work
         assert!(store.verify_api_key(&raw_key).await.unwrap().is_some());
@@ -995,5 +1027,42 @@ mod tests {
 
         store.remove_passkey(id).await.unwrap();
         assert!(!store.has_passkeys().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_mark_setup_complete_with_passkey_only() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let store = CredentialStore::new(pool).await.unwrap();
+
+        assert!(!store.is_setup_complete());
+
+        // Cannot mark complete without any credentials.
+        assert!(store.mark_setup_complete().await.is_err());
+
+        // Store a passkey, then mark complete.
+        store
+            .store_passkey(b"cred-1", "My Passkey", b"data")
+            .await
+            .unwrap();
+        store.mark_setup_complete().await.unwrap();
+        assert!(store.is_setup_complete());
+        assert!(!store.is_auth_disabled());
+    }
+
+    #[tokio::test]
+    async fn test_setup_complete_persists_with_passkey_only() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let store = CredentialStore::new(pool.clone()).await.unwrap();
+
+        store
+            .store_passkey(b"cred-1", "My Passkey", b"data")
+            .await
+            .unwrap();
+        store.mark_setup_complete().await.unwrap();
+        assert!(store.is_setup_complete());
+
+        // Simulate restart: create a new store from the same DB.
+        let store2 = CredentialStore::new(pool).await.unwrap();
+        assert!(store2.is_setup_complete());
     }
 }

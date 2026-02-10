@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{collections::HashSet, pin::Pin, sync::mpsc, time::Duration};
 
 use {
     async_trait::async_trait,
@@ -7,7 +7,7 @@ use {
     moltis_oauth::{OAuthFlow, TokenStore, load_oauth_config},
     secrecy::{ExposeSecret, Secret},
     tokio_stream::Stream,
-    tracing::{debug, info, trace},
+    tracing::{debug, info, trace, warn},
 };
 
 use crate::{
@@ -24,6 +24,17 @@ pub struct OpenAiCodexProvider {
     token_store: TokenStore,
 }
 
+const CODEX_MODELS_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/models";
+const CODEX_MODELS_CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const DEFAULT_CODEX_MODELS: &[(&str, &str)] = &[
+    ("gpt-5.3-codex", "GPT-5.3 Codex"),
+    ("gpt-5.2-codex", "GPT-5.2 Codex"),
+    ("gpt-5.2", "GPT-5.2"),
+    ("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
+    ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini"),
+];
+
 impl OpenAiCodexProvider {
     pub fn new(model: String) -> Self {
         Self {
@@ -34,7 +45,7 @@ impl OpenAiCodexProvider {
         }
     }
 
-    fn get_valid_token(&self) -> anyhow::Result<String> {
+    async fn get_valid_token(&self) -> anyhow::Result<String> {
         let tokens = self
             .token_store
             .load("openai-codex")
@@ -49,18 +60,17 @@ impl OpenAiCodexProvider {
         if let Some(expires_at) = tokens.expires_at {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             if now + 300 >= expires_at {
                 // Token expired or expiring — try refresh
                 if let Some(ref refresh_token) = tokens.refresh_token {
                     debug!("refreshing openai-codex token");
-                    let rt = tokio::runtime::Handle::current();
                     let oauth_config = load_oauth_config("openai-codex")
                         .ok_or_else(|| anyhow::anyhow!("missing oauth config for openai-codex"))?;
                     let flow = OAuthFlow::new(oauth_config);
                     let refresh = refresh_token.expose_secret().clone();
-                    let new_tokens = std::thread::scope(|_| rt.block_on(flow.refresh(&refresh)))?;
+                    let new_tokens = flow.refresh(&refresh).await?;
                     self.token_store.save("openai-codex", &new_tokens)?;
                     return Ok(new_tokens.access_token.expose_secret().clone());
                 }
@@ -104,23 +114,51 @@ impl OpenAiCodexProvider {
                         vec![]
                     },
                     ChatMessage::User { content } => {
-                        let text = match content {
-                            UserContent::Text(t) => t.clone(),
+                        let content_blocks = match content {
+                            UserContent::Text(t) => {
+                                vec![serde_json::json!({"type": "input_text", "text": t})]
+                            },
                             UserContent::Multimodal(parts) => {
-                                // Flatten multimodal to text for the Codex API
+                                let text_count = parts
+                                    .iter()
+                                    .filter(|p| matches!(p, crate::model::ContentPart::Text(_)))
+                                    .count();
+                                let image_count = parts
+                                    .iter()
+                                    .filter(|p| {
+                                        matches!(p, crate::model::ContentPart::Image { .. })
+                                    })
+                                    .count();
+                                debug!(
+                                    text_count,
+                                    image_count, "codex convert_messages: multimodal user content"
+                                );
                                 parts
                                     .iter()
-                                    .filter_map(|p| match p {
-                                        crate::model::ContentPart::Text(t) => Some(t.as_str()),
-                                        _ => None,
+                                    .map(|p| match p {
+                                        crate::model::ContentPart::Text(t) => {
+                                            serde_json::json!({"type": "input_text", "text": t})
+                                        },
+                                        crate::model::ContentPart::Image { media_type, data } => {
+                                            let data_uri =
+                                                format!("data:{media_type};base64,{data}");
+                                            debug!(
+                                                media_type,
+                                                data_len = data.len(),
+                                                "codex convert_messages: including input_image"
+                                            );
+                                            serde_json::json!({
+                                                "type": "input_image",
+                                                "image_url": data_uri,
+                                            })
+                                        },
                                     })
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
+                                    .collect()
                             },
                         };
                         vec![serde_json::json!({
                             "role": "user",
-                            "content": [{"type": "input_text", "text": text}]
+                            "content": content_blocks,
                         })]
                     },
                     ChatMessage::Assistant {
@@ -174,6 +212,42 @@ impl OpenAiCodexProvider {
             })
             .collect()
     }
+
+    async fn post_responses_request(
+        &self,
+        token: &str,
+        account_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<reqwest::Response, reqwest::Error> {
+        self.client
+            .post(format!("{}/codex/responses", self.base_url))
+            .header("Authorization", format!("Bearer {token}"))
+            .header("chatgpt-account-id", account_id)
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("originator", "pi")
+            .header("content-type", "application/json")
+            .json(body)
+            .send()
+            .await
+    }
+
+    async fn post_responses_request_with_fallback(
+        &self,
+        token: &str,
+        account_id: &str,
+        body: serde_json::Value,
+    ) -> anyhow::Result<reqwest::Response> {
+        let response = self
+            .post_responses_request(token, account_id, &body)
+            .await?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+        anyhow::bail!("openai-codex API error HTTP {status}: {body_text}");
+    }
 }
 
 /// Parse tokens from Codex CLI auth.json content.
@@ -206,6 +280,227 @@ pub fn has_stored_tokens() -> bool {
     TokenStore::new().load("openai-codex").is_some() || load_codex_cli_tokens().is_some()
 }
 
+fn default_model_catalog() -> Vec<(String, String)> {
+    DEFAULT_CODEX_MODELS
+        .iter()
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+        .collect()
+}
+
+fn formatted_model_name(model_id: &str) -> String {
+    let mut out = Vec::new();
+    for part in model_id.split('-') {
+        let item = match part {
+            "gpt" => "GPT".to_string(),
+            "codex" => "Codex".to_string(),
+            "mini" => "Mini".to_string(),
+            "max" => "Max".to_string(),
+            other => {
+                if other.is_empty() {
+                    continue;
+                }
+                let mut chars = other.chars();
+                match chars.next() {
+                    Some(first) => {
+                        let mut chunk = String::new();
+                        chunk.push(first.to_ascii_uppercase());
+                        chunk.push_str(chars.as_str());
+                        chunk
+                    },
+                    None => continue,
+                }
+            },
+        };
+        out.push(item);
+    }
+    if out.is_empty() {
+        model_id.to_string()
+    } else {
+        out.join(" ")
+    }
+}
+
+fn normalize_display_name(model_id: &str, display_name: Option<&str>) -> String {
+    let normalized = display_name
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(model_id);
+    if normalized == model_id {
+        return formatted_model_name(model_id);
+    }
+    normalized.to_string()
+}
+
+fn is_likely_model_id(model_id: &str) -> bool {
+    if model_id.is_empty() || model_id.len() > 120 {
+        return false;
+    }
+    if model_id.chars().any(char::is_whitespace) {
+        return false;
+    }
+    model_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+}
+
+fn parse_model_entry(entry: &serde_json::Value) -> Option<(String, String)> {
+    let obj = entry.as_object()?;
+    let model_id = obj
+        .get("id")
+        .or_else(|| obj.get("slug"))
+        .or_else(|| obj.get("model"))
+        .and_then(serde_json::Value::as_str)?;
+
+    if !is_likely_model_id(model_id) {
+        return None;
+    }
+
+    let display_name = obj
+        .get("display_name")
+        .or_else(|| obj.get("displayName"))
+        .or_else(|| obj.get("name"))
+        .or_else(|| obj.get("title"))
+        .and_then(serde_json::Value::as_str);
+
+    Some((
+        model_id.to_string(),
+        normalize_display_name(model_id, display_name),
+    ))
+}
+
+fn collect_candidate_arrays<'a>(
+    value: &'a serde_json::Value,
+    out: &mut Vec<&'a serde_json::Value>,
+) {
+    match value {
+        serde_json::Value::Array(items) => out.extend(items),
+        serde_json::Value::Object(map) => {
+            for key in ["models", "data", "items", "results", "available"] {
+                if let Some(nested) = map.get(key) {
+                    collect_candidate_arrays(nested, out);
+                }
+            }
+        },
+        _ => {},
+    }
+}
+
+fn parse_models_payload(value: &serde_json::Value) -> Vec<(String, String)> {
+    let mut candidates = Vec::new();
+    collect_candidate_arrays(value, &mut candidates);
+
+    let mut models = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in candidates {
+        if let Some((id, display_name)) = parse_model_entry(entry)
+            && seen.insert(id.clone())
+        {
+            models.push((id, display_name));
+        }
+    }
+    models
+}
+
+async fn fetch_models_from_api(
+    access_token: String,
+    account_id: String,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+    let url = format!("{CODEX_MODELS_ENDPOINT}?client_version={CODEX_MODELS_CLIENT_VERSION}");
+    let response = client
+        .get(url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("chatgpt-account-id", account_id)
+        .header("originator", "pi")
+        .header("accept", "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        anyhow::bail!("codex models API error HTTP {status}");
+    }
+    let payload: serde_json::Value = serde_json::from_str(&body)?;
+    let models = parse_models_payload(&payload);
+    if models.is_empty() {
+        anyhow::bail!("codex models API returned no models");
+    }
+    Ok(models)
+}
+
+fn fetch_models_blocking(
+    access_token: String,
+    account_id: String,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(anyhow::Error::from)
+            .and_then(|rt| rt.block_on(fetch_models_from_api(access_token, account_id)));
+        let _ = tx.send(result);
+    });
+    rx.recv()
+        .map_err(|err| anyhow::anyhow!("codex model discovery worker failed: {err}"))?
+}
+
+fn load_access_token_and_account_id() -> anyhow::Result<(String, String)> {
+    let tokens = TokenStore::new()
+        .load("openai-codex")
+        .or_else(load_codex_cli_tokens)
+        .ok_or_else(|| {
+            warn!("openai-codex tokens not found in token store or codex CLI auth");
+            anyhow::anyhow!("openai-codex tokens not found")
+        })?;
+
+    let access_token = tokens.access_token.expose_secret().clone();
+    let account_id = OpenAiCodexProvider::extract_account_id(&access_token)?;
+    Ok((access_token, account_id))
+}
+
+pub fn live_models() -> anyhow::Result<Vec<(String, String)>> {
+    let (access_token, account_id) = load_access_token_and_account_id()?;
+    let models = fetch_models_blocking(access_token, account_id)?;
+    info!(
+        model_count = models.len(),
+        "loaded openai-codex live models"
+    );
+    Ok(models)
+}
+
+pub fn available_models() -> Vec<(String, String)> {
+    let fallback = default_model_catalog();
+    let discovered = match live_models() {
+        Ok(models) => models,
+        Err(err) => {
+            let msg = err.to_string();
+            if msg.contains("tokens not found") || msg.contains("not logged in") {
+                debug!(error = %err, "openai-codex not configured, using fallback catalog");
+            } else {
+                warn!(error = %err, "failed to fetch openai-codex models, using fallback catalog");
+            }
+            return fallback;
+        },
+    };
+
+    let mut merged = discovered;
+    let mut seen: HashSet<String> = merged.iter().map(|(id, _)| id.clone()).collect();
+    for (id, display_name) in fallback {
+        if seen.insert(id.clone()) {
+            merged.push((id, display_name));
+        }
+    }
+
+    info!(
+        model_count = merged.len(),
+        "loaded openai-codex models catalog"
+    );
+    merged
+}
+
 #[async_trait]
 impl LlmProvider for OpenAiCodexProvider {
     fn name(&self) -> &str {
@@ -225,7 +520,7 @@ impl LlmProvider for OpenAiCodexProvider {
         messages: &[ChatMessage],
         tools: &[serde_json::Value],
     ) -> anyhow::Result<CompletionResponse> {
-        let token = self.get_valid_token()?;
+        let token = self.get_valid_token().await?;
         let account_id = Self::extract_account_id(&token)?;
 
         // Extract system message as instructions; pass the rest as input
@@ -262,23 +557,8 @@ impl LlmProvider for OpenAiCodexProvider {
         trace!(body = %serde_json::to_string(&body).unwrap_or_default(), "openai-codex request body");
 
         let http_resp = self
-            .client
-            .post(format!("{}/codex/responses", self.base_url))
-            .header("Authorization", format!("Bearer {token}"))
-            .header("chatgpt-account-id", &account_id)
-            .header("OpenAI-Beta", "responses=experimental")
-            .header("originator", "pi")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
+            .post_responses_request_with_fallback(&token, &account_id, body)
             .await?;
-
-        let status = http_resp.status();
-        if !status.is_success() {
-            let body_text = http_resp.text().await.unwrap_or_default();
-            tracing::warn!(status = %status, body = %body_text, "openai-codex API error");
-            anyhow::bail!("openai-codex API error HTTP {status}: {body_text}");
-        }
 
         // Collect the SSE stream into a final response
         let mut text_buf = String::new();
@@ -382,6 +662,7 @@ impl LlmProvider for OpenAiCodexProvider {
             usage: Usage {
                 input_tokens,
                 output_tokens,
+                ..Default::default()
             },
         })
     }
@@ -405,7 +686,7 @@ impl LlmProvider for OpenAiCodexProvider {
             "stream_with_tools entry (before async_stream)"
         );
         Box::pin(async_stream::stream! {
-            let token = match self.get_valid_token() {
+            let token = match self.get_valid_token().await {
                 Ok(t) => t,
                 Err(e) => {
                     yield StreamEvent::Error(e.to_string());
@@ -459,26 +740,10 @@ impl LlmProvider for OpenAiCodexProvider {
             debug!(body = %serde_json::to_string(&body).unwrap_or_default(), "openai-codex stream request body");
 
             let resp = match self
-                .client
-                .post(format!("{}/codex/responses", self.base_url))
-                .header("Authorization", format!("Bearer {token}"))
-                .header("chatgpt-account-id", &account_id)
-                .header("OpenAI-Beta", "responses=experimental")
-                .header("originator", "pi")
-                .header("content-type", "application/json")
-                .json(&body)
-                .send()
+                .post_responses_request_with_fallback(&token, &account_id, body)
                 .await
             {
-                Ok(r) => {
-                    if let Err(e) = r.error_for_status_ref() {
-                        let status = e.status().map(|s| s.as_u16()).unwrap_or(0);
-                        let body_text = r.text().await.unwrap_or_default();
-                        yield StreamEvent::Error(format!("HTTP {status}: {body_text}"));
-                        return;
-                    }
-                    r
-                }
+                Ok(r) => r,
                 Err(e) => {
                     yield StreamEvent::Error(e.to_string());
                     return;
@@ -522,7 +787,7 @@ impl LlmProvider for OpenAiCodexProvider {
                         for index in tool_calls.keys() {
                             yield StreamEvent::ToolCallComplete { index: *index };
                         }
-                        yield StreamEvent::Done(Usage { input_tokens, output_tokens });
+                        yield StreamEvent::Done(Usage { input_tokens, output_tokens, ..Default::default() });
                         return;
                     }
 
@@ -581,7 +846,7 @@ impl LlmProvider for OpenAiCodexProvider {
                                 for index in tool_calls.keys() {
                                     yield StreamEvent::ToolCallComplete { index: *index };
                                 }
-                                yield StreamEvent::Done(Usage { input_tokens, output_tokens });
+                                yield StreamEvent::Done(Usage { input_tokens, output_tokens, ..Default::default() });
                                 return;
                             }
                             "error" | "response.failed" => {
@@ -601,6 +866,7 @@ impl LlmProvider for OpenAiCodexProvider {
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -837,5 +1103,89 @@ mod tests {
             converted[3]["content"][0]["text"],
             "Here is the screenshot."
         );
+    }
+
+    #[test]
+    fn convert_messages_user_multimodal_with_image() {
+        use crate::model::ContentPart;
+
+        let messages = vec![ChatMessage::User {
+            content: UserContent::Multimodal(vec![
+                ContentPart::Text("describe this image".to_string()),
+                ContentPart::Image {
+                    media_type: "image/png".to_string(),
+                    data: "ABC123".to_string(),
+                },
+            ]),
+        }];
+        let converted = OpenAiCodexProvider::convert_messages(&messages);
+        assert_eq!(converted.len(), 1);
+        assert_eq!(converted[0]["role"], "user");
+        let content = &converted[0]["content"];
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "describe this image");
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(content[1]["image_url"], "data:image/png;base64,ABC123");
+    }
+
+    #[test]
+    fn parse_models_payload_from_models_array() {
+        let value = serde_json::json!({
+            "models": [
+                {"id": "gpt-5.3", "name": "GPT-5.3"},
+                {"id": "gpt-5.2-codex", "display_name": "GPT-5.2 Codex"}
+            ]
+        });
+        let models = parse_models_payload(&value);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].0, "gpt-5.3");
+        assert_eq!(models[0].1, "GPT-5.3");
+        assert_eq!(models[1].0, "gpt-5.2-codex");
+    }
+
+    #[test]
+    fn parse_models_payload_from_nested_data_array() {
+        let value = serde_json::json!({
+            "data": {
+                "items": [
+                    {"slug": "gpt-5.3-codex"},
+                    {"model": "gpt-5.1-codex-mini", "title": "GPT-5.1 Codex Mini"}
+                ]
+            }
+        });
+        let models = parse_models_payload(&value);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].0, "gpt-5.3-codex");
+        assert_eq!(models[0].1, "GPT 5.3 Codex");
+        assert_eq!(models[1].0, "gpt-5.1-codex-mini");
+    }
+
+    #[test]
+    fn parse_models_payload_ignores_invalid_ids_and_dedupes() {
+        let value = serde_json::json!({
+            "models": [
+                {"id": "gpt-5.3"},
+                {"id": "gpt-5.3", "name": "Duplicate"},
+                {"id": "this has spaces"},
+                {"id": ""}
+            ]
+        });
+        let models = parse_models_payload(&value);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].0, "gpt-5.3");
+    }
+
+    #[test]
+    fn parse_models_payload_keeps_non_codex_and_codex_variants() {
+        let value = serde_json::json!({
+            "models": [
+                {"id": "gpt-5.3", "name": "GPT-5.3"},
+                {"id": "gpt-5.3-codex", "name": "GPT-5.3 Codex"}
+            ]
+        });
+        let models = parse_models_payload(&value);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].0, "gpt-5.3");
+        assert_eq!(models[1].0, "gpt-5.3-codex");
     }
 }

@@ -52,6 +52,7 @@ const READ_METHODS: &[&str] = &[
     "stt.status",
     "stt.providers",
     "models.list",
+    "models.list_all",
     "agents.list",
     "agent.identity.get",
     "skills.list",
@@ -79,6 +80,7 @@ const READ_METHODS: &[&str] = &[
     "node.describe",
     "chat.history",
     "chat.context",
+    "chat.raw_prompt",
     "providers.available",
     "providers.oauth.status",
     "sandbox.network_policy.get",
@@ -90,6 +92,7 @@ const READ_METHODS: &[&str] = &[
     "mcp.list",
     "mcp.status",
     "mcp.tools",
+    "tts.generate_phrase",
     "voice.config.get",
     "voice.config.voxtral_requirements",
     "voice.providers.all",
@@ -118,11 +121,16 @@ const WRITE_METHODS: &[&str] = &[
     "node.invoke",
     "chat.send",
     "chat.abort",
+    "chat.cancel_queued",
     "chat.clear",
     "chat.compact",
     "browser.request",
     "logs.ack",
+    "models.detect_supported",
+    "models.test",
     "providers.save_key",
+    "providers.save_model",
+    "providers.validate_key",
     "providers.remove_key",
     "providers.oauth.start",
     "providers.oauth.complete",
@@ -175,6 +183,7 @@ const WRITE_METHODS: &[&str] = &[
     "hooks.disable",
     "hooks.save",
     "hooks.reload",
+    "location.result",
 ];
 
 const APPROVAL_METHODS: &[&str] = &["exec.approval.request", "exec.approval.resolve"];
@@ -195,6 +204,19 @@ const PAIRING_METHODS: &[&str] = &[
 
 fn is_in(method: &str, list: &[&str]) -> bool {
     list.contains(&method)
+}
+
+fn model_probe_params(provider: Option<&str>) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "background": true,
+        "reason": "provider_connected",
+    });
+    if let Some(provider) = provider
+        && !provider.trim().is_empty()
+    {
+        params["provider"] = serde_json::json!(provider);
+    }
+    params
 }
 
 /// Check role + scopes for a method. Returns None if authorized, Some(error) if not.
@@ -314,7 +336,11 @@ impl MethodRegistry {
                 ResponseFrame::ok(&request_id, payload)
             },
             Err(err) => {
-                warn!(method, request_id = %request_id, code = %err.code, msg = %err.message, "method error");
+                if err.code == error_codes::UNAVAILABLE {
+                    debug!(method, request_id = %request_id, code = %err.code, msg = %err.message, "method unavailable");
+                } else {
+                    warn!(method, request_id = %request_id, code = %err.code, msg = %err.message, "method error");
+                }
                 ResponseFrame::err(&request_id, err)
             },
         }
@@ -356,11 +382,12 @@ impl MethodRegistry {
             "status",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let nodes = ctx.state.nodes.read().await;
+                    let inner = ctx.state.inner.read().await;
+                    let nodes = &inner.nodes;
                     Ok(serde_json::json!({
                         "version": ctx.state.version,
                         "hostname": ctx.state.hostname,
-                        "connections": ctx.state.client_count().await,
+                        "connections": inner.clients.len(),
                         "nodes": nodes.count(),
                         "hasMobileNode": nodes.has_mobile_node(),
                     }))
@@ -373,10 +400,10 @@ impl MethodRegistry {
             "system-presence",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let clients = ctx.state.clients.read().await;
-                    let nodes = ctx.state.nodes.read().await;
+                    let inner = ctx.state.inner.read().await;
 
-                    let client_list: Vec<_> = clients
+                    let client_list: Vec<_> = inner
+                        .clients
                         .values()
                         .map(|c| {
                             serde_json::json!({
@@ -390,7 +417,8 @@ impl MethodRegistry {
                         })
                         .collect();
 
-                    let node_list: Vec<_> = nodes
+                    let node_list: Vec<_> = inner
+                        .nodes
                         .list()
                         .iter()
                         .map(|n| {
@@ -440,8 +468,8 @@ impl MethodRegistry {
             "last-heartbeat",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let clients = ctx.state.clients.read().await;
-                    if let Some(client) = clients.get(&ctx.client_conn_id) {
+                    let inner = ctx.state.inner.read().await;
+                    if let Some(client) = inner.clients.get(&ctx.client_conn_id) {
                         Ok(serde_json::json!({
                             "lastActivitySecs": client.last_activity.elapsed().as_secs(),
                         }))
@@ -457,8 +485,13 @@ impl MethodRegistry {
             "set-heartbeats",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    if let Some(client) =
-                        ctx.state.clients.write().await.get_mut(&ctx.client_conn_id)
+                    if let Some(client) = ctx
+                        .state
+                        .inner
+                        .write()
+                        .await
+                        .clients
+                        .get_mut(&ctx.client_conn_id)
                     {
                         client.touch();
                     }
@@ -476,8 +509,9 @@ impl MethodRegistry {
             "node.list",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let nodes = ctx.state.nodes.read().await;
-                    let list: Vec<_> = nodes
+                    let inner = ctx.state.inner.read().await;
+                    let list: Vec<_> = inner
+                        .nodes
                         .list()
                         .iter()
                         .map(|n| {
@@ -509,8 +543,8 @@ impl MethodRegistry {
                         .ok_or_else(|| {
                             ErrorShape::new(error_codes::INVALID_REQUEST, "missing nodeId")
                         })?;
-                    let nodes = ctx.state.nodes.read().await;
-                    let node = nodes.get(node_id).ok_or_else(|| {
+                    let inner = ctx.state.inner.read().await;
+                    let node = inner.nodes.get(node_id).ok_or_else(|| {
                         ErrorShape::new(error_codes::UNAVAILABLE, "node not found")
                     })?;
                     Ok(serde_json::json!({
@@ -548,8 +582,9 @@ impl MethodRegistry {
                         .ok_or_else(|| {
                             ErrorShape::new(error_codes::INVALID_REQUEST, "missing displayName")
                         })?;
-                    let mut nodes = ctx.state.nodes.write().await;
-                    nodes
+                    let mut inner = ctx.state.inner.write().await;
+                    inner
+                        .nodes
                         .rename(node_id, name)
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))?;
                     Ok(serde_json::json!({}))
@@ -587,8 +622,8 @@ impl MethodRegistry {
                     // Find the node's conn_id and send the invoke request.
                     let invoke_id = uuid::Uuid::new_v4().to_string();
                     let conn_id = {
-                        let nodes = ctx.state.nodes.read().await;
-                        let node = nodes.get(&node_id).ok_or_else(|| {
+                        let inner = ctx.state.inner.read().await;
+                        let node = inner.nodes.get(&node_id).ok_or_else(|| {
                             ErrorShape::new(error_codes::UNAVAILABLE, "node not connected")
                         })?;
                         node.conn_id.clone()
@@ -608,27 +643,31 @@ impl MethodRegistry {
                         ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string())
                     })?;
 
-                    let clients = ctx.state.clients.read().await;
-                    let node_client = clients.get(&conn_id).ok_or_else(|| {
-                        ErrorShape::new(error_codes::UNAVAILABLE, "node connection lost")
-                    })?;
-                    if !node_client.send(&event_json) {
-                        return Err(ErrorShape::new(
-                            error_codes::UNAVAILABLE,
-                            "node send failed",
-                        ));
+                    {
+                        let inner = ctx.state.inner.read().await;
+                        let node_client = inner.clients.get(&conn_id).ok_or_else(|| {
+                            ErrorShape::new(error_codes::UNAVAILABLE, "node connection lost")
+                        })?;
+                        if !node_client.send(&event_json) {
+                            return Err(ErrorShape::new(
+                                error_codes::UNAVAILABLE,
+                                "node send failed",
+                            ));
+                        }
                     }
-                    drop(clients);
 
                     // Set up a oneshot for the result with a timeout.
                     let (tx, rx) = tokio::sync::oneshot::channel();
                     {
-                        let mut invokes = ctx.state.pending_invokes.write().await;
-                        invokes.insert(invoke_id.clone(), crate::state::PendingInvoke {
-                            request_id: ctx.request_id.clone(),
-                            sender: tx,
-                            created_at: std::time::Instant::now(),
-                        });
+                        let mut inner = ctx.state.inner.write().await;
+                        inner.pending_invokes.insert(
+                            invoke_id.clone(),
+                            crate::state::PendingInvoke {
+                                request_id: ctx.request_id.clone(),
+                                sender: tx,
+                                created_at: std::time::Instant::now(),
+                            },
+                        );
                     }
 
                     // Wait for result with 30s timeout.
@@ -639,7 +678,12 @@ impl MethodRegistry {
                             "invoke cancelled",
                         )),
                         Err(_) => {
-                            ctx.state.pending_invokes.write().await.remove(&invoke_id);
+                            ctx.state
+                                .inner
+                                .write()
+                                .await
+                                .pending_invokes
+                                .remove(&invoke_id);
                             Err(ErrorShape::new(
                                 error_codes::AGENT_TIMEOUT,
                                 "node invoke timeout",
@@ -668,7 +712,13 @@ impl MethodRegistry {
                         .cloned()
                         .unwrap_or(serde_json::json!(null));
 
-                    let pending = ctx.state.pending_invokes.write().await.remove(invoke_id);
+                    let pending = ctx
+                        .state
+                        .inner
+                        .write()
+                        .await
+                        .pending_invokes
+                        .remove(invoke_id);
                     if let Some(invoke) = pending {
                         let _ = invoke.sender.send(result);
                         Ok(serde_json::json!({}))
@@ -699,6 +749,62 @@ impl MethodRegistry {
                         .unwrap_or(serde_json::json!({}));
                     broadcast(&ctx.state, event, payload, BroadcastOpts::default()).await;
                     Ok(serde_json::json!({}))
+                })
+            }),
+        );
+
+        // location.result: browser returns the result of a geolocation request
+        self.register(
+            "location.result",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let request_id = ctx
+                        .params
+                        .get("requestId")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            ErrorShape::new(error_codes::INVALID_REQUEST, "missing requestId")
+                        })?;
+
+                    // Build the result value to send through the pending invoke channel.
+                    let result = if let Some(loc) = ctx.params.get("location") {
+                        // Success: cache the location and persist to USER.md.
+                        if let (Some(lat), Some(lon)) = (
+                            loc.get("latitude").and_then(|v| v.as_f64()),
+                            loc.get("longitude").and_then(|v| v.as_f64()),
+                        ) {
+                            let geo = moltis_config::GeoLocation::now(lat, lon, None);
+                            ctx.state.inner.write().await.cached_location = Some(geo.clone());
+
+                            // Persist to USER.md (best-effort).
+                            let mut user = moltis_config::load_user().unwrap_or_default();
+                            user.location = Some(geo);
+                            if let Err(e) = moltis_config::save_user(&user) {
+                                tracing::warn!(error = %e, "failed to persist location to USER.md");
+                            }
+                        }
+                        serde_json::json!({ "location": ctx.params.get("location") })
+                    } else {
+                        // Error (permission denied, timeout, etc.)
+                        serde_json::json!({ "error": ctx.params.get("error") })
+                    };
+
+                    let pending = ctx
+                        .state
+                        .inner
+                        .write()
+                        .await
+                        .pending_invokes
+                        .remove(request_id);
+                    if let Some(invoke) = pending {
+                        let _ = invoke.sender.send(result);
+                        Ok(serde_json::json!({}))
+                    } else {
+                        Err(ErrorShape::new(
+                            error_codes::INVALID_REQUEST,
+                            "no pending location request for this id",
+                        ))
+                    }
                 })
             }),
         );
@@ -787,7 +893,7 @@ impl MethodRegistry {
                         .unwrap_or("unknown");
                     let public_key = ctx.params.get("publicKey").and_then(|v| v.as_str());
 
-                    let req = ctx.state.pairing.write().await.request_pair(
+                    let req = ctx.state.inner.write().await.pairing.request_pair(
                         device_id,
                         display_name,
                         platform,
@@ -821,8 +927,9 @@ impl MethodRegistry {
             "node.pair.list",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let pairing = ctx.state.pairing.read().await;
-                    let list: Vec<_> = pairing
+                    let inner = ctx.state.inner.read().await;
+                    let list: Vec<_> = inner
+                        .pairing
                         .list_pending()
                         .iter()
                         .map(|r| {
@@ -853,9 +960,10 @@ impl MethodRegistry {
                             })?;
                     let token = ctx
                         .state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .approve(pair_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
 
@@ -890,9 +998,10 @@ impl MethodRegistry {
                                 ErrorShape::new(error_codes::INVALID_REQUEST, "missing id")
                             })?;
                     ctx.state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .reject(pair_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
 
@@ -922,8 +1031,9 @@ impl MethodRegistry {
             "device.pair.list",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let pairing = ctx.state.pairing.read().await;
-                    let list: Vec<_> = pairing
+                    let inner = ctx.state.inner.read().await;
+                    let list: Vec<_> = inner
+                        .pairing
                         .list_devices()
                         .iter()
                         .map(|d| {
@@ -953,9 +1063,10 @@ impl MethodRegistry {
                             })?;
                     let token = ctx
                         .state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .approve(pair_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
 
@@ -987,9 +1098,10 @@ impl MethodRegistry {
                                 ErrorShape::new(error_codes::INVALID_REQUEST, "missing id")
                             })?;
                     ctx.state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .reject(pair_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
 
@@ -1022,9 +1134,10 @@ impl MethodRegistry {
                         })?;
                     let token = ctx
                         .state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .rotate_token(device_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
                     Ok(serde_json::json!({ "deviceToken": token.token, "scopes": token.scopes }))
@@ -1045,9 +1158,10 @@ impl MethodRegistry {
                             ErrorShape::new(error_codes::INVALID_REQUEST, "missing deviceId")
                         })?;
                     ctx.state
-                        .pairing
+                        .inner
                         .write()
                         .await
+                        .pairing
                         .revoke_token(device_id)
                         .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e))?;
                     Ok(serde_json::json!({}))
@@ -1575,7 +1689,7 @@ impl MethodRegistry {
             "heartbeat.status",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let config = ctx.state.heartbeat_config.read().await.clone();
+                    let config = ctx.state.inner.read().await.heartbeat_config.clone();
                     let heartbeat_path = moltis_config::heartbeat_path();
                     let heartbeat_file_exists = heartbeat_path.exists();
                     let heartbeat_md = moltis_config::load_heartbeat_md();
@@ -1583,14 +1697,9 @@ impl MethodRegistry {
                         config.prompt.as_deref(),
                         heartbeat_md.as_deref(),
                     );
-                    let has_prompt_override = config
-                        .prompt
-                        .as_deref()
-                        .is_some_and(|p| !p.trim().is_empty());
-                    let heartbeat_file_effectively_empty =
-                        heartbeat_file_exists && heartbeat_md.is_none();
-                    let skip_llm_when_empty =
-                        heartbeat_file_effectively_empty && !has_prompt_override;
+                    // No meaningful prompt → heartbeat won't execute.
+                    let has_prompt =
+                        prompt_source != moltis_cron::heartbeat::HeartbeatPromptSource::Default;
                     // Find the heartbeat job to get its state.
                     let jobs_val = ctx
                         .state
@@ -1607,8 +1716,7 @@ impl MethodRegistry {
                         "job": hb_job,
                         "promptSource": prompt_source.as_str(),
                         "heartbeatFileExists": heartbeat_file_exists,
-                        "heartbeatFileEffectivelyEmpty": heartbeat_file_effectively_empty,
-                        "skipLlmWhenEmpty": skip_llm_when_empty,
+                        "hasPrompt": has_prompt,
                     }))
                 })
             }),
@@ -1624,7 +1732,7 @@ impl MethodRegistry {
                                 format!("invalid heartbeat config: {e}"),
                             )
                         })?;
-                    *ctx.state.heartbeat_config.write().await = patch.clone();
+                    ctx.state.inner.write().await.heartbeat_config = patch.clone();
 
                     // Persist to moltis.toml so the config survives restarts.
                     if let Err(e) = moltis_config::update_config(|cfg| {
@@ -1666,6 +1774,11 @@ impl MethodRegistry {
                                 "heartbeat prompt source conflict: config heartbeat.prompt overrides HEARTBEAT.md"
                             );
                         }
+                        // Disable the job when there is no meaningful prompt,
+                        // even if the user toggled enabled=true.
+                        let has_prompt = prompt_source
+                            != moltis_cron::heartbeat::HeartbeatPromptSource::Default;
+                        let effective_enabled = patch.enabled && has_prompt;
                         let job_patch = moltis_cron::types::CronJobPatch {
                             schedule: Some(moltis_cron::types::CronSchedule::Every {
                                 every_ms: interval_ms,
@@ -1679,7 +1792,7 @@ impl MethodRegistry {
                                 channel: None,
                                 to: None,
                             }),
-                            enabled: Some(patch.enabled),
+                            enabled: Some(effective_enabled),
                             sandbox: Some(moltis_cron::types::CronSandboxConfig {
                                 enabled: patch.sandbox_enabled,
                                 image: patch.sandbox_image.clone(),
@@ -1784,15 +1897,20 @@ impl MethodRegistry {
                 Box::pin(async move {
                     let mut params = ctx.params.clone();
                     params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
-                    // Forward client Accept-Language to web tools.
-                    let accept_language = {
-                        let clients = ctx.state.clients.read().await;
-                        clients
-                            .get(&ctx.client_conn_id)
-                            .and_then(|c| c.accept_language.clone())
-                    };
-                    if let Some(lang) = accept_language {
-                        params["_accept_language"] = serde_json::json!(lang);
+                    // Forward client Accept-Language, public remote IP, and timezone.
+                    {
+                        let inner = ctx.state.inner.read().await;
+                        if let Some(client) = inner.clients.get(&ctx.client_conn_id) {
+                            if let Some(ref lang) = client.accept_language {
+                                params["_accept_language"] = serde_json::json!(lang);
+                            }
+                            if let Some(ref ip) = client.remote_ip {
+                                params["_remote_ip"] = serde_json::json!(ip);
+                            }
+                            if let Some(ref tz) = client.timezone {
+                                params["_timezone"] = serde_json::json!(tz);
+                            }
+                        }
                     }
                     ctx.state
                         .chat()
@@ -1811,6 +1929,19 @@ impl MethodRegistry {
                         .chat()
                         .await
                         .abort(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "chat.cancel_queued",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .chat()
+                        .await
+                        .cancel_queued(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })
@@ -1891,6 +2022,68 @@ impl MethodRegistry {
             }),
         );
 
+        self.register(
+            "chat.raw_prompt",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let mut params = ctx.params.clone();
+                    params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
+                    // Forward client Accept-Language, public remote IP, and timezone.
+                    {
+                        let inner = ctx.state.inner.read().await;
+                        if let Some(client) = inner.clients.get(&ctx.client_conn_id) {
+                            if let Some(ref lang) = client.accept_language {
+                                params["_accept_language"] = serde_json::json!(lang);
+                            }
+                            if let Some(ref ip) = client.remote_ip {
+                                params["_remote_ip"] = serde_json::json!(ip);
+                            }
+                            if let Some(ref tz) = client.timezone {
+                                params["_timezone"] = serde_json::json!(tz);
+                            }
+                        }
+                    }
+                    ctx.state
+                        .chat()
+                        .await
+                        .raw_prompt(params)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+
+        self.register(
+            "chat.full_context",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let mut params = ctx.params.clone();
+                    params["_conn_id"] = serde_json::json!(ctx.client_conn_id);
+                    // Forward client Accept-Language, public remote IP, and timezone.
+                    {
+                        let inner = ctx.state.inner.read().await;
+                        if let Some(client) = inner.clients.get(&ctx.client_conn_id) {
+                            if let Some(ref lang) = client.accept_language {
+                                params["_accept_language"] = serde_json::json!(lang);
+                            }
+                            if let Some(ref ip) = client.remote_ip {
+                                params["_remote_ip"] = serde_json::json!(ip);
+                            }
+                            if let Some(ref tz) = client.timezone {
+                                params["_timezone"] = serde_json::json!(tz);
+                            }
+                        }
+                    }
+                    ctx.state
+                        .chat()
+                        .await
+                        .full_context(params)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+
         // Session switching
         self.register(
             "sessions.switch",
@@ -1904,28 +2097,23 @@ impl MethodRegistry {
                             ErrorShape::new(error_codes::INVALID_REQUEST, "missing 'key' parameter")
                         })?;
 
-                    // Store the active session for this connection.
-                    ctx.state
-                        .active_sessions
-                        .write()
-                        .await
-                        .insert(ctx.client_conn_id.clone(), key.to_string());
-
-                    // Store the active project for this connection, if provided.
-                    if let Some(project_id) = ctx.params.get("project_id").and_then(|v| v.as_str())
+                    // Store the active session (and project if provided) for this connection.
                     {
-                        if project_id.is_empty() {
-                            ctx.state
-                                .active_projects
-                                .write()
-                                .await
-                                .remove(&ctx.client_conn_id);
-                        } else {
-                            ctx.state
-                                .active_projects
-                                .write()
-                                .await
-                                .insert(ctx.client_conn_id.clone(), project_id.to_string());
+                        let mut inner = ctx.state.inner.write().await;
+                        inner
+                            .active_sessions
+                            .insert(ctx.client_conn_id.clone(), key.to_string());
+
+                        if let Some(project_id) =
+                            ctx.params.get("project_id").and_then(|v| v.as_str())
+                        {
+                            if project_id.is_empty() {
+                                inner.active_projects.remove(&ctx.client_conn_id);
+                            } else {
+                                inner
+                                    .active_projects
+                                    .insert(ctx.client_conn_id.clone(), project_id.to_string());
+                            }
                         }
                     }
 
@@ -2103,6 +2291,77 @@ impl MethodRegistry {
                             .convert(ctx.params.clone())
                             .await
                             .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    })
+                }),
+            );
+            self.register(
+                "tts.generate_phrase",
+                Box::new(|ctx| {
+                    Box::pin(async move {
+                        let context = ctx
+                            .params
+                            .get("context")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("settings");
+
+                        let config = moltis_config::discover_and_load();
+                        let identity = moltis_config::ResolvedIdentity::from_config(&config);
+                        let user = identity
+                            .user_name
+                            .unwrap_or_else(|| "friend".into());
+                        let bot = identity.name;
+
+                        // Try LLM generation with a 3-second timeout.
+                        // Clone the Arc out so we don't hold the outer RwLock across awaits.
+                        let providers = ctx.state.inner.read().await.llm_providers.clone();
+                        if let Some(providers) = providers {
+                            let provider = providers.read().await.first();
+                            if let Some(provider) = provider {
+                                let system_prompt = format!(
+                                    "You generate short, funny TTS test phrases for a voice assistant.\n\
+                                     The user's name is {user}. The bot's name is {bot}.\n\
+                                     Include SSML <break time=\"0.5s\"/> tags for natural pauses.\n\
+                                     Reply with ONLY the phrase text — no quotes, no markdown. Under 200 chars."
+                                );
+                                let messages = vec![
+                                    moltis_agents::model::ChatMessage::system(system_prompt),
+                                    moltis_agents::model::ChatMessage::user(format!(
+                                        "Generate a {context} TTS test phrase."
+                                    )),
+                                ];
+                                let result = tokio::time::timeout(
+                                    Duration::from_secs(3),
+                                    provider.complete(&messages, &[]),
+                                )
+                                .await;
+
+                                if let Ok(Ok(response)) = result
+                                    && let Some(text) = response.text
+                                {
+                                    let text = text.trim().to_string();
+                                    if !text.is_empty() {
+                                        return Ok(serde_json::json!({
+                                            "phrase": text,
+                                            "source": "llm",
+                                        }));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fall back to static phrases with sequential picking.
+                        let phrases =
+                            crate::tts_phrases::static_phrases(&user, &bot, context);
+                        let idx = ctx.state.next_tts_phrase_index(phrases.len());
+                        let phrase = phrases
+                            .into_iter()
+                            .nth(idx)
+                            .unwrap_or_default();
+
+                        Ok(serde_json::json!({
+                            "phrase": phrase,
+                            "source": "static",
+                        }))
                     })
                 }),
             );
@@ -2822,6 +3081,19 @@ impl MethodRegistry {
             }),
         );
         self.register(
+            "models.list_all",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .model
+                        .list_all()
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
             "models.disable",
             Box::new(|ctx| {
                 Box::pin(async move {
@@ -2842,6 +3114,32 @@ impl MethodRegistry {
                         .services
                         .model
                         .enable(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "models.detect_supported",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .model
+                        .detect_supported(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "models.test",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .model
+                        .test(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })
@@ -2876,15 +3174,51 @@ impl MethodRegistry {
             }),
         );
         self.register(
-            "providers.oauth.start",
+            "providers.validate_key",
             Box::new(|ctx| {
                 Box::pin(async move {
                     ctx.state
                         .services
                         .provider_setup
-                        .oauth_start(ctx.params.clone())
+                        .validate_key(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
+        self.register(
+            "providers.oauth.start",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let provider_name = ctx
+                        .params
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned);
+                    let result = ctx
+                        .state
+                        .services
+                        .provider_setup
+                        .oauth_start(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))?;
+
+                    // If oauth.start short-circuited because valid tokens already
+                    // existed, trigger a provider-scoped background probe now.
+                    if result
+                        .get("alreadyAuthenticated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        let model_service = Arc::clone(&ctx.state.services.model);
+                        tokio::spawn(async move {
+                            let _ = model_service
+                                .detect_supported(model_probe_params(provider_name.as_deref()))
+                                .await;
+                        });
+                    }
+
+                    Ok(result)
                 })
             }),
         );
@@ -2905,10 +3239,39 @@ impl MethodRegistry {
             "providers.oauth.complete",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    ctx.state
+                    let result = ctx
+                        .state
                         .services
                         .provider_setup
                         .oauth_complete(ctx.params.clone())
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))?;
+
+                    let provider_name = result
+                        .get("provider")
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned);
+
+                    // Kick off background support probing after OAuth provider connect.
+                    let model_service = Arc::clone(&ctx.state.services.model);
+                    tokio::spawn(async move {
+                        let _ = model_service
+                            .detect_supported(model_probe_params(provider_name.as_deref()))
+                            .await;
+                    });
+
+                    Ok(result)
+                })
+            }),
+        );
+        self.register(
+            "providers.save_model",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .provider_setup
+                        .save_model(ctx.params.clone())
                         .await
                         .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
                 })
@@ -3395,9 +3758,10 @@ impl MethodRegistry {
                         };
 
                         ctx.state
-                            .tts_session_overrides
+                            .inner
                             .write()
                             .await
+                            .tts_session_overrides
                             .insert(session_key.clone(), override_cfg.clone());
 
                         Ok(serde_json::to_value(override_cfg).unwrap_or_else(
@@ -3421,9 +3785,10 @@ impl MethodRegistry {
                             .to_string();
 
                         ctx.state
-                            .tts_session_overrides
+                            .inner
                             .write()
                             .await
+                            .tts_session_overrides
                             .remove(&session_key);
                         Ok(serde_json::json!({ "ok": true, "sessionKey": session_key }))
                     })
@@ -3469,9 +3834,10 @@ impl MethodRegistry {
                         };
 
                         ctx.state
-                            .tts_channel_overrides
+                            .inner
                             .write()
                             .await
+                            .tts_channel_overrides
                             .insert(key.clone(), override_cfg.clone());
 
                         Ok(serde_json::json!({ "ok": true, "key": key, "override": override_cfg }))
@@ -3498,7 +3864,12 @@ impl MethodRegistry {
                             })?;
 
                         let key = format!("{}:{}", channel_type, account_id);
-                        ctx.state.tts_channel_overrides.write().await.remove(&key);
+                        ctx.state
+                            .inner
+                            .write()
+                            .await
+                            .tts_channel_overrides
+                            .remove(&key);
                         Ok(serde_json::json!({ "ok": true, "key": key }))
                     })
                 }),
@@ -3582,8 +3953,11 @@ impl MethodRegistry {
                                     cfg.voice.stt.google.api_key = Some(key.clone());
                                     cfg.voice.tts.google.api_key =
                                         Some(Secret::new(api_key.to_string()));
+                                    // Auto-enable both STT and TTS with Google
                                     cfg.voice.stt.provider = VoiceSttProvider::Google;
                                     cfg.voice.stt.enabled = true;
+                                    cfg.voice.tts.provider = "google".to_string();
+                                    cfg.voice.tts.enabled = true;
                                 },
                                 "mistral" => {
                                     cfg.voice.stt.mistral.api_key =
@@ -3597,8 +3971,11 @@ impl MethodRegistry {
                                     cfg.voice.stt.elevenlabs.api_key = Some(key.clone());
                                     cfg.voice.tts.elevenlabs.api_key =
                                         Some(Secret::new(api_key.to_string()));
+                                    // Auto-enable both STT and TTS with ElevenLabs
                                     cfg.voice.stt.provider = VoiceSttProvider::ElevenLabs;
                                     cfg.voice.stt.enabled = true;
+                                    cfg.voice.tts.provider = "elevenlabs".to_string();
+                                    cfg.voice.tts.enabled = true;
                                 },
                                 _ => {},
                             }
@@ -3901,11 +4278,11 @@ impl MethodRegistry {
             "hooks.list",
             Box::new(|ctx| {
                 Box::pin(async move {
-                    let hooks = ctx.state.discovered_hooks.read().await;
-                    let mut list = hooks.clone();
+                    let inner = ctx.state.inner.read().await;
+                    let mut list = inner.discovered_hooks.clone();
 
                     // Enrich with live stats from the registry.
-                    if let Some(ref registry) = *ctx.state.hook_registry.read().await {
+                    if let Some(ref registry) = inner.hook_registry {
                         for hook in &mut list {
                             if let Some(stats) = registry.handler_stats(&hook.name) {
                                 let calls =
@@ -3942,7 +4319,7 @@ impl MethodRegistry {
                                 ErrorShape::new(error_codes::INVALID_REQUEST, "missing name")
                             })?;
 
-                    ctx.state.disabled_hooks.write().await.remove(name);
+                    ctx.state.inner.write().await.disabled_hooks.remove(name);
 
                     // Persist disabled hooks list.
                     persist_disabled_hooks(&ctx.state).await;
@@ -3969,9 +4346,10 @@ impl MethodRegistry {
                             })?;
 
                     ctx.state
-                        .disabled_hooks
+                        .inner
                         .write()
                         .await
+                        .disabled_hooks
                         .insert(name.to_string());
 
                     // Persist disabled hooks list.
@@ -4007,8 +4385,9 @@ impl MethodRegistry {
 
                     // Find the hook's source path.
                     let source_path = {
-                        let hooks = ctx.state.discovered_hooks.read().await;
-                        hooks
+                        let inner = ctx.state.inner.read().await;
+                        inner
+                            .discovered_hooks
                             .iter()
                             .find(|h| h.name == name)
                             .map(|h| h.source_path.clone())
@@ -4203,7 +4582,124 @@ enum VoiceProviderId {
     SherpaOnnx,
 }
 
+/// Static UI metadata for a voice provider (description, key hints, URLs).
+struct VoiceProviderMeta {
+    description: &'static str,
+    key_placeholder: Option<&'static str>,
+    key_url: Option<&'static str>,
+    key_url_label: Option<&'static str>,
+    hint: Option<&'static str>,
+}
+
 impl VoiceProviderId {
+    fn meta(self) -> VoiceProviderMeta {
+        match self {
+            // TTS Cloud
+            Self::Elevenlabs => VoiceProviderMeta {
+                description: "Lowest latency (~75ms), natural voices. Same key enables Scribe STT",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://elevenlabs.io/app/settings/api-keys"),
+                key_url_label: Some("elevenlabs.io"),
+                hint: Some("This API key also enables ElevenLabs Scribe for speech-to-text."),
+            },
+            Self::OpenaiTts => VoiceProviderMeta {
+                description: "Good quality, shares API key with Whisper STT",
+                key_placeholder: Some("sk-..."),
+                key_url: Some("https://platform.openai.com/api-keys"),
+                key_url_label: Some("platform.openai.com/api-keys"),
+                hint: None,
+            },
+            Self::GoogleTts => VoiceProviderMeta {
+                description: "220+ voices, 40+ languages, WaveNet and Neural2 voices",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://console.cloud.google.com/apis/credentials"),
+                key_url_label: Some("console.cloud.google.com"),
+                hint: None,
+            },
+            Self::Piper => VoiceProviderMeta {
+                description: "Fast local TTS, commonly used in Home Assistant",
+                key_placeholder: None,
+                key_url: None,
+                key_url_label: None,
+                hint: None,
+            },
+            Self::Coqui => VoiceProviderMeta {
+                description: "Open-source deep learning TTS with many voice models",
+                key_placeholder: None,
+                key_url: None,
+                key_url_label: None,
+                hint: None,
+            },
+            // STT Cloud
+            Self::Whisper => VoiceProviderMeta {
+                description: "Best accuracy, handles accents and background noise",
+                key_placeholder: Some("sk-..."),
+                key_url: Some("https://platform.openai.com/api-keys"),
+                key_url_label: Some("platform.openai.com/api-keys"),
+                hint: None,
+            },
+            Self::Groq => VoiceProviderMeta {
+                description: "Ultra-fast Whisper inference on Groq hardware",
+                key_placeholder: Some("gsk_..."),
+                key_url: Some("https://console.groq.com/keys"),
+                key_url_label: Some("console.groq.com/keys"),
+                hint: None,
+            },
+            Self::Deepgram => VoiceProviderMeta {
+                description: "Fast and accurate with Nova-3 model",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://console.deepgram.com/api-keys"),
+                key_url_label: Some("console.deepgram.com"),
+                hint: None,
+            },
+            Self::Google => VoiceProviderMeta {
+                description: "Supports 125+ languages with Google Speech-to-Text",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://console.cloud.google.com/apis/credentials"),
+                key_url_label: Some("console.cloud.google.com"),
+                hint: None,
+            },
+            Self::Mistral => VoiceProviderMeta {
+                description: "Fast Voxtral transcription with 13 language support",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://console.mistral.ai/api-keys"),
+                key_url_label: Some("console.mistral.ai"),
+                hint: None,
+            },
+            Self::ElevenlabsStt => VoiceProviderMeta {
+                description: "90+ languages, word timestamps. Same API key as ElevenLabs TTS",
+                key_placeholder: Some("API key"),
+                key_url: Some("https://elevenlabs.io/app/settings/api-keys"),
+                key_url_label: Some("elevenlabs.io"),
+                hint: Some(
+                    "If you already have ElevenLabs TTS configured, use the same API key here.",
+                ),
+            },
+            // STT Local
+            Self::WhisperCli => VoiceProviderMeta {
+                description: "Local Whisper inference via whisper-cli",
+                key_placeholder: None,
+                key_url: None,
+                key_url_label: None,
+                hint: None,
+            },
+            Self::SherpaOnnx => VoiceProviderMeta {
+                description: "Local offline speech recognition via ONNX runtime",
+                key_placeholder: None,
+                key_url: None,
+                key_url_label: None,
+                hint: None,
+            },
+            Self::VoxtralLocal => VoiceProviderMeta {
+                description: "Run Mistral's Voxtral model locally via vLLM server",
+                key_placeholder: None,
+                key_url: None,
+                key_url_label: None,
+                hint: None,
+            },
+        }
+    }
+
     fn parse_tts_list_id(id: &str) -> Option<Self> {
         match id {
             "elevenlabs" => Some(Self::Elevenlabs),
@@ -4239,10 +4735,19 @@ struct VoiceProviderInfo {
     #[serde(rename = "type")]
     provider_type: String,
     category: String,
+    description: String,
     available: bool,
     enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     key_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key_placeholder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key_url_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     binary_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4816,14 +5321,20 @@ fn build_provider_info(
     binary_path: Option<String>,
     status_message: Option<&str>,
 ) -> VoiceProviderInfo {
+    let meta = id.meta();
     VoiceProviderInfo {
         id,
         name: name.to_string(),
         provider_type: provider_type.to_string(),
         category: category.to_string(),
+        description: meta.description.to_string(),
         available,
         enabled,
         key_source: key_source.map(str::to_string),
+        key_placeholder: meta.key_placeholder.map(str::to_string),
+        key_url: meta.key_url.map(str::to_string),
+        key_url_label: meta.key_url_label.map(str::to_string),
+        hint: meta.hint.map(str::to_string),
         binary_path,
         status_message: status_message.map(str::to_string),
         capabilities: serde_json::json!({}),
@@ -5002,13 +5513,16 @@ fn toggle_voice_provider(
 
 /// Re-run hook discovery, rebuild the registry, and broadcast the update.
 async fn reload_hooks(state: &Arc<GatewayState>) {
-    let disabled = state.disabled_hooks.read().await.clone();
+    let disabled = state.inner.read().await.disabled_hooks.clone();
     let session_store = state.services.session_store.as_ref();
     let (new_registry, new_info) =
         crate::server::discover_and_build_hooks(&disabled, session_store).await;
 
-    *state.hook_registry.write().await = new_registry;
-    *state.discovered_hooks.write().await = new_info.clone();
+    {
+        let mut inner = state.inner.write().await;
+        inner.hook_registry = new_registry;
+        inner.discovered_hooks = new_info.clone();
+    }
 
     // Broadcast hooks.status event so connected UIs auto-refresh.
     broadcast(
@@ -5022,9 +5536,9 @@ async fn reload_hooks(state: &Arc<GatewayState>) {
 
 /// Persist the disabled hooks set to `data_dir/disabled_hooks.json`.
 async fn persist_disabled_hooks(state: &Arc<GatewayState>) {
-    let disabled = state.disabled_hooks.read().await;
+    let disabled = state.inner.read().await.disabled_hooks.clone();
     let path = moltis_config::data_dir().join("disabled_hooks.json");
-    let json = serde_json::to_string_pretty(&*disabled).unwrap_or_default();
+    let json = serde_json::to_string_pretty(&disabled).unwrap_or_default();
     if let Err(e) = std::fs::write(&path, json) {
         warn!("failed to persist disabled hooks: {e}");
     }
@@ -5048,14 +5562,20 @@ mod tests {
     }
 
     fn test_voice_provider(id: VoiceProviderId) -> VoiceProviderInfo {
+        let meta = id.meta();
         VoiceProviderInfo {
             id,
             name: String::new(),
             provider_type: String::new(),
             category: String::new(),
+            description: meta.description.to_string(),
             available: false,
             enabled: false,
             key_source: None,
+            key_placeholder: meta.key_placeholder.map(str::to_string),
+            key_url: meta.key_url.map(str::to_string),
+            key_url_label: meta.key_url_label.map(str::to_string),
+            hint: meta.hint.map(str::to_string),
             binary_path: None,
             status_message: None,
             capabilities: serde_json::json!({}),
@@ -5308,5 +5828,27 @@ mod tests {
                 "read-only scope should deny {method}"
             );
         }
+    }
+
+    #[test]
+    fn model_probe_params_include_provider_when_present() {
+        let params = model_probe_params(Some("github-copilot"));
+        assert_eq!(params["background"], serde_json::json!(true));
+        assert_eq!(params["reason"], serde_json::json!("provider_connected"));
+        assert_eq!(params["provider"], serde_json::json!("github-copilot"));
+    }
+
+    #[test]
+    fn model_probe_params_omit_provider_when_missing() {
+        let params = model_probe_params(None);
+        assert_eq!(params["background"], serde_json::json!(true));
+        assert_eq!(params["reason"], serde_json::json!("provider_connected"));
+        assert!(params.get("provider").is_none());
+    }
+
+    #[test]
+    fn model_probe_params_omit_provider_when_blank() {
+        let params = model_probe_params(Some("   "));
+        assert!(params.get("provider").is_none());
     }
 }

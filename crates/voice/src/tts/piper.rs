@@ -144,7 +144,7 @@ impl TtsProvider for PiperTts {
         // Convert to requested format if needed
         let (data, format) = match request.output_format {
             AudioFormat::Pcm => (Bytes::from(output.stdout), AudioFormat::Pcm),
-            AudioFormat::Mp3 | AudioFormat::Opus | AudioFormat::Aac => {
+            AudioFormat::Mp3 | AudioFormat::Opus | AudioFormat::Aac | AudioFormat::Webm => {
                 // For other formats, we'd need ffmpeg conversion
                 // For now, return PCM and let caller handle conversion
                 (Bytes::from(output.stdout), AudioFormat::Pcm)
@@ -186,6 +186,7 @@ mod tests {
         let tts = PiperTts::new(&config);
         assert_eq!(tts.id(), "piper");
         assert_eq!(tts.name(), "Piper");
+        assert!(!tts.supports_ssml());
     }
 
     #[test]

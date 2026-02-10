@@ -1,12 +1,17 @@
 use std::{
-    collections::HashMap,
-    path::PathBuf,
+    collections::{BTreeSet, HashMap},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use secrecy::{ExposeSecret, Secret};
 
-use {async_trait::async_trait, serde_json::Value, tokio::sync::RwLock, tracing::info};
+use {
+    async_trait::async_trait,
+    serde_json::Value,
+    tokio::sync::RwLock,
+    tracing::{debug, info},
+};
 
 use {
     moltis_agents::providers::ProviderRegistry,
@@ -46,19 +51,14 @@ struct KeyStoreInner {
 
 impl KeyStore {
     pub(crate) fn new() -> Self {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".into());
-        let path = PathBuf::from(home)
-            .join(".config")
-            .join("moltis")
+        let path = moltis_config::config_dir()
+            .unwrap_or_else(|| PathBuf::from(".config/moltis"))
             .join("provider_keys.json");
         Self {
             inner: Arc::new(Mutex::new(KeyStoreInner { path })),
         }
     }
 
-    #[cfg(test)]
     fn with_path(path: PathBuf) -> Self {
         Self {
             inner: Arc::new(Mutex::new(KeyStoreInner { path })),
@@ -216,7 +216,55 @@ pub(crate) fn config_with_saved_keys(
     key_store: &KeyStore,
 ) -> ProvidersConfig {
     let mut config = base.clone();
+    if let Some((home_config, _)) = home_provider_config() {
+        for (name, entry) in home_config.providers {
+            let dst = config.providers.entry(name).or_default();
+            if dst
+                .api_key
+                .as_ref()
+                .is_none_or(|k| k.expose_secret().is_empty())
+                && let Some(api_key) = entry.api_key
+                && !api_key.expose_secret().is_empty()
+            {
+                dst.api_key = Some(api_key);
+            }
+            if dst.base_url.is_none()
+                && let Some(base_url) = entry.base_url
+                && !base_url.trim().is_empty()
+            {
+                dst.base_url = Some(base_url);
+            }
+            if dst.model.is_none()
+                && let Some(model) = entry.model
+                && !model.trim().is_empty()
+            {
+                dst.model = Some(model);
+            }
+        }
+    }
+
+    // Merge home key store first, then current key store so current instance
+    // values win when both have values.
+    let mut saved_configs = HashMap::new();
+    if let Some((home_store, _)) = home_key_store() {
+        saved_configs.extend(home_store.load_all_configs());
+    }
     for (name, saved) in key_store.load_all_configs() {
+        let entry = saved_configs
+            .entry(name)
+            .or_insert_with(ProviderConfig::default);
+        if saved.api_key.is_some() {
+            entry.api_key = saved.api_key;
+        }
+        if saved.base_url.is_some() {
+            entry.base_url = saved.base_url;
+        }
+        if saved.model.is_some() {
+            entry.model = saved.model;
+        }
+    }
+
+    for (name, saved) in saved_configs {
         let entry = config.providers.entry(name).or_default();
 
         // Only override API key if config doesn't already have one.
@@ -406,9 +454,9 @@ fn known_providers() -> Vec<KnownProvider> {
         KnownProvider {
             name: "kimi-code",
             display_name: "Kimi Code",
-            auth_type: "oauth",
-            env_key: None,
-            default_base_url: None,
+            auth_type: "api-key",
+            env_key: Some("KIMI_API_KEY"),
+            default_base_url: Some("https://api.moonshot.ai/v1"),
             requires_model: false,
         },
     ];
@@ -431,9 +479,264 @@ fn known_providers() -> Vec<KnownProvider> {
     providers
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AutoDetectedProviderSource {
+    pub provider: String,
+    pub source: String,
+}
+
+fn current_config_dir() -> PathBuf {
+    moltis_config::config_dir().unwrap_or_else(|| PathBuf::from(".config/moltis"))
+}
+
+fn home_config_dir_if_different() -> Option<PathBuf> {
+    moltis_config::user_global_config_dir_if_different()
+}
+
+fn home_key_store() -> Option<(KeyStore, PathBuf)> {
+    let dir = home_config_dir_if_different()?;
+    let path = dir.join("provider_keys.json");
+    Some((KeyStore::with_path(path.clone()), path))
+}
+
+fn home_token_store() -> Option<(TokenStore, PathBuf)> {
+    let dir = home_config_dir_if_different()?;
+    let path = dir.join("oauth_tokens.json");
+    Some((TokenStore::with_path(path.clone()), path))
+}
+
+fn home_provider_config() -> Option<(ProvidersConfig, PathBuf)> {
+    let path = moltis_config::find_user_global_config_file()?;
+    let home_dir = home_config_dir_if_different()?;
+    if !path.starts_with(&home_dir) {
+        return None;
+    }
+    let loaded = moltis_config::loader::load_config(&path).ok()?;
+    Some((loaded.providers, path))
+}
+
+fn codex_cli_auth_path() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
+    Some(PathBuf::from(home).join(".codex").join("auth.json"))
+}
+
+fn codex_cli_auth_has_access_token(path: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    json.get("tokens")
+        .and_then(|t| t.get("access_token"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|token| !token.trim().is_empty())
+}
+
+/// Parse Codex CLI `auth.json` content into `OAuthTokens`.
+fn parse_codex_cli_tokens(data: &str) -> Option<moltis_oauth::OAuthTokens> {
+    let json: serde_json::Value = serde_json::from_str(data).ok()?;
+    let tokens = json.get("tokens")?;
+    let access_token = tokens.get("access_token")?.as_str()?.to_string();
+    if access_token.trim().is_empty() {
+        return None;
+    }
+    let refresh_token = tokens
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(moltis_oauth::OAuthTokens {
+        access_token: Secret::new(access_token),
+        refresh_token: refresh_token.map(Secret::new),
+        expires_at: None,
+    })
+}
+
+/// Import auto-detected external OAuth tokens into the token store so all
+/// providers read from a single location. Currently handles Codex CLI
+/// `~/.codex/auth.json` → `openai-codex` in the token store.
+pub(crate) fn import_detected_oauth_tokens(
+    detected: &[AutoDetectedProviderSource],
+    token_store: &TokenStore,
+) {
+    for source in detected {
+        if source.provider == "openai-codex"
+            && source.source.contains(".codex/auth.json")
+            && token_store.load("openai-codex").is_none()
+            && let Some(path) = codex_cli_auth_path()
+            && let Ok(data) = std::fs::read_to_string(&path)
+            && let Some(tokens) = parse_codex_cli_tokens(&data)
+        {
+            match token_store.save("openai-codex", &tokens) {
+                Ok(()) => info!(
+                    source = %path.display(),
+                    "imported openai-codex tokens from Codex CLI auth"
+                ),
+                Err(e) => debug!(
+                    error = %e,
+                    "failed to import openai-codex tokens"
+                ),
+            }
+        }
+    }
+}
+
+fn set_provider_enabled_in_config(provider: &str, enabled: bool) -> Result<(), String> {
+    moltis_config::update_config(|cfg| {
+        let entry = cfg
+            .providers
+            .providers
+            .entry(provider.to_string())
+            .or_default();
+        entry.enabled = enabled;
+    })
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+fn normalize_provider_name(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn ui_offered_provider_set(config: &ProvidersConfig) -> Option<BTreeSet<String>> {
+    let offered: BTreeSet<String> = config
+        .offered
+        .iter()
+        .map(|name| normalize_provider_name(name))
+        .filter(|name| !name.is_empty())
+        .collect();
+    (!offered.is_empty()).then_some(offered)
+}
+
+pub(crate) fn has_explicit_provider_settings(config: &ProvidersConfig) -> bool {
+    config.providers.values().any(|entry| {
+        entry
+            .api_key
+            .as_ref()
+            .is_some_and(|k| !k.expose_secret().trim().is_empty())
+            || entry
+                .model
+                .as_deref()
+                .is_some_and(|model| !model.trim().is_empty())
+            || entry
+                .base_url
+                .as_deref()
+                .is_some_and(|url| !url.trim().is_empty())
+    })
+}
+
+pub(crate) fn detect_auto_provider_sources(
+    config: &ProvidersConfig,
+    deploy_platform: Option<&str>,
+) -> Vec<AutoDetectedProviderSource> {
+    let is_cloud = deploy_platform.is_some();
+    let key_store = KeyStore::new();
+    let token_store = TokenStore::new();
+    let home_key_store = home_key_store();
+    let home_token_store = home_token_store();
+    let home_provider_config = home_provider_config();
+    let config_dir = current_config_dir();
+    let provider_keys_path = config_dir.join("provider_keys.json");
+    let oauth_tokens_path = config_dir.join("oauth_tokens.json");
+    let local_llm_config_path = config_dir.join("local-llm.json");
+    let codex_path = codex_cli_auth_path();
+
+    let mut seen = BTreeSet::new();
+    let mut detected = Vec::new();
+
+    for provider in known_providers().into_iter().filter(|p| {
+        if is_cloud {
+            return p.auth_type != "local" && p.name != "ollama";
+        }
+        true
+    }) {
+        let mut sources = Vec::new();
+
+        if let Some(env_key) = provider.env_key
+            && std::env::var(env_key)
+                .ok()
+                .is_some_and(|v| !v.trim().is_empty())
+        {
+            sources.push(format!("env:{env_key}"));
+        }
+
+        if config
+            .get(provider.name)
+            .and_then(|entry| entry.api_key.as_ref())
+            .is_some_and(|k| !k.expose_secret().trim().is_empty())
+        {
+            sources.push(format!("config:[providers.{}].api_key", provider.name));
+        }
+
+        if home_provider_config
+            .as_ref()
+            .and_then(|(cfg, _)| cfg.get(provider.name))
+            .and_then(|entry| entry.api_key.as_ref())
+            .is_some_and(|k| !k.expose_secret().trim().is_empty())
+            && let Some((_, path)) = home_provider_config.as_ref()
+        {
+            sources.push(format!(
+                "file:{}:[providers.{}].api_key",
+                path.display(),
+                provider.name
+            ));
+        }
+
+        if key_store.load(provider.name).is_some() {
+            sources.push(format!("file:{}", provider_keys_path.display()));
+        }
+        if home_key_store
+            .as_ref()
+            .is_some_and(|(store, _)| store.load(provider.name).is_some())
+            && let Some((_, path)) = home_key_store.as_ref()
+        {
+            sources.push(format!("file:{}", path.display()));
+        }
+
+        if (provider.auth_type == "oauth" || provider.name == "kimi-code")
+            && token_store.load(provider.name).is_some()
+        {
+            sources.push(format!("file:{}", oauth_tokens_path.display()));
+        }
+        if (provider.auth_type == "oauth" || provider.name == "kimi-code")
+            && home_token_store
+                .as_ref()
+                .is_some_and(|(store, _)| store.load(provider.name).is_some())
+            && let Some((_, path)) = home_token_store.as_ref()
+        {
+            sources.push(format!("file:{}", path.display()));
+        }
+
+        if provider.name == "openai-codex"
+            && codex_path
+                .as_deref()
+                .is_some_and(codex_cli_auth_has_access_token)
+            && let Some(path) = codex_path.as_ref()
+        {
+            sources.push(format!("file:{}", path.display()));
+        }
+
+        #[cfg(feature = "local-llm")]
+        if provider.name == "local-llm" && local_llm_config_path.exists() {
+            sources.push(format!("file:{}", local_llm_config_path.display()));
+        }
+
+        for source in sources {
+            if seen.insert((provider.name.to_string(), source.clone())) {
+                detected.push(AutoDetectedProviderSource {
+                    provider: provider.name.to_string(),
+                    source,
+                });
+            }
+        }
+    }
+
+    detected
+}
+
 pub struct LiveProviderSetupService {
     registry: Arc<RwLock<ProviderRegistry>>,
-    config: ProvidersConfig,
+    config: Arc<Mutex<ProvidersConfig>>,
     token_store: TokenStore,
     key_store: KeyStore,
     pending_oauth: Arc<RwLock<HashMap<String, PendingOAuthFlow>>>,
@@ -457,7 +760,7 @@ impl LiveProviderSetupService {
     ) -> Self {
         Self {
             registry,
-            config,
+            config: Arc::new(Mutex::new(config)),
             token_store: TokenStore::new(),
             key_store: KeyStore::new(),
             pending_oauth: Arc::new(RwLock::new(HashMap::new())),
@@ -465,7 +768,35 @@ impl LiveProviderSetupService {
         }
     }
 
-    fn is_provider_configured(&self, provider: &KnownProvider) -> bool {
+    fn config_snapshot(&self) -> ProvidersConfig {
+        self.config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn set_provider_enabled_in_memory(&self, provider: &str, enabled: bool) {
+        let mut cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+        cfg.providers
+            .entry(provider.to_string())
+            .or_default()
+            .enabled = enabled;
+    }
+
+    fn is_provider_configured(
+        &self,
+        provider: &KnownProvider,
+        active_config: &ProvidersConfig,
+    ) -> bool {
+        // Explicitly disabled providers should not show as configured even if
+        // auto-detected credentials exist in home directories.
+        if active_config
+            .get(provider.name)
+            .is_some_and(|entry| !entry.enabled)
+        {
+            return false;
+        }
+
         // Check if the provider has an API key set via env
         if let Some(env_key) = provider.env_key
             && std::env::var(env_key).is_ok()
@@ -473,7 +804,7 @@ impl LiveProviderSetupService {
             return true;
         }
         // Check config file
-        if let Some(entry) = self.config.get(provider.name)
+        if let Some(entry) = active_config.get(provider.name)
             && entry
                 .api_key
                 .as_ref()
@@ -481,13 +812,47 @@ impl LiveProviderSetupService {
         {
             return true;
         }
+        // Check home/global config file as fallback when using custom config dir.
+        if home_provider_config()
+            .as_ref()
+            .and_then(|(cfg, _)| cfg.get(provider.name))
+            .and_then(|entry| entry.api_key.as_ref())
+            .is_some_and(|k| !k.expose_secret().is_empty())
+        {
+            return true;
+        }
         // Check persisted key store
         if self.key_store.load(provider.name).is_some() {
             return true;
         }
+        // Check persisted key store in user-global config dir.
+        if home_key_store()
+            .as_ref()
+            .is_some_and(|(store, _)| store.load(provider.name).is_some())
+        {
+            return true;
+        }
         // For OAuth providers, check token store
-        if provider.auth_type == "oauth" {
-            return self.token_store.load(provider.name).is_some();
+        if provider.auth_type == "oauth" || provider.name == "kimi-code" {
+            if self.token_store.load(provider.name).is_some() {
+                return true;
+            }
+            if home_token_store()
+                .as_ref()
+                .is_some_and(|(store, _)| store.load(provider.name).is_some())
+            {
+                return true;
+            }
+            // Match provider-registry behavior: openai-codex may be inferred from
+            // Codex CLI auth at ~/.codex/auth.json.
+            if provider.name == "openai-codex"
+                && codex_cli_auth_path()
+                    .as_deref()
+                    .is_some_and(codex_cli_auth_has_access_token)
+            {
+                return true;
+            }
+            return false;
         }
         // For local providers, check if model is configured in local_llm config
         #[cfg(feature = "local-llm")]
@@ -509,12 +874,23 @@ impl LiveProviderSetupService {
         oauth_config: moltis_oauth::OAuthConfig,
     ) -> ServiceResult {
         let client = reqwest::Client::new();
-        let device_resp = device_flow::request_device_code(&client, &oauth_config)
-            .await
-            .map_err(|e| e.to_string())?;
+        let extra_headers = build_provider_headers(&provider_name);
+        let device_resp = device_flow::request_device_code_with_headers(
+            &client,
+            &oauth_config,
+            extra_headers.as_ref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
 
         let user_code = device_resp.user_code.clone();
         let verification_uri = device_resp.verification_uri.clone();
+        let verification_uri_complete = build_verification_uri_complete(
+            &provider_name,
+            &verification_uri,
+            &user_code,
+            device_resp.verification_uri_complete.clone(),
+        );
         let device_code = device_resp.device_code.clone();
         let interval = device_resp.interval;
 
@@ -522,8 +898,17 @@ impl LiveProviderSetupService {
         let token_store = self.token_store.clone();
         let registry = Arc::clone(&self.registry);
         let config = self.effective_config();
+        let poll_headers = extra_headers.clone();
         tokio::spawn(async move {
-            match device_flow::poll_for_token(&client, &oauth_config, &device_code, interval).await
+            let poll_extra = poll_headers.as_ref();
+            match device_flow::poll_for_token_with_headers(
+                &client,
+                &oauth_config,
+                &device_code,
+                interval,
+                poll_extra,
+            )
+            .await
             {
                 Ok(tokens) => {
                     if let Err(e) = token_store.save(&provider_name, &tokens) {
@@ -556,44 +941,106 @@ impl LiveProviderSetupService {
             "deviceFlow": true,
             "userCode": user_code,
             "verificationUri": verification_uri,
+            "verificationUriComplete": verification_uri_complete,
         }))
     }
 
     /// Build a ProvidersConfig that includes saved keys for registry rebuild.
     fn effective_config(&self) -> ProvidersConfig {
-        config_with_saved_keys(&self.config, &self.key_store)
+        let base = self.config_snapshot();
+        config_with_saved_keys(&base, &self.key_store)
     }
+
+    fn has_oauth_tokens(&self, provider_name: &str) -> bool {
+        has_oauth_tokens_for_provider(
+            provider_name,
+            &self.token_store,
+            home_token_store().as_ref().map(|(store, _)| store),
+        )
+    }
+}
+
+fn has_oauth_tokens_for_provider(
+    provider_name: &str,
+    primary_store: &TokenStore,
+    home_store: Option<&TokenStore>,
+) -> bool {
+    primary_store.load(provider_name).is_some()
+        || home_store.is_some_and(|store| store.load(provider_name).is_some())
+}
+
+/// Build provider-specific extra headers for device-flow OAuth calls.
+fn build_provider_headers(provider: &str) -> Option<reqwest::header::HeaderMap> {
+    match provider {
+        "kimi-code" => Some(moltis_oauth::kimi_headers()),
+        _ => None,
+    }
+}
+
+/// Some providers require visiting a URL that already embeds the user_code.
+/// Prefer provider-returned `verification_uri_complete`; otherwise synthesize
+/// one for known providers.
+fn build_verification_uri_complete(
+    provider: &str,
+    verification_uri: &str,
+    user_code: &str,
+    provided_complete: Option<String>,
+) -> Option<String> {
+    if let Some(complete) = provided_complete
+        && !complete.trim().is_empty()
+    {
+        return Some(complete);
+    }
+
+    if provider == "kimi-code" {
+        let sep = if verification_uri.contains('?') {
+            "&"
+        } else {
+            "?"
+        };
+        return Some(format!("{verification_uri}{sep}user_code={user_code}"));
+    }
+
+    None
 }
 
 #[async_trait]
 impl ProviderSetupService for LiveProviderSetupService {
     async fn available(&self) -> ServiceResult {
         let is_cloud = self.deploy_platform.is_some();
+        let active_config = self.config_snapshot();
+        let offered = ui_offered_provider_set(&active_config);
         let providers: Vec<Value> = known_providers()
             .iter()
-            .filter(|p| {
+            .filter_map(|p| {
                 // Hide local-only providers on cloud deployments.
-                if is_cloud {
-                    return p.auth_type != "local" && p.name != "ollama";
+                if is_cloud && (p.auth_type == "local" || p.name == "ollama") {
+                    return None;
                 }
-                true
-            })
-            .map(|p| {
+
+                let configured = self.is_provider_configured(p, &active_config);
+                if let Some(allowed) = offered.as_ref()
+                    && !allowed.contains(&normalize_provider_name(p.name))
+                    && !configured
+                {
+                    return None;
+                }
+
                 // Get saved config for this provider (baseUrl, model)
                 let saved_config = self.key_store.load_config(p.name);
                 let base_url = saved_config.as_ref().and_then(|c| c.base_url.clone());
                 let model = saved_config.as_ref().and_then(|c| c.model.clone());
 
-                serde_json::json!({
+                Some(serde_json::json!({
                     "name": p.name,
                     "displayName": p.display_name,
                     "authType": p.auth_type,
-                    "configured": self.is_provider_configured(p),
+                    "configured": configured,
                     "defaultBaseUrl": p.default_base_url,
                     "baseUrl": base_url,
                     "model": model,
                     "requiresModel": p.requires_model,
-                })
+                }))
             })
             .collect();
         Ok(Value::Array(providers))
@@ -631,6 +1078,8 @@ impl ProviderSetupService for LiveProviderSetupService {
             base_url.map(String::from),
             model.map(String::from),
         )?;
+        set_provider_enabled_in_config(provider_name, true)?;
+        self.set_provider_enabled_in_memory(provider_name, true);
 
         // Rebuild the provider registry with saved keys merged into config.
         let effective = self.effective_config();
@@ -663,6 +1112,26 @@ impl ProviderSetupService for LiveProviderSetupService {
         let mut oauth_config = load_oauth_config(&provider_name)
             .ok_or_else(|| format!("no OAuth config for provider: {provider_name}"))?;
 
+        // User explicitly initiated OAuth for this provider; ensure it is enabled.
+        set_provider_enabled_in_config(&provider_name, true)?;
+        self.set_provider_enabled_in_memory(&provider_name, true);
+
+        // If tokens already exist (for example imported from the main/home config),
+        // skip launching a fresh OAuth flow and rebuild the registry immediately.
+        if self.has_oauth_tokens(&provider_name) {
+            let effective = self.effective_config();
+            let new_registry = ProviderRegistry::from_env_with_config(&effective);
+            let mut reg = self.registry.write().await;
+            *reg = new_registry;
+            info!(
+                provider = %provider_name,
+                "oauth start skipped because provider already has tokens; rebuilt provider registry"
+            );
+            return Ok(serde_json::json!({
+                "alreadyAuthenticated": true,
+            }));
+        }
+
         if oauth_config.device_flow {
             return self
                 .oauth_start_device_flow(provider_name, oauth_config)
@@ -677,7 +1146,7 @@ impl ProviderSetupService for LiveProviderSetupService {
         let port = callback_port(&oauth_config);
         let oauth_config_for_pending = oauth_config.clone();
         let flow = OAuthFlow::new(oauth_config);
-        let auth_req = flow.start();
+        let auth_req = flow.start().map_err(|e| e.to_string())?;
 
         let auth_url = auth_req.url.clone();
         let verifier = auth_req.pkce.verifier.clone();
@@ -778,6 +1247,8 @@ impl ProviderSetupService for LiveProviderSetupService {
         self.token_store
             .save(&pending.provider_name, &tokens)
             .map_err(|e| e.to_string())?;
+        set_provider_enabled_in_config(&pending.provider_name, true)?;
+        self.set_provider_enabled_in_memory(&pending.provider_name, true);
 
         let effective = self.effective_config();
         let new_registry = ProviderRegistry::from_env_with_config(&effective);
@@ -813,9 +1284,14 @@ impl ProviderSetupService for LiveProviderSetupService {
         }
 
         // Remove OAuth tokens
-        if known.auth_type == "oauth" {
+        if known.auth_type == "oauth" || provider_name == "kimi-code" {
             let _ = self.token_store.delete(provider_name);
         }
+
+        // Persist explicit disable so auto-detected/global credentials do not
+        // immediately re-enable the provider on next rebuild.
+        set_provider_enabled_in_config(provider_name, false)?;
+        self.set_provider_enabled_in_memory(provider_name, false);
 
         // Remove local-llm config
         #[cfg(feature = "local-llm")]
@@ -847,17 +1323,166 @@ impl ProviderSetupService for LiveProviderSetupService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "missing 'provider' parameter".to_string())?;
 
-        let has_tokens = self.token_store.load(provider_name).is_some();
+        let has_tokens = self.has_oauth_tokens(provider_name);
         Ok(serde_json::json!({
             "provider": provider_name,
             "authenticated": has_tokens,
         }))
     }
+
+    async fn validate_key(&self, params: Value) -> ServiceResult {
+        use moltis_agents::model::{ChatMessage, LlmProvider};
+
+        let provider_name = params
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'provider' parameter".to_string())?;
+
+        let api_key = params.get("apiKey").and_then(|v| v.as_str());
+        let base_url = params.get("baseUrl").and_then(|v| v.as_str());
+        let model = params.get("model").and_then(|v| v.as_str());
+
+        // Validate provider name exists.
+        let known = known_providers();
+        let provider_info = known
+            .iter()
+            .find(|p| p.name == provider_name)
+            .ok_or_else(|| format!("unknown provider: {provider_name}"))?;
+
+        // API key is required for api-key providers (except Ollama).
+        if provider_info.auth_type == "api-key" && provider_name != "ollama" && api_key.is_none() {
+            return Err("missing 'apiKey' parameter".to_string());
+        }
+
+        // Build a temporary ProvidersConfig with just this provider.
+        let mut temp_config = ProvidersConfig::default();
+        temp_config.providers.insert(
+            provider_name.to_string(),
+            moltis_config::schema::ProviderEntry {
+                enabled: true,
+                api_key: api_key.map(|k| Secret::new(k.to_string())),
+                base_url: base_url.filter(|s| !s.trim().is_empty()).map(String::from),
+                model: model.filter(|s| !s.trim().is_empty()).map(String::from),
+                ..Default::default()
+            },
+        );
+
+        // Build a temporary registry from the temp config.
+        let temp_registry = ProviderRegistry::from_env_with_config(&temp_config);
+
+        // Filter models for this provider.
+        let models: Vec<_> = temp_registry
+            .list_models()
+            .iter()
+            .filter(|m| {
+                normalize_provider_name(&m.provider) == normalize_provider_name(provider_name)
+            })
+            .cloned()
+            .collect();
+
+        if models.is_empty() {
+            return Ok(serde_json::json!({
+                "valid": false,
+                "error": "No models available for this provider. Check your credentials and try again.",
+            }));
+        }
+
+        // Probe the first available model with a "ping" message.
+        let probe_model = &models[0];
+        let llm_provider: Arc<dyn LlmProvider> = match temp_registry.get(&probe_model.id) {
+            Some(p) => p,
+            None => {
+                return Ok(serde_json::json!({
+                    "valid": false,
+                    "error": "Could not instantiate provider for probing.",
+                }));
+            },
+        };
+
+        let probe = [ChatMessage::user("ping")];
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            llm_provider.complete(&probe, &[]),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(_)) => {
+                // Build model list for the frontend.
+                let model_list: Vec<serde_json::Value> = models
+                    .iter()
+                    .map(|m| {
+                        let supports_tools =
+                            temp_registry.get(&m.id).is_some_and(|p| p.supports_tools());
+                        serde_json::json!({
+                            "id": m.id,
+                            "displayName": m.display_name,
+                            "provider": m.provider,
+                            "supportsTools": supports_tools,
+                        })
+                    })
+                    .collect();
+
+                Ok(serde_json::json!({
+                    "valid": true,
+                    "models": model_list,
+                }))
+            },
+            Ok(Err(err)) => {
+                let error_text = err.to_string();
+                let error_obj =
+                    crate::chat_error::parse_chat_error(&error_text, Some(provider_name));
+                let detail = error_obj
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&error_text);
+
+                Ok(serde_json::json!({
+                    "valid": false,
+                    "error": detail,
+                }))
+            },
+            Err(_) => Ok(serde_json::json!({
+                "valid": false,
+                "error": "Connection timed out after 20 seconds. Check your endpoint URL and try again.",
+            })),
+        }
+    }
+
+    async fn save_model(&self, params: Value) -> ServiceResult {
+        let provider_name = params
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'provider' parameter".to_string())?;
+
+        let model = params
+            .get("model")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'model' parameter".to_string())?;
+
+        // Validate provider exists.
+        let known = known_providers();
+        if !known.iter().any(|p| p.name == provider_name) {
+            return Err(format!("unknown provider: {provider_name}"));
+        }
+
+        self.key_store
+            .save_config(provider_name, None, None, Some(model.to_string()))?;
+
+        info!(
+            provider = provider_name,
+            model, "saved model preference for provider"
+        );
+        Ok(serde_json::json!({ "ok": true }))
+    }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use {super::*, moltis_config::schema::ProviderEntry};
+    use {
+        super::*, moltis_config::schema::ProviderEntry, moltis_oauth::OAuthTokens, secrecy::Secret,
+    };
 
     #[test]
     fn known_providers_have_valid_auth_types() {
@@ -917,6 +1542,60 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), providers.len());
+    }
+
+    #[test]
+    fn verification_uri_complete_prefers_provider_payload() {
+        let complete = build_verification_uri_complete(
+            "kimi-code",
+            "https://auth.kimi.com/device",
+            "ABCD-1234",
+            Some("https://auth.kimi.com/device?user_code=ABCD-1234".into()),
+        );
+        assert_eq!(
+            complete.as_deref(),
+            Some("https://auth.kimi.com/device?user_code=ABCD-1234")
+        );
+    }
+
+    #[test]
+    fn verification_uri_complete_synthesizes_for_kimi() {
+        let complete = build_verification_uri_complete(
+            "kimi-code",
+            "https://auth.kimi.com/device",
+            "ABCD-1234",
+            None,
+        );
+        assert_eq!(
+            complete.as_deref(),
+            Some("https://auth.kimi.com/device?user_code=ABCD-1234")
+        );
+    }
+
+    #[test]
+    fn verification_uri_complete_synthesizes_with_existing_query() {
+        let complete = build_verification_uri_complete(
+            "kimi-code",
+            "https://auth.kimi.com/device?lang=en",
+            "ABCD-1234",
+            None,
+        );
+        assert_eq!(
+            complete.as_deref(),
+            Some("https://auth.kimi.com/device?lang=en&user_code=ABCD-1234")
+        );
+    }
+
+    #[test]
+    fn provider_headers_include_kimi_device_headers() {
+        let headers = build_provider_headers("kimi-code").expect("expected kimi-code headers");
+        assert!(headers.get("X-Msh-Platform").is_some());
+        assert!(headers.get("X-Msh-Device-Id").is_some());
+    }
+
+    #[test]
+    fn provider_headers_are_none_for_non_kimi() {
+        assert!(build_provider_headers("github-copilot").is_none());
     }
 
     #[test]
@@ -1179,6 +1858,28 @@ mod tests {
         assert!(svc.remove_key(serde_json::json!({})).await.is_err());
     }
 
+    #[tokio::test]
+    async fn disabled_provider_is_not_reported_configured() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let svc = LiveProviderSetupService::new(registry, ProvidersConfig::default(), None);
+        let provider = known_providers()
+            .into_iter()
+            .find(|p| p.name == "openai-codex")
+            .expect("openai-codex should exist");
+
+        let mut config = ProvidersConfig::default();
+        config
+            .providers
+            .insert("openai-codex".into(), ProviderEntry {
+                enabled: false,
+                ..Default::default()
+            });
+
+        assert!(!svc.is_provider_configured(&provider, &config));
+    }
+
     #[test]
     fn config_with_saved_keys_merges() {
         let dir = tempfile::tempdir().unwrap();
@@ -1240,6 +1941,34 @@ mod tests {
         // New fields for endpoint and model configuration
         assert!(first.get("defaultBaseUrl").is_some());
         assert!(first.get("requiresModel").is_some());
+    }
+
+    #[tokio::test]
+    async fn available_hides_unconfigured_providers_not_in_offered_list() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let config = ProvidersConfig {
+            offered: vec!["openai".into()],
+            ..ProvidersConfig::default()
+        };
+        let svc = LiveProviderSetupService::new(registry, config, None);
+
+        let result = svc.available().await.unwrap();
+        let arr = result.as_array().unwrap();
+        for provider in arr {
+            let configured = provider
+                .get("configured")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let name = provider.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if !configured {
+                assert_eq!(
+                    name, "openai",
+                    "only offered providers should be shown when unconfigured"
+                );
+            }
+        }
     }
 
     #[tokio::test]
@@ -1328,6 +2057,14 @@ mod tests {
             }))
             .await
             .expect("oauth start should succeed");
+
+        if result
+            .get("alreadyAuthenticated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return;
+        }
         let auth_url = result
             .get("authUrl")
             .and_then(|v| v.as_str())
@@ -1356,6 +2093,32 @@ mod tests {
     }
 
     #[test]
+    fn oauth_token_presence_checks_primary_and_home_store() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let primary = TokenStore::with_path(temp.path().join("primary-oauth.json"));
+        let home = TokenStore::with_path(temp.path().join("home-oauth.json"));
+
+        assert!(!has_oauth_tokens_for_provider(
+            "github-copilot",
+            &primary,
+            Some(&home)
+        ));
+
+        home.save("github-copilot", &OAuthTokens {
+            access_token: Secret::new("home-token".to_string()),
+            refresh_token: None,
+            expires_at: None,
+        })
+        .expect("save home token");
+
+        assert!(has_oauth_tokens_for_provider(
+            "github-copilot",
+            &primary,
+            Some(&home)
+        ));
+    }
+
+    #[test]
     fn known_providers_include_new_providers() {
         let providers = known_providers();
         let names: Vec<&str> = providers.iter().map(|p| p.name).collect();
@@ -1365,6 +2128,7 @@ mod tests {
         assert!(names.contains(&"cerebras"), "missing cerebras");
         assert!(names.contains(&"minimax"), "missing minimax");
         assert!(names.contains(&"moonshot"), "missing moonshot");
+        assert!(names.contains(&"kimi-code"), "missing kimi-code");
         assert!(names.contains(&"venice"), "missing venice");
         assert!(names.contains(&"ollama"), "missing ollama");
         // OAuth providers
@@ -1390,6 +2154,7 @@ mod tests {
             ("cerebras", "CEREBRAS_API_KEY"),
             ("minimax", "MINIMAX_API_KEY"),
             ("moonshot", "MOONSHOT_API_KEY"),
+            ("kimi-code", "KIMI_API_KEY"),
             ("venice", "VENICE_API_KEY"),
             ("ollama", "OLLAMA_API_KEY"),
         ];
@@ -1419,6 +2184,7 @@ mod tests {
             "cerebras",
             "minimax",
             "moonshot",
+            "kimi-code",
             "venice",
             "ollama",
         ] {
@@ -1454,6 +2220,7 @@ mod tests {
             "cerebras",
             "minimax",
             "moonshot",
+            "kimi-code",
             "venice",
             "ollama",
             "github-copilot",
@@ -1527,5 +2294,93 @@ mod tests {
             names.contains(&"openai"),
             "openai should be present locally: {names:?}"
         );
+    }
+
+    #[test]
+    fn has_explicit_provider_settings_detects_populated_provider_entries() {
+        let mut empty = ProvidersConfig::default();
+        assert!(!has_explicit_provider_settings(&empty));
+
+        empty.providers.insert("openai".into(), ProviderEntry {
+            api_key: Some(Secret::new("sk-test".into())),
+            ..Default::default()
+        });
+        assert!(has_explicit_provider_settings(&empty));
+
+        let mut model_only = ProvidersConfig::default();
+        model_only.providers.insert("ollama".into(), ProviderEntry {
+            model: Some("llama3".into()),
+            ..Default::default()
+        });
+        assert!(has_explicit_provider_settings(&model_only));
+    }
+
+    #[tokio::test]
+    async fn validate_key_rejects_unknown_provider() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let svc = LiveProviderSetupService::new(registry, ProvidersConfig::default(), None);
+        let result = svc
+            .validate_key(serde_json::json!({"provider": "nonexistent", "apiKey": "sk-test"}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown provider"));
+    }
+
+    #[tokio::test]
+    async fn validate_key_rejects_missing_provider_param() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let svc = LiveProviderSetupService::new(registry, ProvidersConfig::default(), None);
+        let result = svc.validate_key(serde_json::json!({})).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing 'provider'"));
+    }
+
+    #[tokio::test]
+    async fn validate_key_rejects_missing_api_key_for_api_key_provider() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let svc = LiveProviderSetupService::new(registry, ProvidersConfig::default(), None);
+        let result = svc
+            .validate_key(serde_json::json!({"provider": "anthropic"}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing 'apiKey'"));
+    }
+
+    #[tokio::test]
+    async fn validate_key_allows_missing_api_key_for_ollama() {
+        let registry = Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+            &ProvidersConfig::default(),
+        )));
+        let svc = LiveProviderSetupService::new(registry, ProvidersConfig::default(), None);
+        // Ollama doesn't require an API key, so this should not error on missing apiKey.
+        // It will likely return valid=false due to connection issues, but it should not
+        // reject with a "missing apiKey" error.
+        let result = svc
+            .validate_key(serde_json::json!({"provider": "ollama"}))
+            .await;
+        // Should succeed (return Ok) even without apiKey — the probe may fail,
+        // but param validation should pass.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn codex_cli_auth_has_access_token_requires_tokens_access_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+
+        std::fs::write(&path, r#"{"tokens":{"access_token":"abc123"}}"#).unwrap();
+        assert!(codex_cli_auth_has_access_token(&path));
+
+        std::fs::write(&path, r#"{"tokens":{"access_token":""}}"#).unwrap();
+        assert!(!codex_cli_auth_has_access_token(&path));
+
+        std::fs::write(&path, r#"{"not_tokens":true}"#).unwrap();
+        assert!(!codex_cli_auth_has_access_token(&path));
     }
 }

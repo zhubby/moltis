@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
 use secrecy::ExposeSecret;
 
 use axum::{
     Json,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
@@ -14,6 +14,7 @@ use crate::{
     auth::CredentialStore,
     auth_middleware::{AuthSession, SESSION_COOKIE},
     auth_webauthn::WebAuthnState,
+    server::is_local_connection,
     state::GatewayState,
 };
 
@@ -65,6 +66,14 @@ pub fn auth_router() -> axum::Router<AuthState> {
         )
         .route("/passkey/auth/begin", post(passkey_auth_begin_handler))
         .route("/passkey/auth/finish", post(passkey_auth_finish_handler))
+        .route(
+            "/setup/passkey/register/begin",
+            post(setup_passkey_register_begin_handler),
+        )
+        .route(
+            "/setup/passkey/register/finish",
+            post(setup_passkey_register_finish_handler),
+        )
         .route("/reset", post(reset_auth_handler))
 }
 
@@ -72,6 +81,7 @@ pub fn auth_router() -> axum::Router<AuthState> {
 
 async fn status_handler(
     State(state): State<AuthState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     let auth_disabled = state.credential_store.is_auth_disabled();
@@ -79,8 +89,9 @@ async fn status_handler(
     let has_password = state.credential_store.has_password().await.unwrap_or(false);
     let has_passkeys = state.credential_store.has_passkeys().await.unwrap_or(false);
 
-    // Localhost with no password is treated as fully open (no auth needed).
-    let auth_bypassed = auth_disabled || (localhost_only && !has_password);
+    // Three-tier model: local connection + no password = dev convenience.
+    let is_local = is_local_connection(&headers, addr, state.gateway_state.behind_proxy);
+    let auth_bypassed = auth_disabled || (is_local && !has_password);
 
     let authenticated = if auth_bypassed {
         true
@@ -98,7 +109,15 @@ async fn status_handler(
 
     let setup_required = !auth_bypassed && !state.credential_store.is_setup_complete();
 
-    let setup_code_required = state.gateway_state.setup_code.read().await.is_some();
+    let setup_code_required = state.gateway_state.inner.read().await.setup_code.is_some();
+
+    let webauthn_available = state.webauthn_state.is_some();
+
+    let passkey_origins: Vec<String> = state
+        .webauthn_state
+        .as_ref()
+        .map(|wa| wa.get_allowed_origins())
+        .unwrap_or_default();
 
     Json(serde_json::json!({
         "setup_required": setup_required,
@@ -108,6 +127,8 @@ async fn status_handler(
         "setup_code_required": setup_code_required,
         "has_password": has_password,
         "localhost_only": localhost_only,
+        "webauthn_available": webauthn_available,
+        "passkey_origins": passkey_origins,
     }))
 }
 
@@ -121,6 +142,8 @@ struct SetupRequest {
 
 async fn setup_handler(
     State(state): State<AuthState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SetupRequest>,
 ) -> impl IntoResponse {
     if state.credential_store.is_setup_complete() {
@@ -129,8 +152,8 @@ async fn setup_handler(
 
     // Validate setup code if one was generated at startup.
     {
-        let expected_code = state.gateway_state.setup_code.read().await;
-        if let Some(ref expected) = *expected_code
+        let inner = state.gateway_state.inner.read().await;
+        if let Some(ref expected) = inner.setup_code
             && body.setup_code.as_deref() != Some(expected.expose_secret().as_str())
         {
             return (StatusCode::FORBIDDEN, "invalid or missing setup code").into_response();
@@ -139,8 +162,9 @@ async fn setup_handler(
 
     let password = body.password.unwrap_or_default();
 
-    if password.is_empty() && state.gateway_state.localhost_only {
-        // Localhost with no password: skip setup without setting one.
+    let is_local = is_local_connection(&headers, addr, state.gateway_state.behind_proxy);
+    if password.is_empty() && is_local {
+        // Local connection with no password: skip setup without setting one.
         state.credential_store.clear_auth_disabled();
     } else {
         if password.len() < 8 {
@@ -160,7 +184,7 @@ async fn setup_handler(
     }
 
     // Clear setup code and create session.
-    *state.gateway_state.setup_code.write().await = None;
+    state.gateway_state.inner.write().await.setup_code = None;
     match state.credential_store.create_session().await {
         Ok(token) => session_response(token),
         Err(e) => (
@@ -223,7 +247,7 @@ async fn reset_auth_handler(
             // Generate a new setup code so the re-setup flow is protected.
             let code = generate_setup_code();
             tracing::info!("setup code: {code} (enter this in the browser to set your password)");
-            *state.gateway_state.setup_code.write().await = Some(secrecy::Secret::new(code));
+            state.gateway_state.inner.write().await.setup_code = Some(secrecy::Secret::new(code));
             clear_session_response()
         },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -254,10 +278,10 @@ async fn change_password_handler(
     let has_password = state.credential_store.has_password().await.unwrap_or(false);
 
     if !has_password {
-        // No password set yet — use set_initial_password (no current password needed).
+        // No password set yet — add one (works even after passkey-only setup).
         return match state
             .credential_store
-            .set_initial_password(&body.new_password)
+            .add_password(&body.new_password)
             .await
         {
             Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
@@ -524,6 +548,124 @@ async fn passkey_auth_finish_handler(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
         Err(e) => (StatusCode::UNAUTHORIZED, e.to_string()).into_response(),
+    }
+}
+
+// ── Setup-time passkey registration (setup code instead of session) ───────────
+
+#[derive(serde::Deserialize)]
+struct SetupPasskeyBeginRequest {
+    setup_code: Option<String>,
+}
+
+async fn setup_passkey_register_begin_handler(
+    State(state): State<AuthState>,
+    Json(body): Json<SetupPasskeyBeginRequest>,
+) -> impl IntoResponse {
+    if state.credential_store.is_setup_complete() {
+        return (StatusCode::FORBIDDEN, "setup already completed").into_response();
+    }
+
+    // Validate setup code if one was generated at startup.
+    {
+        let inner = state.gateway_state.inner.read().await;
+        if let Some(ref expected) = inner.setup_code
+            && body.setup_code.as_deref() != Some(expected.expose_secret().as_str())
+        {
+            return (StatusCode::FORBIDDEN, "invalid or missing setup code").into_response();
+        }
+    }
+
+    let Some(ref wa) = state.webauthn_state else {
+        return (StatusCode::NOT_IMPLEMENTED, "passkeys not configured").into_response();
+    };
+
+    let existing = crate::auth_webauthn::load_passkeys(&state.credential_store)
+        .await
+        .unwrap_or_default();
+
+    match wa.start_registration(&existing) {
+        Ok((challenge_id, ccr)) => Json(serde_json::json!({
+            "challenge_id": challenge_id,
+            "options": ccr,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SetupPasskeyFinishRequest {
+    challenge_id: String,
+    name: String,
+    setup_code: Option<String>,
+    credential: webauthn_rs::prelude::RegisterPublicKeyCredential,
+}
+
+async fn setup_passkey_register_finish_handler(
+    State(state): State<AuthState>,
+    Json(body): Json<SetupPasskeyFinishRequest>,
+) -> impl IntoResponse {
+    if state.credential_store.is_setup_complete() {
+        return (StatusCode::FORBIDDEN, "setup already completed").into_response();
+    }
+
+    // Validate setup code if one was generated at startup.
+    {
+        let inner = state.gateway_state.inner.read().await;
+        if let Some(ref expected) = inner.setup_code
+            && body.setup_code.as_deref() != Some(expected.expose_secret().as_str())
+        {
+            return (StatusCode::FORBIDDEN, "invalid or missing setup code").into_response();
+        }
+    }
+
+    let Some(ref wa) = state.webauthn_state else {
+        return (StatusCode::NOT_IMPLEMENTED, "passkeys not configured").into_response();
+    };
+
+    let passkey = match wa.finish_registration(&body.challenge_id, &body.credential) {
+        Ok(pk) => pk,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+
+    let cred_id = passkey.cred_id().as_ref();
+    let data = match serde_json::to_vec(&passkey) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let name = if body.name.trim().is_empty() {
+        "Passkey"
+    } else {
+        body.name.trim()
+    };
+
+    if let Err(e) = state
+        .credential_store
+        .store_passkey(cred_id, name, &data)
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    if let Err(e) = state.credential_store.mark_setup_complete().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to mark setup complete: {e}"),
+        )
+            .into_response();
+    }
+
+    // Clear setup code and create session.
+    state.gateway_state.inner.write().await.setup_code = None;
+    match state.credential_store.create_session().await {
+        Ok(token) => session_response(token),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to create session: {e}"),
+        )
+            .into_response(),
     }
 }
 

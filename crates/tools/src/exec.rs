@@ -265,7 +265,7 @@ impl AgentTool for ExecTool {
         let using_default_working_dir = explicit_working_dir.is_none();
         let mut working_dir = explicit_working_dir.or_else(|| {
             if is_sandboxed {
-                Some(PathBuf::from("/"))
+                Some(PathBuf::from("/home/sandbox"))
             } else {
                 Some(moltis_config::data_dir())
             }
@@ -462,6 +462,7 @@ fn redaction_needles(value: &str) -> Vec<String> {
     needles
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {

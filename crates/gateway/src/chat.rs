@@ -1,7 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
+    ffi::OsStr,
     path::PathBuf,
+    process::Stdio,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use {
@@ -9,7 +12,7 @@ use {
     serde::{Deserialize, Serialize},
     serde_json::Value,
     tokio::{
-        sync::{OwnedSemaphorePermit, RwLock, Semaphore},
+        sync::{OnceCell, OwnedSemaphorePermit, RwLock, Semaphore},
         task::AbortHandle,
     },
     tokio_stream::StreamExt,
@@ -20,10 +23,15 @@ use moltis_config::MessageQueueMode;
 
 use {
     moltis_agents::{
-        AgentRunError, ChatMessage,
+        AgentRunError, ChatMessage, ContentPart, UserContent,
         model::{StreamEvent, values_to_chat_messages},
-        prompt::{build_system_prompt_minimal, build_system_prompt_with_session},
-        providers::ProviderRegistry,
+        multimodal::parse_data_uri,
+        prompt::{
+            PromptHostRuntimeContext, PromptRuntimeContext, PromptSandboxRuntimeContext,
+            VOICE_REPLY_SUFFIX, build_system_prompt_minimal_runtime,
+            build_system_prompt_with_session_runtime,
+        },
+        providers::{ProviderRegistry, raw_model_id},
         runner::{RunnerEvent, run_agent_loop_streaming},
         tool_registry::ToolRegistry,
     },
@@ -41,6 +49,63 @@ use crate::{
     services::{ChatService, ModelService, ServiceResult},
     state::GatewayState,
 };
+
+#[cfg(feature = "metrics")]
+use moltis_metrics::{counter, histogram, labels, llm as llm_metrics};
+
+/// Convert session-crate `MessageContent` to agents-crate `UserContent`.
+///
+/// The two types have different image representations:
+/// - `ContentBlock::ImageUrl` stores a data URI string
+/// - `ContentPart::Image` stores separated `media_type` + `data` fields
+fn to_user_content(mc: &MessageContent) -> UserContent {
+    match mc {
+        MessageContent::Text(text) => UserContent::Text(text.clone()),
+        MessageContent::Multimodal(blocks) => {
+            let parts: Vec<ContentPart> = blocks
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(ContentPart::Text(text.clone())),
+                    ContentBlock::ImageUrl { image_url } => match parse_data_uri(&image_url.url) {
+                        Some((media_type, data)) => {
+                            debug!(
+                                media_type,
+                                data_len = data.len(),
+                                "to_user_content: parsed image from data URI"
+                            );
+                            Some(ContentPart::Image {
+                                media_type: media_type.to_string(),
+                                data: data.to_string(),
+                            })
+                        },
+                        None => {
+                            warn!(
+                                url_prefix = &image_url.url[..image_url.url.len().min(80)],
+                                "to_user_content: failed to parse data URI, dropping image"
+                            );
+                            None
+                        },
+                    },
+                })
+                .collect();
+            let text_count = parts
+                .iter()
+                .filter(|p| matches!(p, ContentPart::Text(_)))
+                .count();
+            let image_count = parts
+                .iter()
+                .filter(|p| matches!(p, ContentPart::Image { .. }))
+                .count();
+            debug!(
+                text_count,
+                image_count,
+                total_blocks = blocks.len(),
+                "to_user_content: converted multimodal content"
+            );
+            UserContent::Multimodal(parts)
+        },
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,11 +139,328 @@ enum InputMediumParam {
     Voice,
 }
 
+/// Typed broadcast payload for the "final" chat event.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatFinalBroadcast {
+    run_id: String,
+    session_key: String,
+    state: &'static str,
+    text: String,
+    model: String,
+    provider: String,
+    input_tokens: u32,
+    output_tokens: u32,
+    message_index: usize,
+    reply_medium: ReplyMedium,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iterations: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls_made: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audio: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seq: Option<u64>,
+}
+
+/// Typed broadcast payload for the "error" chat event.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatErrorBroadcast {
+    run_id: String,
+    session_key: String,
+    state: &'static str,
+    error: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seq: Option<u64>,
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn normalize_model_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn provider_filter_from_params(params: &Value) -> Option<String> {
+    params
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(normalize_model_key)
+        .filter(|v| !v.is_empty())
+}
+
+fn provider_matches_filter(model_provider: &str, provider_filter: Option<&str>) -> bool {
+    provider_filter.is_none_or(|expected| normalize_model_key(model_provider) == expected)
+}
+
+fn probe_max_parallel_per_provider(params: &Value) -> usize {
+    params
+        .get("maxParallelPerProvider")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.clamp(1, 8) as usize)
+        .unwrap_or(1)
+}
+
+const PROBE_RATE_LIMIT_INITIAL_BACKOFF_MS: u64 = 1_000;
+const PROBE_RATE_LIMIT_MAX_BACKOFF_MS: u64 = 30_000;
+
+#[derive(Debug, Clone, Copy)]
+struct ProbeRateLimitState {
+    backoff_ms: u64,
+    until: Instant,
+}
+
+#[derive(Debug, Default)]
+struct ProbeRateLimiter {
+    by_provider: tokio::sync::Mutex<HashMap<String, ProbeRateLimitState>>,
+}
+
+impl ProbeRateLimiter {
+    async fn remaining_backoff(&self, provider: &str) -> Option<Duration> {
+        let map = self.by_provider.lock().await;
+        map.get(provider).and_then(|state| {
+            let now = Instant::now();
+            (state.until > now).then_some(state.until - now)
+        })
+    }
+
+    async fn mark_rate_limited(&self, provider: &str) -> Duration {
+        let mut map = self.by_provider.lock().await;
+        let next_backoff_ms =
+            next_probe_rate_limit_backoff_ms(map.get(provider).map(|s| s.backoff_ms));
+        let delay = Duration::from_millis(next_backoff_ms);
+        let state = ProbeRateLimitState {
+            backoff_ms: next_backoff_ms,
+            until: Instant::now() + delay,
+        };
+        let _ = map.insert(provider.to_string(), state);
+        delay
+    }
+
+    async fn clear(&self, provider: &str) {
+        let mut map = self.by_provider.lock().await;
+        let _ = map.remove(provider);
+    }
+}
+
+fn next_probe_rate_limit_backoff_ms(previous_ms: Option<u64>) -> u64 {
+    previous_ms
+        .map(|ms| ms.saturating_mul(2))
+        .unwrap_or(PROBE_RATE_LIMIT_INITIAL_BACKOFF_MS)
+        .clamp(
+            PROBE_RATE_LIMIT_INITIAL_BACKOFF_MS,
+            PROBE_RATE_LIMIT_MAX_BACKOFF_MS,
+        )
+}
+
+fn is_probe_rate_limited_error(error_obj: &Value, error_text: &str) -> bool {
+    if error_obj.get("type").and_then(|v| v.as_str()) == Some("rate_limit_exceeded") {
+        return true;
+    }
+
+    let lower = error_text.to_ascii_lowercase();
+    lower.contains("status=429")
+        || lower.contains("http 429")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("quota exceeded")
+}
+
+#[derive(Debug)]
+struct ProbeProviderLimiter {
+    permits_per_provider: usize,
+    by_provider: tokio::sync::Mutex<HashMap<String, Arc<Semaphore>>>,
+}
+
+impl ProbeProviderLimiter {
+    fn new(permits_per_provider: usize) -> Self {
+        Self {
+            permits_per_provider,
+            by_provider: tokio::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn acquire(
+        &self,
+        provider: &str,
+    ) -> Result<OwnedSemaphorePermit, tokio::sync::AcquireError> {
+        let provider_sem = {
+            let mut map = self.by_provider.lock().await;
+            Arc::clone(
+                map.entry(provider.to_string())
+                    .or_insert_with(|| Arc::new(Semaphore::new(self.permits_per_provider))),
+            )
+        };
+
+        provider_sem.acquire_owned().await
+    }
+}
+
+#[derive(Debug)]
+enum ProbeStatus {
+    Supported,
+    Unsupported { detail: String, provider: String },
+    Error { message: String },
+}
+
+#[derive(Debug)]
+struct ProbeOutcome {
+    model_id: String,
+    display_name: String,
+    provider_name: String,
+    status: ProbeStatus,
+}
+
+/// Run a single model probe: acquire concurrency permits, respect rate-limit
+/// backoff, send a "ping" completion, and classify the result.
+async fn run_single_probe(
+    model_id: String,
+    display_name: String,
+    provider_name: String,
+    provider: Arc<dyn moltis_agents::model::LlmProvider>,
+    limiter: Arc<Semaphore>,
+    provider_limiter: Arc<ProbeProviderLimiter>,
+    rate_limiter: Arc<ProbeRateLimiter>,
+) -> ProbeOutcome {
+    let _permit = match limiter.acquire_owned().await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return ProbeOutcome {
+                model_id,
+                display_name,
+                provider_name,
+                status: ProbeStatus::Error {
+                    message: "probe limiter closed".to_string(),
+                },
+            };
+        },
+    };
+    let _provider_permit = match provider_limiter.acquire(&provider_name).await {
+        Ok(permit) => permit,
+        Err(_) => {
+            return ProbeOutcome {
+                model_id,
+                display_name,
+                provider_name,
+                status: ProbeStatus::Error {
+                    message: "provider probe limiter closed".to_string(),
+                },
+            };
+        },
+    };
+
+    if let Some(wait_for) = rate_limiter.remaining_backoff(&provider_name).await {
+        debug!(
+            provider = %provider_name,
+            model = %model_id,
+            wait_ms = wait_for.as_millis() as u64,
+            "skipping model probe while provider is in rate-limit backoff"
+        );
+        return ProbeOutcome {
+            model_id,
+            display_name,
+            provider_name,
+            status: ProbeStatus::Error {
+                message: format!(
+                    "probe skipped due provider backoff ({}ms remaining)",
+                    wait_for.as_millis()
+                ),
+            },
+        };
+    }
+
+    let probe = [ChatMessage::user("ping")];
+    let completion = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        provider.complete(&probe, &[]),
+    )
+    .await;
+
+    match completion {
+        Ok(Ok(_)) => {
+            rate_limiter.clear(&provider_name).await;
+            ProbeOutcome {
+                model_id,
+                display_name,
+                provider_name,
+                status: ProbeStatus::Supported,
+            }
+        },
+        Ok(Err(err)) => {
+            let error_text = err.to_string();
+            let error_obj =
+                crate::chat_error::parse_chat_error(&error_text, Some(provider_name.as_str()));
+            if is_probe_rate_limited_error(&error_obj, &error_text) {
+                let backoff = rate_limiter.mark_rate_limited(&provider_name).await;
+                let detail = error_obj
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Too many requests while probing model support");
+                warn!(
+                    provider = %provider_name,
+                    model = %model_id,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "model probe rate limited, applying provider backoff"
+                );
+                return ProbeOutcome {
+                    model_id,
+                    display_name,
+                    provider_name,
+                    status: ProbeStatus::Error {
+                        message: format!("{detail} (probe backoff {}ms)", backoff.as_millis()),
+                    },
+                };
+            }
+
+            rate_limiter.clear(&provider_name).await;
+            let is_unsupported =
+                error_obj.get("type").and_then(|v| v.as_str()) == Some("unsupported_model");
+
+            if is_unsupported {
+                let detail = error_obj
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Model is not supported for this account/provider")
+                    .to_string();
+                let parsed_provider = error_obj
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(provider_name.as_str())
+                    .to_string();
+                ProbeOutcome {
+                    model_id,
+                    display_name,
+                    provider_name,
+                    status: ProbeStatus::Unsupported {
+                        detail,
+                        provider: parsed_provider,
+                    },
+                }
+            } else {
+                ProbeOutcome {
+                    model_id,
+                    display_name,
+                    provider_name,
+                    status: ProbeStatus::Error {
+                        message: error_text,
+                    },
+                }
+            }
+        },
+        Err(_) => ProbeOutcome {
+            model_id,
+            display_name,
+            provider_name,
+            status: ProbeStatus::Error {
+                message: "probe timeout after 20s".to_string(),
+            },
+        },
+    }
 }
 
 fn parse_input_medium(params: &Value) -> Option<ReplyMedium> {
@@ -145,6 +527,188 @@ fn infer_reply_medium(params: &Value, text: &str) -> ReplyMedium {
     ReplyMedium::Text
 }
 
+fn detect_runtime_shell() -> Option<String> {
+    let candidate = std::env::var("SHELL")
+        .ok()
+        .or_else(|| std::env::var("COMSPEC").ok())?;
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let name = std::path::Path::new(trimmed)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(trimmed)
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+async fn detect_host_sudo_access() -> (Option<bool>, Option<String>) {
+    #[cfg(not(unix))]
+    {
+        return (None, Some("unsupported".to_string()));
+    }
+
+    #[cfg(unix)]
+    {
+        let output = tokio::process::Command::new("sudo")
+            .arg("-n")
+            .arg("true")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+
+        match output {
+            Ok(out) if out.status.success() => (Some(true), Some("passwordless".to_string())),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).to_lowercase();
+                if stderr.contains("a password is required") {
+                    (Some(false), Some("requires_password".to_string()))
+                } else if stderr.contains("not in the sudoers")
+                    || stderr.contains("is not in the sudoers")
+                    || stderr.contains("is not allowed to run sudo")
+                    || stderr.contains("may not run sudo")
+                {
+                    (Some(false), Some("denied".to_string()))
+                } else {
+                    (None, Some("unknown".to_string()))
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                (None, Some("not_installed".to_string()))
+            },
+            Err(_) => (None, Some("unknown".to_string())),
+        }
+    }
+}
+
+/// Pre-loaded persona data used to build the system prompt.
+struct PromptPersona {
+    config: moltis_config::MoltisConfig,
+    identity: moltis_config::AgentIdentity,
+    user: moltis_config::UserProfile,
+    soul_text: Option<String>,
+    agents_text: Option<String>,
+    tools_text: Option<String>,
+}
+
+/// Load identity, user profile, soul, and workspace text from config + data files.
+///
+/// Both `run_with_tools` and `run_streaming` need the same persona data;
+/// this function avoids duplicating the merge logic.
+fn load_prompt_persona() -> PromptPersona {
+    let config = moltis_config::discover_and_load();
+    let mut identity = config.identity.clone();
+    if let Some(file_identity) = moltis_config::load_identity() {
+        if file_identity.name.is_some() {
+            identity.name = file_identity.name;
+        }
+        if file_identity.emoji.is_some() {
+            identity.emoji = file_identity.emoji;
+        }
+        if file_identity.creature.is_some() {
+            identity.creature = file_identity.creature;
+        }
+        if file_identity.vibe.is_some() {
+            identity.vibe = file_identity.vibe;
+        }
+    }
+    let mut user = config.user.clone();
+    if let Some(file_user) = moltis_config::load_user() {
+        if file_user.name.is_some() {
+            user.name = file_user.name;
+        }
+        if file_user.timezone.is_some() {
+            user.timezone = file_user.timezone;
+        }
+    }
+    PromptPersona {
+        config,
+        identity,
+        user,
+        soul_text: moltis_config::load_soul(),
+        agents_text: moltis_config::load_agents_md(),
+        tools_text: moltis_config::load_tools_md(),
+    }
+}
+
+async fn build_prompt_runtime_context(
+    state: &Arc<GatewayState>,
+    provider: &Arc<dyn moltis_agents::model::LlmProvider>,
+    session_key: &str,
+    session_entry: Option<&moltis_sessions::metadata::SessionEntry>,
+) -> PromptRuntimeContext {
+    let sudo_fut = detect_host_sudo_access();
+    let sandbox_fut = async {
+        if let Some(ref router) = state.sandbox_router {
+            let is_sandboxed = router.is_sandboxed(session_key).await;
+            let config = router.config();
+            Some(PromptSandboxRuntimeContext {
+                exec_sandboxed: is_sandboxed,
+                mode: Some(config.mode.to_string()),
+                backend: Some(router.backend_name().to_string()),
+                scope: Some(config.scope.to_string()),
+                image: Some(router.resolve_image(session_key, None).await),
+                workspace_mount: Some(config.workspace_mount.to_string()),
+                no_network: Some(matches!(config.network, moltis_tools::sandbox::NetworkPolicy::Blocked)),
+                session_override: session_entry.and_then(|entry| entry.sandbox_enabled),
+            })
+        } else {
+            Some(PromptSandboxRuntimeContext {
+                exec_sandboxed: false,
+                mode: Some("off".to_string()),
+                backend: Some("none".to_string()),
+                scope: None,
+                image: None,
+                workspace_mount: None,
+                no_network: None,
+                session_override: None,
+            })
+        }
+    };
+
+    let ((sudo_non_interactive, sudo_status), sandbox_ctx) = tokio::join!(sudo_fut, sandbox_fut);
+
+    let timezone = state
+        .sandbox_router
+        .as_ref()
+        .and_then(|r| r.config().timezone.clone());
+
+    let location = state
+        .inner
+        .read()
+        .await
+        .cached_location
+        .as_ref()
+        .map(|loc| loc.to_string());
+
+    let host_ctx = PromptHostRuntimeContext {
+        host: Some(state.hostname.clone()),
+        os: Some(std::env::consts::OS.to_string()),
+        arch: Some(std::env::consts::ARCH.to_string()),
+        shell: detect_runtime_shell(),
+        provider: Some(provider.name().to_string()),
+        model: Some(provider.id().to_string()),
+        session_key: Some(session_key.to_string()),
+        sudo_non_interactive,
+        sudo_status,
+        timezone,
+        location,
+        ..Default::default()
+    };
+
+    PromptRuntimeContext {
+        host: host_ctx,
+        sandbox: sandbox_ctx,
+    }
+}
+
 fn effective_tool_policy(config: &moltis_config::MoltisConfig) -> ToolPolicy {
     let mut effective = ToolPolicy::default();
     if let Some(profile) = config.tools.policy.profile.as_deref()
@@ -187,6 +751,16 @@ fn apply_runtime_tool_filters(
 pub struct DisabledModelsStore {
     #[serde(default)]
     pub disabled: HashSet<String>,
+    #[serde(default)]
+    pub unsupported: HashMap<String, UnsupportedModelInfo>,
+}
+
+/// Metadata for a model that failed at runtime due to provider support/account limits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnsupportedModelInfo {
+    pub detail: String,
+    pub provider: Option<String>,
+    pub updated_at_ms: u64,
 }
 
 impl DisabledModelsStore {
@@ -224,6 +798,42 @@ impl DisabledModelsStore {
     pub fn is_disabled(&self, model_id: &str) -> bool {
         self.disabled.contains(model_id)
     }
+
+    /// Mark a model as unsupported with a human-readable reason.
+    pub fn mark_unsupported(
+        &mut self,
+        model_id: &str,
+        detail: &str,
+        provider: Option<&str>,
+    ) -> bool {
+        let next = UnsupportedModelInfo {
+            detail: detail.to_string(),
+            provider: provider.map(ToString::to_string),
+            updated_at_ms: now_ms(),
+        };
+        let should_update = self
+            .unsupported
+            .get(model_id)
+            .map(|existing| existing.detail != next.detail || existing.provider != next.provider)
+            .unwrap_or(true);
+
+        if should_update {
+            self.unsupported.insert(model_id.to_string(), next);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear unsupported status when a model succeeds again.
+    pub fn clear_unsupported(&mut self, model_id: &str) -> bool {
+        self.unsupported.remove(model_id).is_some()
+    }
+
+    /// Get unsupported metadata for a model.
+    pub fn unsupported_info(&self, model_id: &str) -> Option<&UnsupportedModelInfo> {
+        self.unsupported.get(model_id)
+    }
 }
 
 // ── LiveModelService ────────────────────────────────────────────────────────
@@ -231,13 +841,76 @@ impl DisabledModelsStore {
 pub struct LiveModelService {
     providers: Arc<RwLock<ProviderRegistry>>,
     disabled: Arc<RwLock<DisabledModelsStore>>,
+    state: Arc<OnceCell<Arc<GatewayState>>>,
+    detect_gate: Arc<Semaphore>,
+    priority_order: HashMap<String, usize>,
 }
 
 impl LiveModelService {
-    pub fn new(providers: Arc<RwLock<ProviderRegistry>>) -> Self {
+    pub fn new(
+        providers: Arc<RwLock<ProviderRegistry>>,
+        disabled: Arc<RwLock<DisabledModelsStore>>,
+        priority_models: Vec<String>,
+    ) -> Self {
+        let mut priority_order = HashMap::new();
+        for (idx, model) in priority_models.into_iter().enumerate() {
+            let key = normalize_model_key(&model);
+            if !key.is_empty() {
+                let _ = priority_order.entry(key).or_insert(idx);
+            }
+        }
         Self {
             providers,
-            disabled: Arc::new(RwLock::new(DisabledModelsStore::load())),
+            disabled,
+            state: Arc::new(OnceCell::new()),
+            detect_gate: Arc::new(Semaphore::new(1)),
+            priority_order,
+        }
+    }
+
+    fn priority_rank(&self, model: &moltis_agents::providers::ModelInfo) -> usize {
+        let full = normalize_model_key(&model.id);
+        if let Some(rank) = self.priority_order.get(&full) {
+            return *rank;
+        }
+        let raw = normalize_model_key(raw_model_id(&model.id));
+        if let Some(rank) = self.priority_order.get(&raw) {
+            return *rank;
+        }
+        let display = normalize_model_key(&model.display_name);
+        if let Some(rank) = self.priority_order.get(&display) {
+            return *rank;
+        }
+        usize::MAX
+    }
+
+    fn prioritize_models<'a>(
+        &self,
+        models: impl Iterator<Item = &'a moltis_agents::providers::ModelInfo>,
+    ) -> Vec<&'a moltis_agents::providers::ModelInfo> {
+        let mut ordered: Vec<(usize, &'a moltis_agents::providers::ModelInfo)> =
+            models.enumerate().collect();
+        ordered.sort_by_key(|(idx, model)| (self.priority_rank(model), *idx));
+        ordered.into_iter().map(|(_, model)| model).collect()
+    }
+
+    /// Set the gateway state reference for broadcasting model updates.
+    pub fn set_state(&self, state: Arc<GatewayState>) {
+        let _ = self.state.set(state);
+    }
+
+    async fn broadcast_model_visibility_update(&self, model_id: &str, disabled: bool) {
+        if let Some(state) = self.state.get() {
+            broadcast(
+                state,
+                "models.updated",
+                serde_json::json!({
+                    "modelId": model_id,
+                    "disabled": disabled,
+                }),
+                BroadcastOpts::default(),
+            )
+            .await;
         }
     }
 }
@@ -247,10 +920,15 @@ impl ModelService for LiveModelService {
     async fn list(&self) -> ServiceResult {
         let reg = self.providers.read().await;
         let disabled = self.disabled.read().await;
-        let models: Vec<_> = reg
-            .list_models()
+        let prioritized = self.prioritize_models(
+            reg.list_models()
+                .iter()
+                .filter(|m| !disabled.is_disabled(&m.id))
+                .filter(|m| disabled.unsupported_info(&m.id).is_none()),
+        );
+        let models: Vec<_> = prioritized
             .iter()
-            .filter(|m| !disabled.is_disabled(&m.id))
+            .copied()
             .map(|m| {
                 let supports_tools = reg.get(&m.id).is_some_and(|p| p.supports_tools());
                 serde_json::json!({
@@ -258,6 +936,36 @@ impl ModelService for LiveModelService {
                     "provider": m.provider,
                     "displayName": m.display_name,
                     "supportsTools": supports_tools,
+                    "unsupported": false,
+                    "unsupportedReason": Value::Null,
+                    "unsupportedProvider": Value::Null,
+                    "unsupportedUpdatedAt": Value::Null,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!(models))
+    }
+
+    async fn list_all(&self) -> ServiceResult {
+        let reg = self.providers.read().await;
+        let disabled = self.disabled.read().await;
+        let prioritized = self.prioritize_models(reg.list_models().iter());
+        let models: Vec<_> = prioritized
+            .iter()
+            .copied()
+            .map(|m| {
+                let supports_tools = reg.get(&m.id).is_some_and(|p| p.supports_tools());
+                let unsupported = disabled.unsupported_info(&m.id);
+                serde_json::json!({
+                    "id": m.id,
+                    "provider": m.provider,
+                    "displayName": m.display_name,
+                    "supportsTools": supports_tools,
+                    "disabled": disabled.is_disabled(&m.id),
+                    "unsupported": unsupported.is_some(),
+                    "unsupportedReason": unsupported.map(|u| u.detail.clone()),
+                    "unsupportedProvider": unsupported.and_then(|u| u.provider.clone()),
+                    "unsupportedUpdatedAt": unsupported.map(|u| u.updated_at_ms),
                 })
             })
             .collect();
@@ -277,6 +985,9 @@ impl ModelService for LiveModelService {
         disabled
             .save()
             .map_err(|e| format!("failed to save: {e}"))?;
+        drop(disabled);
+
+        self.broadcast_model_visibility_update(model_id, true).await;
 
         Ok(serde_json::json!({
             "ok": true,
@@ -297,11 +1008,375 @@ impl ModelService for LiveModelService {
         disabled
             .save()
             .map_err(|e| format!("failed to save: {e}"))?;
+        drop(disabled);
+
+        self.broadcast_model_visibility_update(model_id, false)
+            .await;
 
         Ok(serde_json::json!({
             "ok": true,
             "modelId": model_id,
         }))
+    }
+
+    async fn detect_supported(&self, params: Value) -> ServiceResult {
+        let background = params
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let reason = params
+            .get("reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("manual")
+            .to_string();
+        let max_parallel = params
+            .get("maxParallel")
+            .and_then(|v| v.as_u64())
+            .map(|v| v.clamp(1, 32) as usize)
+            .unwrap_or(8);
+        let max_parallel_per_provider = probe_max_parallel_per_provider(&params);
+        let provider_filter = provider_filter_from_params(&params);
+
+        let _run_permit: OwnedSemaphorePermit = if background {
+            match Arc::clone(&self.detect_gate).try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    return Ok(serde_json::json!({
+                        "ok": true,
+                        "background": true,
+                        "reason": reason,
+                        "skipped": true,
+                        "message": "model probe already running",
+                    }));
+                },
+            }
+        } else {
+            Arc::clone(&self.detect_gate)
+                .acquire_owned()
+                .await
+                .map_err(|_| "model probe gate closed".to_string())?
+        };
+
+        let state = self.state.get().cloned();
+
+        // Phase 1: notify clients to refresh and show the full current model list first.
+        if let Some(state) = state.as_ref() {
+            broadcast(
+                state,
+                "models.updated",
+                serde_json::json!({
+                    "phase": "catalog",
+                    "background": background,
+                    "reason": reason,
+                    "provider": provider_filter.as_deref(),
+                }),
+                BroadcastOpts::default(),
+            )
+            .await;
+        }
+
+        let checks = {
+            let reg = self.providers.read().await;
+            let disabled = self.disabled.read().await;
+            reg.list_models()
+                .iter()
+                .filter(|m| !disabled.is_disabled(&m.id))
+                .filter(|m| provider_matches_filter(&m.provider, provider_filter.as_deref()))
+                .filter_map(|m| {
+                    reg.get(&m.id).map(|provider| {
+                        (
+                            m.id.clone(),
+                            m.display_name.clone(),
+                            provider.name().to_string(),
+                            provider,
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let total = checks.len();
+        if let Some(state) = state.as_ref() {
+            broadcast(
+                state,
+                "models.updated",
+                serde_json::json!({
+                    "phase": "start",
+                    "background": background,
+                    "reason": reason,
+                    "provider": provider_filter.as_deref(),
+                    "maxParallelPerProvider": max_parallel_per_provider,
+                    "total": total,
+                    "checked": 0,
+                    "supported": 0,
+                    "unsupported": 0,
+                    "errors": 0,
+                }),
+                BroadcastOpts::default(),
+            )
+            .await;
+        }
+
+        let limiter = Arc::new(Semaphore::new(max_parallel));
+        let provider_limiter = Arc::new(ProbeProviderLimiter::new(max_parallel_per_provider));
+        let rate_limiter = Arc::new(ProbeRateLimiter::default());
+        let mut tasks = futures::stream::FuturesUnordered::new();
+        for (model_id, display_name, provider_name, provider) in checks {
+            let limiter = Arc::clone(&limiter);
+            let provider_limiter = Arc::clone(&provider_limiter);
+            let rate_limiter = Arc::clone(&rate_limiter);
+            tasks.push(tokio::spawn(run_single_probe(
+                model_id,
+                display_name,
+                provider_name,
+                provider,
+                limiter,
+                provider_limiter,
+                rate_limiter,
+            )));
+        }
+
+        let mut results = Vec::with_capacity(total);
+        let mut checked = 0usize;
+        let mut supported = 0usize;
+        let mut unsupported = 0usize;
+        let mut flagged = 0usize;
+        let mut cleared = 0usize;
+        let mut errors = 0usize;
+
+        while let Some(joined) = tasks.next().await {
+            checked += 1;
+            let outcome = match joined {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "modelId": "",
+                        "displayName": "",
+                        "provider": "",
+                        "status": "error",
+                        "error": format!("probe task failed: {err}"),
+                    }));
+                    if let Some(state) = state.as_ref() {
+                        broadcast(
+                            state,
+                            "models.updated",
+                            serde_json::json!({
+                                "phase": "progress",
+                                "background": background,
+                                "reason": reason,
+                                "provider": provider_filter.as_deref(),
+                                "total": total,
+                                "checked": checked,
+                                "supported": supported,
+                                "unsupported": unsupported,
+                                "errors": errors,
+                            }),
+                            BroadcastOpts::default(),
+                        )
+                        .await;
+                    }
+                    continue;
+                },
+            };
+
+            match outcome.status {
+                ProbeStatus::Supported => {
+                    supported += 1;
+                    let mut changed = false;
+                    {
+                        let mut store = self.disabled.write().await;
+                        if store.clear_unsupported(&outcome.model_id) {
+                            changed = true;
+                            if let Err(err) = store.save() {
+                                warn!(
+                                    model = %outcome.model_id,
+                                    error = %err,
+                                    "failed to persist unsupported model clear"
+                                );
+                            }
+                        }
+                    }
+                    if changed {
+                        cleared += 1;
+                        if let Some(state) = state.as_ref() {
+                            broadcast(
+                                state,
+                                "models.updated",
+                                serde_json::json!({
+                                    "modelId": outcome.model_id,
+                                    "unsupported": false,
+                                }),
+                                BroadcastOpts::default(),
+                            )
+                            .await;
+                        }
+                    }
+
+                    results.push(serde_json::json!({
+                        "modelId": outcome.model_id,
+                        "displayName": outcome.display_name,
+                        "provider": outcome.provider_name,
+                        "status": "supported",
+                    }));
+                },
+                ProbeStatus::Unsupported { detail, provider } => {
+                    unsupported += 1;
+                    let mut changed = false;
+                    let mut updated_at_ms = now_ms();
+                    {
+                        let mut store = self.disabled.write().await;
+                        if store.mark_unsupported(&outcome.model_id, &detail, Some(&provider)) {
+                            changed = true;
+                            if let Some(info) = store.unsupported_info(&outcome.model_id) {
+                                updated_at_ms = info.updated_at_ms;
+                            }
+                            if let Err(save_err) = store.save() {
+                                warn!(
+                                    model = %outcome.model_id,
+                                    provider = provider,
+                                    error = %save_err,
+                                    "failed to persist unsupported model flag"
+                                );
+                            }
+                        }
+                    }
+                    if changed {
+                        flagged += 1;
+                        if let Some(state) = state.as_ref() {
+                            broadcast(
+                                state,
+                                "models.updated",
+                                serde_json::json!({
+                                    "modelId": outcome.model_id,
+                                    "unsupported": true,
+                                    "unsupportedReason": detail,
+                                    "unsupportedProvider": provider,
+                                    "unsupportedUpdatedAt": updated_at_ms,
+                                }),
+                                BroadcastOpts::default(),
+                            )
+                            .await;
+                        }
+                    }
+
+                    results.push(serde_json::json!({
+                        "modelId": outcome.model_id,
+                        "displayName": outcome.display_name,
+                        "provider": outcome.provider_name,
+                        "status": "unsupported",
+                        "error": detail,
+                    }));
+                },
+                ProbeStatus::Error { message } => {
+                    errors += 1;
+                    results.push(serde_json::json!({
+                        "modelId": outcome.model_id,
+                        "displayName": outcome.display_name,
+                        "provider": outcome.provider_name,
+                        "status": "error",
+                        "error": message,
+                    }));
+                },
+            }
+
+            if let Some(state) = state.as_ref() {
+                broadcast(
+                    state,
+                    "models.updated",
+                    serde_json::json!({
+                        "phase": "progress",
+                        "background": background,
+                        "reason": reason,
+                        "provider": provider_filter.as_deref(),
+                        "total": total,
+                        "checked": checked,
+                        "supported": supported,
+                        "unsupported": unsupported,
+                        "errors": errors,
+                    }),
+                    BroadcastOpts::default(),
+                )
+                .await;
+            }
+        }
+
+        let summary = serde_json::json!({
+            "ok": true,
+            "probeWord": "ping",
+            "background": background,
+            "reason": reason,
+            "provider": provider_filter.as_deref(),
+            "maxParallel": max_parallel,
+            "maxParallelPerProvider": max_parallel_per_provider,
+            "total": total,
+            "checked": checked,
+            "supported": supported,
+            "unsupported": unsupported,
+            "flagged": flagged,
+            "cleared": cleared,
+            "errors": errors,
+            "results": results,
+        });
+
+        // Final refresh event to ensure clients are in sync after the full pass.
+        if let Some(state) = state.as_ref() {
+            broadcast(
+                state,
+                "models.updated",
+                serde_json::json!({
+                    "phase": "complete",
+                    "background": background,
+                    "reason": reason,
+                    "provider": provider_filter.as_deref(),
+                    "summary": summary,
+                }),
+                BroadcastOpts::default(),
+            )
+            .await;
+        }
+
+        Ok(summary)
+    }
+
+    async fn test(&self, params: Value) -> ServiceResult {
+        let model_id = params
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'modelId' parameter".to_string())?;
+
+        let provider = {
+            let reg = self.providers.read().await;
+            reg.get(model_id)
+                .ok_or_else(|| format!("unknown model: {model_id}"))?
+        };
+
+        let probe = [ChatMessage::user("ping")];
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            provider.complete(&probe, &[]),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(_)) => Ok(serde_json::json!({
+                "ok": true,
+                "modelId": model_id,
+            })),
+            Ok(Err(err)) => {
+                let error_text = err.to_string();
+                let error_obj =
+                    crate::chat_error::parse_chat_error(&error_text, Some(provider.name()));
+                let detail = error_obj
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&error_text)
+                    .to_string();
+
+                Err(detail)
+            },
+            Err(_) => Err("Connection timed out after 20 seconds".to_string()),
+        }
     }
 }
 
@@ -315,6 +1390,7 @@ struct QueuedMessage {
 
 pub struct LiveChatService {
     providers: Arc<RwLock<ProviderRegistry>>,
+    model_store: Arc<RwLock<DisabledModelsStore>>,
     state: Arc<GatewayState>,
     active_runs: Arc<RwLock<HashMap<String, AbortHandle>>>,
     tool_registry: Arc<RwLock<ToolRegistry>>,
@@ -325,6 +1401,8 @@ pub struct LiveChatService {
     session_locks: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     /// Per-session message queue for messages arriving during an active run.
     message_queue: Arc<RwLock<HashMap<String, Vec<QueuedMessage>>>>,
+    /// Per-session last-seen client sequence number for ordering diagnostics.
+    last_client_seq: Arc<RwLock<HashMap<String, u64>>>,
     /// Failover configuration for automatic model/provider failover.
     failover_config: moltis_config::schema::FailoverConfig,
 }
@@ -332,12 +1410,14 @@ pub struct LiveChatService {
 impl LiveChatService {
     pub fn new(
         providers: Arc<RwLock<ProviderRegistry>>,
+        model_store: Arc<RwLock<DisabledModelsStore>>,
         state: Arc<GatewayState>,
         session_store: Arc<SessionStore>,
         session_metadata: Arc<SqliteSessionMetadata>,
     ) -> Self {
         Self {
             providers,
+            model_store,
             state,
             active_runs: Arc::new(RwLock::new(HashMap::new())),
             tool_registry: Arc::new(RwLock::new(ToolRegistry::new())),
@@ -346,6 +1426,7 @@ impl LiveChatService {
             hook_registry: None,
             session_locks: Arc::new(RwLock::new(HashMap::new())),
             message_queue: Arc::new(RwLock::new(HashMap::new())),
+            last_client_seq: Arc::new(RwLock::new(HashMap::new())),
             failover_config: moltis_config::schema::FailoverConfig::default(),
         }
     }
@@ -433,12 +1514,74 @@ impl LiveChatService {
     /// Resolve the active session key for a connection.
     async fn session_key_for(&self, conn_id: Option<&str>) -> String {
         if let Some(cid) = conn_id {
-            let sessions = self.state.active_sessions.read().await;
-            if let Some(key) = sessions.get(cid) {
+            let inner = self.state.inner.read().await;
+            if let Some(key) = inner.active_sessions.get(cid) {
                 return key.clone();
             }
         }
         "main".to_string()
+    }
+
+    /// Resolve the project context prompt section for a session.
+    async fn resolve_project_context(
+        &self,
+        session_key: &str,
+        conn_id: Option<&str>,
+    ) -> Option<String> {
+        let project_id = if let Some(cid) = conn_id {
+            let inner = self.state.inner.read().await;
+            inner.active_projects.get(cid).cloned()
+        } else {
+            None
+        };
+        // Also check session metadata for project binding (async path).
+        let project_id = match project_id {
+            Some(pid) => Some(pid),
+            None => self
+                .session_metadata
+                .get(session_key)
+                .await
+                .and_then(|e| e.project_id),
+        };
+
+        let pid = project_id?;
+        let val = self
+            .state
+            .services
+            .project
+            .get(serde_json::json!({"id": pid}))
+            .await
+            .ok()?;
+        let dir = val.get("directory").and_then(|v| v.as_str())?;
+        let files = match moltis_projects::context::load_context_files(std::path::Path::new(dir)) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("failed to load project context: {e}");
+                return None;
+            },
+        };
+        let project: moltis_projects::Project = serde_json::from_value(val.clone()).ok()?;
+        let worktree_dir = self
+            .session_metadata
+            .get(session_key)
+            .await
+            .and_then(|e| e.worktree_branch)
+            .and_then(|_| {
+                let wt_path = std::path::Path::new(dir)
+                    .join(".moltis-worktrees")
+                    .join(session_key);
+                if wt_path.exists() {
+                    Some(wt_path)
+                } else {
+                    None
+                }
+            });
+        let ctx = moltis_projects::ProjectContext {
+            project,
+            context_files: files,
+            worktree_dir,
+        };
+        Some(ctx.to_prompt_section())
     }
 }
 
@@ -522,6 +1665,40 @@ impl ChatService for LiveChatService {
             None => self.session_key_for(conn_id.as_deref()).await,
         };
 
+        // Track client-side sequence number for ordering diagnostics.
+        // Note: seq resets to 1 on page reload, so a drop from a high value
+        // back to 1 is normal (new browser session) — only flag issues within
+        // a continuous ascending sequence.
+        let client_seq = params.get("_seq").and_then(|v| v.as_u64());
+        if let Some(seq) = client_seq {
+            let mut seq_map = self.last_client_seq.write().await;
+            let last = seq_map.entry(session_key.clone()).or_insert(0);
+            if seq == 1 && *last > 1 {
+                // Page reload — reset tracking.
+                debug!(
+                    session = %session_key,
+                    prev_seq = *last,
+                    "client seq reset (page reload)"
+                );
+            } else if seq <= *last {
+                warn!(
+                    session = %session_key,
+                    seq,
+                    last_seq = *last,
+                    "client seq out of order (duplicate or reorder)"
+                );
+            } else if seq > *last + 1 {
+                warn!(
+                    session = %session_key,
+                    seq,
+                    last_seq = *last,
+                    gap = seq - *last - 1,
+                    "client seq gap detected (missing messages)"
+                );
+            }
+            *last = seq;
+        }
+
         // Resolve model: explicit param → session metadata → first registered.
         let session_model = if explicit_model.is_none() {
             self.session_metadata
@@ -573,94 +1750,27 @@ impl ChatService for LiveChatService {
         // Only do this check for local-llm providers.
         #[cfg(feature = "local-llm")]
         if provider.name() == "local-llm" {
-            let model_to_check = model_id.unwrap_or(provider.id());
+            let model_to_check = model_id
+                .map(raw_model_id)
+                .unwrap_or_else(|| raw_model_id(provider.id()))
+                .to_string();
             tracing::info!(
                 provider_name = provider.name(),
                 model_to_check,
                 "checking local model cache"
             );
             if let Err(e) =
-                crate::local_llm_setup::ensure_local_model_cached(model_to_check, &self.state).await
+                crate::local_llm_setup::ensure_local_model_cached(&model_to_check, &self.state)
+                    .await
             {
                 return Err(format!("Failed to prepare local model: {}", e));
             }
         }
 
         // Resolve project context for this connection's active project.
-        let project_context = {
-            let project_id = if let Some(cid) = conn_id.as_deref() {
-                let projects = self.state.active_projects.read().await;
-                projects.get(cid).cloned()
-            } else {
-                None
-            };
-            // Also check session metadata for project binding.
-            let project_id = if project_id.is_some() {
-                project_id
-            } else {
-                self.session_metadata
-                    .get(&session_key)
-                    .await
-                    .and_then(|e| e.project_id)
-            };
-            if let Some(pid) = project_id {
-                match self
-                    .state
-                    .services
-                    .project
-                    .get(serde_json::json!({"id": pid}))
-                    .await
-                {
-                    Ok(val) => {
-                        if let Some(dir) = val.get("directory").and_then(|v| v.as_str()) {
-                            match moltis_projects::context::load_context_files(
-                                std::path::Path::new(dir),
-                            ) {
-                                Ok(files) => {
-                                    let project: Option<moltis_projects::Project> =
-                                        serde_json::from_value(val.clone()).ok();
-                                    if let Some(p) = project {
-                                        // Resolve worktree dir from session metadata.
-                                        let worktree_dir = self
-                                            .session_metadata
-                                            .get(&session_key)
-                                            .await
-                                            .and_then(|e| e.worktree_branch)
-                                            .and_then(|_| {
-                                                let wt_path = std::path::Path::new(dir)
-                                                    .join(".moltis-worktrees")
-                                                    .join(&session_key);
-                                                if wt_path.exists() {
-                                                    Some(wt_path)
-                                                } else {
-                                                    None
-                                                }
-                                            });
-                                        let ctx = moltis_projects::ProjectContext {
-                                            project: p,
-                                            context_files: files,
-                                            worktree_dir,
-                                        };
-                                        Some(ctx.to_prompt_section())
-                                    } else {
-                                        None
-                                    }
-                                },
-                                Err(e) => {
-                                    warn!("failed to load project context: {e}");
-                                    None
-                                },
-                            }
-                        } else {
-                            None
-                        }
-                    },
-                    Err(_) => None,
-                }
-            } else {
-                None
-            }
-        };
+        let project_context = self
+            .resolve_project_context(&session_key, conn_id.as_deref())
+            .await;
 
         // Dispatch MessageReceived hook (read-only).
         if let Some(ref hooks) = self.hook_registry {
@@ -678,32 +1788,32 @@ impl ChatService for LiveChatService {
             }
         }
 
-        // Persist the user message (with optional channel metadata for UI display).
+        // Generate run_id early so we can link the user message to its agent run.
+        let run_id = uuid::Uuid::new_v4().to_string();
+
+        // Convert session-crate content to agents-crate content for the LLM.
+        // Must happen before `message_content` is moved into `user_msg`.
+        let user_content = to_user_content(&message_content);
+
+        // Build the user message for later persistence (deferred until we
+        // know the message won't be queued — avoids double-persist when a
+        // queued message is replayed via send()).
         let channel_meta = params.get("channel").cloned();
         let user_msg = PersistedMessage::User {
             content: message_content,
             created_at: Some(now_ms()),
             channel: channel_meta,
+            seq: client_seq,
+            run_id: Some(run_id.clone()),
         };
-        if let Err(e) = self
-            .session_store
-            .append(&session_key, &user_msg.to_value())
-            .await
-        {
-            warn!("failed to persist user message: {e}");
-        }
 
-        // Load conversation history excluding the user message we just appended
-        // (both run_streaming and run_agent_loop add the current user message themselves).
+        // Load conversation history (the current user message is NOT yet
+        // persisted — run_streaming / run_agent_loop add it themselves).
         let mut history = self
             .session_store
             .read(&session_key)
             .await
             .unwrap_or_default();
-        // Pop the last message (the one we just appended).
-        if !history.is_empty() {
-            history.pop();
-        }
 
         // Update metadata.
         let _ = self.session_metadata.upsert(&session_key, None).await;
@@ -755,15 +1865,35 @@ impl ChatService for LiveChatService {
             },
         };
 
-        // Check if MCP tools are disabled for this session.
-        let mcp_disabled = self
-            .session_metadata
-            .get(&session_key)
-            .await
-            .and_then(|e| e.mcp_disabled)
+        // Check if MCP tools are disabled for this session and capture
+        // per-session sandbox override details for prompt runtime context.
+        let session_entry = self.session_metadata.get(&session_key).await;
+        let mcp_disabled = session_entry
+            .as_ref()
+            .and_then(|entry| entry.mcp_disabled)
             .unwrap_or(false);
+        let mut runtime_context = build_prompt_runtime_context(
+            &self.state,
+            &provider,
+            &session_key,
+            session_entry.as_ref(),
+        )
+        .await;
+        runtime_context.host.accept_language = params
+            .get("_accept_language")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        runtime_context.host.remote_ip = params
+            .get("_remote_ip")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if runtime_context.host.timezone.is_none() {
+            runtime_context.host.timezone = params
+                .get("_timezone")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
 
-        let run_id = uuid::Uuid::new_v4().to_string();
         let state = Arc::clone(&self.state);
         let active_runs = Arc::clone(&self.active_runs);
         let run_id_clone = run_id.clone();
@@ -788,6 +1918,7 @@ impl ChatService for LiveChatService {
             stream_only,
             session = %session_key,
             reply_medium = ?desired_reply_medium,
+            client_seq = ?client_seq,
             "chat.send"
         );
 
@@ -797,6 +1928,7 @@ impl ChatService for LiveChatService {
 
         let provider_name = provider.name().to_string();
         let model_id = provider.id().to_string();
+        let model_store = Arc::clone(&self.model_store);
         let session_store = Arc::clone(&self.session_store);
         let session_metadata = Arc::clone(&self.session_metadata);
         let session_key_clone = session_key.clone();
@@ -804,24 +1936,6 @@ impl ChatService for LiveChatService {
             .get("_accept_language")
             .and_then(|v| v.as_str())
             .map(String::from);
-        // Compute session context stats for the system prompt.
-        let session_stats = {
-            let msg_count = history.len() + 1; // +1 for the current user message
-            let total_input: u64 = history
-                .iter()
-                .filter_map(|m| m.get("inputTokens").and_then(|v| v.as_u64()))
-                .sum();
-            let total_output: u64 = history
-                .iter()
-                .filter_map(|m| m.get("outputTokens").and_then(|v| v.as_u64()))
-                .sum();
-            let total_tokens = total_input + total_output;
-
-            format!(
-                "Session \"{session_key}\": {msg_count} messages, {total_tokens} tokens used ({total_input} input / {total_output} output)."
-            )
-        };
-
         // Auto-compact: if conversation input tokens exceed 95% of context window, compact first.
         let context_window = provider.context_window() as u64;
         let total_input: u64 = history
@@ -915,16 +2029,17 @@ impl ChatService for LiveChatService {
                 info!(
                     session = %session_key,
                     mode = ?queue_mode,
+                    client_seq = ?client_seq,
                     "queueing message (run active)"
                 );
-                self.message_queue
-                    .write()
-                    .await
-                    .entry(session_key.clone())
-                    .or_default()
-                    .push(QueuedMessage {
+                let position = {
+                    let mut q = self.message_queue.write().await;
+                    let entry = q.entry(session_key.clone()).or_default();
+                    entry.push(QueuedMessage {
                         params: params.clone(),
                     });
+                    entry.len()
+                };
                 broadcast(
                     &self.state,
                     "chat",
@@ -932,6 +2047,7 @@ impl ChatService for LiveChatService {
                         "sessionKey": session_key,
                         "state": "queued",
                         "mode": format!("{queue_mode:?}").to_lowercase(),
+                        "position": position,
                     }),
                     BroadcastOpts::default(),
                 )
@@ -943,51 +2059,81 @@ impl ChatService for LiveChatService {
             },
         };
 
+        // Persist the user message now that we know it won't be queued.
+        // (Queued messages skip this; they are persisted when replayed.)
+        if let Err(e) = self
+            .session_store
+            .append(&session_key, &user_msg.to_value())
+            .await
+        {
+            warn!("failed to persist user message: {e}");
+        }
+
         let agent_timeout_secs = moltis_config::discover_and_load().tools.agent_timeout_secs;
 
         let message_queue = Arc::clone(&self.message_queue);
         let state_for_drain = Arc::clone(&self.state);
 
         let handle = tokio::spawn(async move {
-            let _permit = permit; // hold permit until task completes
+            let permit = permit; // hold permit until agent run completes
             let ctx_ref = project_context.as_deref();
-            let stats_ref = Some(session_stats.as_str());
+            if desired_reply_medium == ReplyMedium::Voice {
+                broadcast(
+                    &state,
+                    "chat",
+                    serde_json::json!({
+                        "runId": run_id_clone,
+                        "sessionKey": session_key_clone,
+                        "state": "voice_pending",
+                    }),
+                    BroadcastOpts::default(),
+                )
+                .await;
+            }
             let agent_fut = async {
                 if stream_only {
                     run_streaming(
                         &state,
+                        &model_store,
                         &run_id_clone,
                         provider,
-                        &text,
+                        &model_id,
+                        &user_content,
                         &provider_name,
                         &history,
                         &session_key_clone,
                         desired_reply_medium,
                         ctx_ref,
-                        stats_ref,
                         user_message_index,
                         &discovered_skills,
+                        Some(&runtime_context),
+                        Some(&session_store),
+                        client_seq,
                     )
                     .await
                 } else {
                     run_with_tools(
                         &state,
+                        &model_store,
                         &run_id_clone,
                         provider,
+                        &model_id,
                         &tool_registry,
-                        &text,
+                        &user_content,
                         &provider_name,
                         &history,
                         &session_key_clone,
                         desired_reply_medium,
                         ctx_ref,
-                        stats_ref,
+                        Some(&runtime_context),
                         user_message_index,
                         &discovered_skills,
                         hook_registry,
                         accept_language.clone(),
+                        conn_id.clone(),
                         Some(&session_store),
                         mcp_disabled,
+                        client_seq,
                     )
                     .await
                 }
@@ -1033,15 +2179,20 @@ impl ChatService for LiveChatService {
                 agent_fut.await
             };
 
-            // Persist assistant response.
-            if let Some((response_text, input_tokens, output_tokens)) = assistant_text {
-                let assistant_msg = PersistedMessage::assistant(
-                    response_text,
-                    &model_id,
-                    &provider_name,
-                    input_tokens,
-                    output_tokens,
-                );
+            // Persist assistant response (even empty ones — needed for LLM history coherence).
+            if let Some((response_text, input_tokens, output_tokens, audio_path)) = assistant_text {
+                let assistant_msg = PersistedMessage::Assistant {
+                    content: response_text,
+                    created_at: Some(now_ms()),
+                    model: Some(model_id.clone()),
+                    provider: Some(provider_name.clone()),
+                    input_tokens: Some(input_tokens),
+                    output_tokens: Some(output_tokens),
+                    tool_calls: None,
+                    audio: audio_path,
+                    seq: client_seq,
+                    run_id: Some(run_id_clone.clone()),
+                };
                 if let Err(e) = session_store
                     .append(&session_key_clone, &assistant_msg.to_value())
                     .await
@@ -1056,6 +2207,11 @@ impl ChatService for LiveChatService {
 
             active_runs.write().await.remove(&run_id_clone);
 
+            // Release the semaphore *before* draining so replayed sends can
+            // acquire it. Without this, every replayed `chat.send()` would
+            // fail `try_acquire_owned()` and re-queue the message forever.
+            drop(permit);
+
             // Drain queued messages for this session.
             let queued = message_queue
                 .write()
@@ -1067,11 +2223,24 @@ impl ChatService for LiveChatService {
                 let chat = state_for_drain.chat().await;
                 match queue_mode {
                     MessageQueueMode::Followup => {
-                        for msg in queued {
-                            info!(session = %session_key_clone, "replaying queued message (followup)");
-                            if let Err(e) = chat.send(msg.params).await {
-                                warn!(session = %session_key_clone, error = %e, "failed to replay queued message");
-                            }
+                        let mut iter = queued.into_iter();
+                        let Some(first) = iter.next() else {
+                            return;
+                        };
+                        // Put remaining messages back so the replayed run's
+                        // own drain loop picks them up after it completes.
+                        let rest: Vec<QueuedMessage> = iter.collect();
+                        if !rest.is_empty() {
+                            message_queue
+                                .write()
+                                .await
+                                .entry(session_key_clone.clone())
+                                .or_default()
+                                .extend(rest);
+                        }
+                        info!(session = %session_key_clone, "replaying queued message (followup)");
+                        if let Err(e) = chat.send(first.params).await {
+                            warn!(session = %session_key_clone, error = %e, "failed to replay queued message");
                         }
                     },
                     MessageQueueMode::Collect => {
@@ -1086,7 +2255,10 @@ impl ChatService for LiveChatService {
                                 "replaying collected messages"
                             );
                             // Use the last queued message as the base params, override text.
-                            let mut merged = queued.last().unwrap().params.clone();
+                            let Some(last) = queued.last() else {
+                                return;
+                            };
+                            let mut merged = last.params.clone();
                             merged["text"] = serde_json::json!(combined.join("\n\n"));
                             if let Err(e) = chat.send(merged).await {
                                 warn!(session = %session_key_clone, error = %e, "failed to replay collected messages");
@@ -1150,6 +2322,14 @@ impl ChatService for LiveChatService {
         // Ensure this session appears in the sessions list.
         let _ = self.session_metadata.upsert(&session_key, None).await;
         self.session_metadata.touch(&session_key, 1).await;
+        let session_entry = self.session_metadata.get(&session_key).await;
+        let runtime_context = build_prompt_runtime_context(
+            &self.state,
+            &provider,
+            &session_key,
+            session_entry.as_ref(),
+        )
+        .await;
 
         // Load conversation history (excluding the message we just appended).
         let mut history = self
@@ -1167,6 +2347,7 @@ impl ChatService for LiveChatService {
         let hook_registry = self.hook_registry.clone();
         let provider_name = provider.name().to_string();
         let model_id = provider.id().to_string();
+        let model_store = Arc::clone(&self.model_store);
         let user_message_index = history.len();
 
         info!(
@@ -1179,54 +2360,83 @@ impl ChatService for LiveChatService {
             "chat.send_sync"
         );
 
+        if desired_reply_medium == ReplyMedium::Voice {
+            broadcast(
+                &state,
+                "chat",
+                serde_json::json!({
+                    "runId": run_id,
+                    "sessionKey": session_key,
+                    "state": "voice_pending",
+                }),
+                BroadcastOpts::default(),
+            )
+            .await;
+        }
+
+        // send_sync is text-only (used by API calls and channels).
+        let user_content = UserContent::text(&text);
         let result = if stream_only {
             run_streaming(
                 &state,
+                &model_store,
                 &run_id,
                 provider,
-                &text,
+                &model_id,
+                &user_content,
                 &provider_name,
                 &history,
                 &session_key,
                 desired_reply_medium,
                 None,
-                None,
                 user_message_index,
                 &[],
+                Some(&runtime_context),
+                Some(&self.session_store),
+                None, // send_sync: no client seq
             )
             .await
         } else {
             run_with_tools(
                 &state,
+                &model_store,
                 &run_id,
                 provider,
+                &model_id,
                 &tool_registry,
-                &text,
+                &user_content,
                 &provider_name,
                 &history,
                 &session_key,
                 desired_reply_medium,
                 None,
-                None,
+                Some(&runtime_context),
                 user_message_index,
                 &[],
                 hook_registry,
                 None,
+                None, // send_sync: no conn_id
                 Some(&self.session_store),
                 false, // send_sync: MCP tools always enabled for API calls
+                None,  // send_sync: no client seq
             )
             .await
         };
 
-        // Persist assistant response.
-        if let Some((ref response_text, input_tokens, output_tokens)) = result {
-            let assistant_msg = PersistedMessage::assistant(
-                response_text,
-                &model_id,
-                &provider_name,
-                input_tokens,
-                output_tokens,
-            );
+        // Persist assistant response (even empty ones — needed for LLM history coherence).
+        if let Some((ref response_text, input_tokens, output_tokens, ref audio_path)) = result {
+            let assistant_msg = PersistedMessage::Assistant {
+                content: response_text.clone(),
+                created_at: Some(now_ms()),
+                model: Some(model_id.clone()),
+                provider: Some(provider_name.clone()),
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(output_tokens),
+                tool_calls: None,
+                audio: audio_path.clone(),
+                seq: None,
+                run_id: Some(run_id.clone()),
+            };
             if let Err(e) = self
                 .session_store
                 .append(&session_key, &assistant_msg.to_value())
@@ -1241,11 +2451,13 @@ impl ChatService for LiveChatService {
         }
 
         match result {
-            Some((response_text, input_tokens, output_tokens)) => Ok(serde_json::json!({
-                "text": response_text,
-                "inputTokens": input_tokens,
-                "outputTokens": output_tokens,
-            })),
+            Some((response_text, input_tokens, output_tokens, _audio_path)) => {
+                Ok(serde_json::json!({
+                    "text": response_text,
+                    "inputTokens": input_tokens,
+                    "outputTokens": output_tokens,
+                }))
+            },
             None => {
                 // Check the last broadcast for this run to get the actual error message.
                 let error_msg = state
@@ -1281,6 +2493,36 @@ impl ChatService for LiveChatService {
         Ok(serde_json::json!({}))
     }
 
+    async fn cancel_queued(&self, params: Value) -> ServiceResult {
+        let session_key = params
+            .get("sessionKey")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'sessionKey'".to_string())?;
+
+        let removed = self
+            .message_queue
+            .write()
+            .await
+            .remove(session_key)
+            .unwrap_or_default();
+        let count = removed.len();
+        info!(session = %session_key, count, "cancel_queued: cleared message queue");
+
+        broadcast(
+            &self.state,
+            "chat",
+            serde_json::json!({
+                "sessionKey": session_key,
+                "state": "queue_cleared",
+                "count": count,
+            }),
+            BroadcastOpts::default(),
+        )
+        .await;
+
+        Ok(serde_json::json!({ "cleared": count }))
+    }
+
     async fn history(&self, params: Value) -> ServiceResult {
         let conn_id = params
             .get("_conn_id")
@@ -1292,7 +2534,20 @@ impl ChatService for LiveChatService {
             .read(&session_key)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(serde_json::json!(messages))
+        // Filter out empty assistant messages — they are kept in storage for LLM
+        // history coherence but should not be shown in the UI.
+        let visible: Vec<Value> = messages
+            .into_iter()
+            .filter(|msg| {
+                if msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+                    return true;
+                }
+                msg.get("content")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.trim().is_empty())
+            })
+            .collect();
+        Ok(serde_json::json!(visible))
     }
 
     async fn inject(&self, _params: Value) -> ServiceResult {
@@ -1436,6 +2691,9 @@ impl ChatService for LiveChatService {
             input_tokens: None,
             output_tokens: None,
             tool_calls: None,
+            audio: None,
+            seq: None,
+            run_id: None,
         };
         let compacted = vec![compacted_msg.to_value()];
 
@@ -1535,8 +2793,8 @@ impl ChatService for LiveChatService {
             .and_then(|v| v.as_str())
             .map(String::from);
         let project_id = if let Some(cid) = conn_id.as_deref() {
-            let projects = self.state.active_projects.read().await;
-            projects.get(cid).cloned()
+            let inner = self.state.inner.read().await;
+            inner.active_projects.get(cid).cloned()
         } else {
             None
         };
@@ -1721,65 +2979,422 @@ impl ChatService for LiveChatService {
             },
         }))
     }
+
+    async fn raw_prompt(&self, params: Value) -> ServiceResult {
+        let session_key = if let Some(sk) = params.get("_session_key").and_then(|v| v.as_str()) {
+            sk.to_string()
+        } else {
+            let conn_id = params
+                .get("_conn_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            self.session_key_for(conn_id.as_deref()).await
+        };
+
+        let conn_id = params
+            .get("_conn_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        // Resolve provider.
+        let history = self
+            .session_store
+            .read(&session_key)
+            .await
+            .unwrap_or_default();
+        let provider = self.resolve_provider(&session_key, &history).await?;
+        let native_tools = provider.supports_tools();
+
+        // Load persona data.
+        let persona = load_prompt_persona();
+
+        // Build runtime context.
+        let session_entry = self.session_metadata.get(&session_key).await;
+        let mut runtime_context = build_prompt_runtime_context(
+            &self.state,
+            &provider,
+            &session_key,
+            session_entry.as_ref(),
+        )
+        .await;
+        runtime_context.host.accept_language = params
+            .get("_accept_language")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        runtime_context.host.remote_ip = params
+            .get("_remote_ip")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if runtime_context.host.timezone.is_none() {
+            runtime_context.host.timezone = params
+                .get("_timezone")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+
+        // Resolve project context.
+        let project_context = self
+            .resolve_project_context(&session_key, conn_id.as_deref())
+            .await;
+
+        // Discover skills.
+        let search_paths = moltis_skills::discover::FsSkillDiscoverer::default_paths();
+        let discoverer = moltis_skills::discover::FsSkillDiscoverer::new(search_paths);
+        let discovered_skills = match discoverer.discover().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("failed to discover skills: {e}");
+                Vec::new()
+            },
+        };
+
+        // Check MCP disabled.
+        let mcp_disabled = session_entry
+            .as_ref()
+            .and_then(|entry| entry.mcp_disabled)
+            .unwrap_or(false);
+
+        // Build filtered tool registry.
+        let filtered_registry = {
+            let registry_guard = self.tool_registry.read().await;
+            if native_tools {
+                apply_runtime_tool_filters(
+                    &registry_guard,
+                    &persona.config,
+                    &discovered_skills,
+                    mcp_disabled,
+                )
+            } else {
+                registry_guard.clone_without(&[])
+            }
+        };
+
+        let tool_count = filtered_registry.list_schemas().len();
+
+        // Build the system prompt.
+        let system_prompt = if native_tools {
+            build_system_prompt_with_session_runtime(
+                &filtered_registry,
+                native_tools,
+                project_context.as_deref(),
+                &discovered_skills,
+                Some(&persona.identity),
+                Some(&persona.user),
+                persona.soul_text.as_deref(),
+                persona.agents_text.as_deref(),
+                persona.tools_text.as_deref(),
+                Some(&runtime_context),
+            )
+        } else {
+            build_system_prompt_minimal_runtime(
+                project_context.as_deref(),
+                Some(&persona.identity),
+                Some(&persona.user),
+                persona.soul_text.as_deref(),
+                persona.agents_text.as_deref(),
+                persona.tools_text.as_deref(),
+                Some(&runtime_context),
+            )
+        };
+
+        let char_count = system_prompt.len();
+
+        Ok(serde_json::json!({
+            "prompt": system_prompt,
+            "charCount": char_count,
+            "native_tools": native_tools,
+            "toolCount": tool_count,
+        }))
+    }
+
+    /// Return the **full messages array** that would be sent to the LLM on the
+    /// next call — system prompt + conversation history — in OpenAI format.
+    async fn full_context(&self, params: Value) -> ServiceResult {
+        let session_key = if let Some(sk) = params.get("_session_key").and_then(|v| v.as_str()) {
+            sk.to_string()
+        } else {
+            let conn_id = params
+                .get("_conn_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            self.session_key_for(conn_id.as_deref()).await
+        };
+
+        let conn_id = params
+            .get("_conn_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        // Resolve provider.
+        let history = self
+            .session_store
+            .read(&session_key)
+            .await
+            .unwrap_or_default();
+        let provider = self.resolve_provider(&session_key, &history).await?;
+        let native_tools = provider.supports_tools();
+
+        // Load persona data.
+        let persona = load_prompt_persona();
+
+        // Build runtime context.
+        let session_entry = self.session_metadata.get(&session_key).await;
+        let mut runtime_context = build_prompt_runtime_context(
+            &self.state,
+            &provider,
+            &session_key,
+            session_entry.as_ref(),
+        )
+        .await;
+        runtime_context.host.accept_language = params
+            .get("_accept_language")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        runtime_context.host.remote_ip = params
+            .get("_remote_ip")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if runtime_context.host.timezone.is_none() {
+            runtime_context.host.timezone = params
+                .get("_timezone")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+        }
+
+        // Resolve project context.
+        let project_context = self
+            .resolve_project_context(&session_key, conn_id.as_deref())
+            .await;
+
+        // Discover skills.
+        let search_paths = moltis_skills::discover::FsSkillDiscoverer::default_paths();
+        let discoverer = moltis_skills::discover::FsSkillDiscoverer::new(search_paths);
+        let discovered_skills = match discoverer.discover().await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("failed to discover skills: {e}");
+                Vec::new()
+            },
+        };
+
+        // Check MCP disabled.
+        let mcp_disabled = session_entry
+            .as_ref()
+            .and_then(|entry| entry.mcp_disabled)
+            .unwrap_or(false);
+
+        // Build filtered tool registry.
+        let filtered_registry = {
+            let registry_guard = self.tool_registry.read().await;
+            if native_tools {
+                apply_runtime_tool_filters(
+                    &registry_guard,
+                    &persona.config,
+                    &discovered_skills,
+                    mcp_disabled,
+                )
+            } else {
+                registry_guard.clone_without(&[])
+            }
+        };
+
+        // Build the system prompt.
+        let system_prompt = if native_tools {
+            build_system_prompt_with_session_runtime(
+                &filtered_registry,
+                native_tools,
+                project_context.as_deref(),
+                &discovered_skills,
+                Some(&persona.identity),
+                Some(&persona.user),
+                persona.soul_text.as_deref(),
+                persona.agents_text.as_deref(),
+                persona.tools_text.as_deref(),
+                Some(&runtime_context),
+            )
+        } else {
+            build_system_prompt_minimal_runtime(
+                project_context.as_deref(),
+                Some(&persona.identity),
+                Some(&persona.user),
+                persona.soul_text.as_deref(),
+                persona.agents_text.as_deref(),
+                persona.tools_text.as_deref(),
+                Some(&runtime_context),
+            )
+        };
+
+        let system_prompt_chars = system_prompt.len();
+
+        // Reconstruct `role: "tool"` messages from persisted `tool_result`
+        // entries so the context view shows what the LLM actually saw.
+        let history_with_tools: Vec<Value> = history
+            .into_iter()
+            .map(|val| {
+                if val.get("role").and_then(|r| r.as_str()) != Some("tool_result") {
+                    return val;
+                }
+                let tool_call_id = val
+                    .get("tool_call_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let content = if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
+                    format!("Error: {err}")
+                } else if let Some(res) = val.get("result") {
+                    res.to_string()
+                } else {
+                    String::new()
+                };
+                serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                })
+            })
+            .collect();
+
+        // Build the full messages array: system prompt + conversation history.
+        let mut messages = Vec::with_capacity(1 + history_with_tools.len());
+        messages.push(ChatMessage::system(system_prompt));
+        messages.extend(values_to_chat_messages(&history_with_tools));
+
+        let openai_messages: Vec<Value> = messages.iter().map(|m| m.to_openai_value()).collect();
+        let message_count = openai_messages.len();
+        let total_chars: usize = openai_messages
+            .iter()
+            .map(|v| serde_json::to_string(v).unwrap_or_default().len())
+            .sum();
+
+        Ok(serde_json::json!({
+            "messages": openai_messages,
+            "messageCount": message_count,
+            "systemPromptChars": system_prompt_chars,
+            "totalChars": total_chars,
+        }))
+    }
 }
 
 // ── Agent loop mode ─────────────────────────────────────────────────────────
 
+async fn mark_unsupported_model(
+    state: &Arc<GatewayState>,
+    model_store: &Arc<RwLock<DisabledModelsStore>>,
+    model_id: &str,
+    provider_name: &str,
+    error_obj: &serde_json::Value,
+) {
+    if error_obj.get("type").and_then(|v| v.as_str()) != Some("unsupported_model") {
+        return;
+    }
+
+    let detail = error_obj
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Model is not supported for this account/provider");
+    let provider = error_obj
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or(provider_name);
+
+    let mut store = model_store.write().await;
+    if store.mark_unsupported(model_id, detail, Some(provider)) {
+        let unsupported = store.unsupported_info(model_id).cloned();
+        if let Err(err) = store.save() {
+            warn!(
+                model = model_id,
+                provider = provider,
+                error = %err,
+                "failed to persist unsupported model flag"
+            );
+        } else {
+            info!(
+                model = model_id,
+                provider = provider,
+                "flagged model as unsupported"
+            );
+        }
+        drop(store);
+        broadcast(
+            state,
+            "models.updated",
+            serde_json::json!({
+                "modelId": model_id,
+                "unsupported": true,
+                "unsupportedReason": unsupported.as_ref().map(|u| u.detail.as_str()).unwrap_or(detail),
+                "unsupportedProvider": unsupported
+                    .as_ref()
+                    .and_then(|u| u.provider.as_deref())
+                    .unwrap_or(provider),
+                "unsupportedUpdatedAt": unsupported.map(|u| u.updated_at_ms).unwrap_or_else(now_ms),
+            }),
+            BroadcastOpts::default(),
+        )
+        .await;
+    }
+}
+
+async fn clear_unsupported_model(
+    state: &Arc<GatewayState>,
+    model_store: &Arc<RwLock<DisabledModelsStore>>,
+    model_id: &str,
+) {
+    let mut store = model_store.write().await;
+    if store.clear_unsupported(model_id) {
+        if let Err(err) = store.save() {
+            warn!(
+                model = model_id,
+                error = %err,
+                "failed to persist unsupported model clear"
+            );
+        } else {
+            info!(model = model_id, "cleared unsupported model flag");
+        }
+        drop(store);
+        broadcast(
+            state,
+            "models.updated",
+            serde_json::json!({
+                "modelId": model_id,
+                "unsupported": false,
+            }),
+            BroadcastOpts::default(),
+        )
+        .await;
+    }
+}
+
 async fn run_with_tools(
     state: &Arc<GatewayState>,
+    model_store: &Arc<RwLock<DisabledModelsStore>>,
     run_id: &str,
     provider: Arc<dyn moltis_agents::model::LlmProvider>,
+    model_id: &str,
     tool_registry: &Arc<RwLock<ToolRegistry>>,
-    text: &str,
+    user_content: &UserContent,
     provider_name: &str,
     history_raw: &[serde_json::Value],
     session_key: &str,
     desired_reply_medium: ReplyMedium,
     project_context: Option<&str>,
-    session_context: Option<&str>,
+    runtime_context: Option<&PromptRuntimeContext>,
     user_message_index: usize,
     skills: &[moltis_skills::types::SkillMetadata],
     hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
     accept_language: Option<String>,
+    conn_id: Option<String>,
     session_store: Option<&Arc<SessionStore>>,
     mcp_disabled: bool,
-) -> Option<(String, u32, u32)> {
-    // Load identity and user profile from config so the LLM knows who it is.
-    let config = moltis_config::discover_and_load();
-    let mut identity = config.identity.clone();
-    if let Some(file_identity) = moltis_config::load_identity() {
-        if file_identity.name.is_some() {
-            identity.name = file_identity.name;
-        }
-        if file_identity.emoji.is_some() {
-            identity.emoji = file_identity.emoji;
-        }
-        if file_identity.creature.is_some() {
-            identity.creature = file_identity.creature;
-        }
-        if file_identity.vibe.is_some() {
-            identity.vibe = file_identity.vibe;
-        }
-    }
-    let mut user = config.user.clone();
-    if let Some(file_user) = moltis_config::load_user() {
-        if file_user.name.is_some() {
-            user.name = file_user.name;
-        }
-        if file_user.timezone.is_some() {
-            user.timezone = file_user.timezone;
-        }
-    }
-    let soul_text = moltis_config::load_soul();
-    let agents_text = moltis_config::load_agents_md();
-    let tools_text = moltis_config::load_tools_md();
+    client_seq: Option<u64>,
+) -> Option<(String, u32, u32, Option<String>)> {
+    let persona = load_prompt_persona();
 
     let native_tools = provider.supports_tools();
 
     let filtered_registry = {
         let registry_guard = tool_registry.read().await;
         if native_tools {
-            apply_runtime_tool_filters(&registry_guard, &config, skills, mcp_disabled)
+            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled)
         } else {
             registry_guard.clone_without(&[])
         }
@@ -1788,29 +3403,36 @@ async fn run_with_tools(
     // Use a minimal prompt without tool schemas for providers that don't support tools.
     // This reduces context size and avoids confusing the LLM with unusable instructions.
     let system_prompt = if native_tools {
-        build_system_prompt_with_session(
+        build_system_prompt_with_session_runtime(
             &filtered_registry,
             native_tools,
             project_context,
-            session_context,
             skills,
-            Some(&identity),
-            Some(&user),
-            soul_text.as_deref(),
-            agents_text.as_deref(),
-            tools_text.as_deref(),
+            Some(&persona.identity),
+            Some(&persona.user),
+            persona.soul_text.as_deref(),
+            persona.agents_text.as_deref(),
+            persona.tools_text.as_deref(),
+            runtime_context,
         )
     } else {
         // Minimal prompt without tools for local LLMs
-        build_system_prompt_minimal(
+        build_system_prompt_minimal_runtime(
             project_context,
-            session_context,
-            Some(&identity),
-            Some(&user),
-            soul_text.as_deref(),
-            agents_text.as_deref(),
-            tools_text.as_deref(),
+            Some(&persona.identity),
+            Some(&persona.user),
+            persona.soul_text.as_deref(),
+            persona.agents_text.as_deref(),
+            persona.tools_text.as_deref(),
+            runtime_context,
         )
+    };
+
+    // Layer 1: instruct the LLM to write speech-friendly output when voice is active.
+    let system_prompt = if desired_reply_medium == ReplyMedium::Voice {
+        format!("{system_prompt}{VOICE_REPLY_SUFFIX}")
+    } else {
+        system_prompt
     };
 
     // Determine if this session is sandboxed (for browser tool execution mode)
@@ -1824,27 +3446,41 @@ async fn run_with_tools(
     let state_for_events = Arc::clone(state);
     let run_id_for_events = run_id.to_string();
     let session_key_for_events = session_key.to_string();
+    let session_store_for_events = session_store.map(Arc::clone);
+    // Track tool call arguments from ToolCallStart so we can persist them with ToolCallEnd.
+    let tool_args_map: Arc<std::sync::Mutex<HashMap<String, Value>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
     let on_event: Box<dyn Fn(RunnerEvent) + Send + Sync> = Box::new(move |event| {
         let state = Arc::clone(&state_for_events);
         let run_id = run_id_for_events.clone();
         let sk = session_key_for_events.clone();
+        let store = session_store_for_events.clone();
+        let args_map = Arc::clone(&tool_args_map);
+        let seq = client_seq;
         tokio::spawn(async move {
             let payload = match &event {
                 RunnerEvent::Thinking => serde_json::json!({
                     "runId": run_id,
                     "sessionKey": sk,
                     "state": "thinking",
+                    "seq": seq,
                 }),
                 RunnerEvent::ThinkingDone => serde_json::json!({
                     "runId": run_id,
                     "sessionKey": sk,
                     "state": "thinking_done",
+                    "seq": seq,
                 }),
                 RunnerEvent::ToolCallStart {
                     id,
                     name,
                     arguments,
                 } => {
+                    // Track arguments for persistence in ToolCallEnd.
+                    if let Ok(mut map) = args_map.lock() {
+                        map.insert(id.clone(), arguments.clone());
+                    }
+
                     // Send tool status to channels (Telegram, etc.)
                     let state_clone = Arc::clone(&state);
                     let sk_clone = sk.clone();
@@ -1867,6 +3503,7 @@ async fn run_with_tools(
                         "toolCallId": id,
                         "toolName": name,
                         "arguments": arguments,
+                        "seq": seq,
                     });
                     // Add execution mode for browser tool (follows session sandbox mode)
                     if name == "browser" {
@@ -1892,6 +3529,7 @@ async fn run_with_tools(
                         "toolCallId": id,
                         "toolName": name,
                         "success": success,
+                        "seq": seq,
                     });
                     if let Some(err) = error {
                         payload["error"] = serde_json::json!(parse_chat_error(err, None));
@@ -1903,6 +3541,18 @@ async fn run_with_tools(
                         .and_then(|s| s.as_str())
                         .filter(|s| s.starts_with("data:image/"))
                         .map(String::from);
+
+                    // Extract location from show_map results for native pin
+                    let location_to_send = if name == "show_map" {
+                        result.as_ref().and_then(|r| {
+                            let lat = r.get("latitude")?.as_f64()?;
+                            let lon = r.get("longitude")?.as_f64()?;
+                            let label = r.get("label").and_then(|l| l.as_str()).map(String::from);
+                            Some((lat, lon, label))
+                        })
+                    } else {
+                        None
+                    };
 
                     if let Some(res) = result {
                         // Cap output sent to the UI to avoid huge WS frames.
@@ -1922,6 +3572,22 @@ async fn run_with_tools(
                         payload["result"] = capped;
                     }
 
+                    // Send native location pin to channels before the screenshot
+                    if let Some((lat, lon, label)) = location_to_send {
+                        let state_clone = Arc::clone(&state);
+                        let sk_clone = sk.clone();
+                        tokio::spawn(async move {
+                            send_location_to_channels(
+                                &state_clone,
+                                &sk_clone,
+                                lat,
+                                lon,
+                                label.as_deref(),
+                            )
+                            .await;
+                        });
+                    }
+
                     // Send screenshot to channel targets (Telegram) if present
                     if let Some(screenshot_data) = screenshot_to_send {
                         let state_clone = Arc::clone(&state);
@@ -1932,6 +3598,91 @@ async fn run_with_tools(
                         });
                     }
 
+                    // Persist tool result to the session JSONL file.
+                    if let Some(ref store) = store {
+                        let tracked_args = args_map.lock().ok().and_then(|mut m| m.remove(id));
+                        // Save screenshot to media dir (if present) and replace
+                        // with a lightweight path reference. Strip screenshot_scale
+                        // (only needed for live rendering). Cap stdout/stderr at
+                        // 10 KB, matching the WS broadcast cap.
+                        let store_media = Arc::clone(store);
+                        let sk_media = sk.clone();
+                        let tool_call_id = id.clone();
+                        let persisted_result = result.as_ref().map(|res| {
+                            let mut r = res.clone();
+                            // Try to decode and persist the screenshot to the media
+                            // directory. Extract base64 into an owned Vec first to
+                            // release the borrow on `r`.
+                            let decoded_screenshot = r
+                                .get("screenshot")
+                                .and_then(|v| v.as_str())
+                                .filter(|s| s.starts_with("data:image/"))
+                                .and_then(|uri| uri.split(',').nth(1))
+                                .and_then(|b64| {
+                                    use base64::Engine;
+                                    base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                                });
+                            if let Some(bytes) = decoded_screenshot {
+                                let filename = format!("{tool_call_id}.png");
+                                let store_ref = Arc::clone(&store_media);
+                                let sk_ref = sk_media.clone();
+                                tokio::spawn(async move {
+                                    if let Err(e) =
+                                        store_ref.save_media(&sk_ref, &filename, &bytes).await
+                                    {
+                                        warn!("failed to save screenshot media: {e}");
+                                    }
+                                });
+                                let sanitized = SessionStore::key_to_filename(&sk_media);
+                                r["screenshot"] = serde_json::Value::String(format!(
+                                    "media/{sanitized}/{tool_call_id}.png"
+                                ));
+                            }
+                            // If screenshot is still a data URI (decode failed), strip it.
+                            let strip_screenshot = r
+                                .get("screenshot")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|s| s.starts_with("data:"));
+                            if let Some(obj) = r.as_object_mut() {
+                                if strip_screenshot {
+                                    obj.remove("screenshot");
+                                }
+                                obj.remove("screenshot_scale");
+                            }
+                            for field in &["stdout", "stderr"] {
+                                if let Some(s) = r.get(*field).and_then(|v| v.as_str())
+                                    && s.len() > 10_000
+                                {
+                                    let truncated = format!(
+                                        "{}\n\n... [truncated — {} bytes total]",
+                                        &s[..10_000],
+                                        s.len()
+                                    );
+                                    r[*field] = serde_json::Value::String(truncated);
+                                }
+                            }
+                            r
+                        });
+                        let tool_result_msg = PersistedMessage::tool_result(
+                            id,
+                            name,
+                            tracked_args,
+                            *success,
+                            persisted_result,
+                            error.clone(),
+                        );
+                        let store_clone = Arc::clone(store);
+                        let sk_persist = sk.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = store_clone
+                                .append(&sk_persist, &tool_result_msg.to_value())
+                                .await
+                            {
+                                warn!("failed to persist tool result: {e}");
+                            }
+                        });
+                    }
+
                     payload
                 },
                 RunnerEvent::ThinkingText(text) => serde_json::json!({
@@ -1939,18 +3690,21 @@ async fn run_with_tools(
                     "sessionKey": sk,
                     "state": "thinking_text",
                     "text": text,
+                    "seq": seq,
                 }),
                 RunnerEvent::TextDelta(text) => serde_json::json!({
                     "runId": run_id,
                     "sessionKey": sk,
                     "state": "delta",
                     "text": text,
+                    "seq": seq,
                 }),
                 RunnerEvent::Iteration(n) => serde_json::json!({
                     "runId": run_id,
                     "sessionKey": sk,
                     "state": "iteration",
                     "iteration": n,
+                    "seq": seq,
                 }),
                 RunnerEvent::SubAgentStart { task, model, depth } => serde_json::json!({
                     "runId": run_id,
@@ -1959,6 +3713,7 @@ async fn run_with_tools(
                     "task": task,
                     "model": model,
                     "depth": depth,
+                    "seq": seq,
                 }),
                 RunnerEvent::SubAgentEnd {
                     task,
@@ -1975,6 +3730,13 @@ async fn run_with_tools(
                     "depth": depth,
                     "iterations": iterations,
                     "toolCallsMade": tool_calls_made,
+                    "seq": seq,
+                }),
+                RunnerEvent::RetryingAfterError(_) => serde_json::json!({
+                    "runId": run_id,
+                    "sessionKey": sk,
+                    "state": "retrying",
+                    "seq": seq,
                 }),
             };
             broadcast(&state, "chat", payload, BroadcastOpts::default()).await;
@@ -1999,13 +3761,16 @@ async fn run_with_tools(
     if let Some(lang) = accept_language.as_deref() {
         tool_context["_accept_language"] = serde_json::json!(lang);
     }
+    if let Some(cid) = conn_id.as_deref() {
+        tool_context["_conn_id"] = serde_json::json!(cid);
+    }
 
     let provider_ref = provider.clone();
     let first_result = run_agent_loop_streaming(
         provider,
         &filtered_registry,
         &system_prompt,
-        text,
+        user_content,
         Some(&on_event),
         hist,
         Some(tool_context.clone()),
@@ -2016,7 +3781,7 @@ async fn run_with_tools(
     // On context-window overflow, compact the session and retry once.
     let result = match first_result {
         Err(AgentRunError::ContextWindowExceeded(ref msg)) if session_store.is_some() => {
-            let store = session_store.unwrap();
+            let store = session_store?;
             info!(
                 run_id,
                 session = session_key,
@@ -2068,7 +3833,7 @@ async fn run_with_tools(
                         provider_ref.clone(),
                         &filtered_registry,
                         &system_prompt,
-                        text,
+                        user_content,
                         Some(&on_event),
                         retry_hist,
                         Some(tool_context),
@@ -2101,45 +3866,78 @@ async fn run_with_tools(
 
     match result {
         Ok(result) => {
+            clear_unsupported_model(state, model_store, model_id).await;
+
+            let is_silent = result.text.trim().is_empty();
+            let display_text = result.text;
+
             info!(
                 run_id,
                 iterations = result.iterations,
                 tool_calls = result.tool_calls_made,
-                response = %result.text,
+                response = %display_text,
+                silent = is_silent,
                 "agent run complete"
             );
             let assistant_message_index = user_message_index + 1;
-            broadcast(
-                state,
-                "chat",
-                serde_json::json!({
-                    "runId": run_id,
-                    "sessionKey": session_key,
-                    "state": "final",
-                    "text": result.text,
-                    "iterations": result.iterations,
-                    "toolCallsMade": result.tool_calls_made,
-                    "model": provider_ref.id(),
-                    "provider": provider_name,
-                    "inputTokens": result.usage.input_tokens,
-                    "outputTokens": result.usage.output_tokens,
-                    "messageIndex": assistant_message_index,
-                    "replyMedium": desired_reply_medium,
-                }),
-                BroadcastOpts::default(),
-            )
-            .await;
-            // Send push notification when chat response completes
-            #[cfg(feature = "push-notifications")]
-            {
-                tracing::info!("push: checking push notification (agent mode)");
-                send_chat_push_notification(state, session_key, &result.text).await;
+
+            // Generate & persist TTS audio for voice-medium web UI replies.
+            let audio_path = if !is_silent && desired_reply_medium == ReplyMedium::Voice {
+                if let Some(bytes) = generate_tts_audio(state, session_key, &display_text).await {
+                    let filename = format!("{run_id}.ogg");
+                    if let Some(store) = session_store {
+                        match store.save_media(session_key, &filename, &bytes).await {
+                            Ok(path) => Some(path),
+                            Err(e) => {
+                                warn!(run_id, error = %e, "failed to save TTS audio to media dir");
+                                None
+                            },
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let final_payload = ChatFinalBroadcast {
+                run_id: run_id.to_string(),
+                session_key: session_key.to_string(),
+                state: "final",
+                text: display_text.clone(),
+                model: provider_ref.id().to_string(),
+                provider: provider_name.to_string(),
+                input_tokens: result.usage.input_tokens,
+                output_tokens: result.usage.output_tokens,
+                message_index: assistant_message_index,
+                reply_medium: desired_reply_medium,
+                iterations: Some(result.iterations),
+                tool_calls_made: Some(result.tool_calls_made),
+                audio: audio_path.clone(),
+                seq: client_seq,
+            };
+            #[allow(clippy::unwrap_used)] // serializing known-valid struct
+            let payload_val = serde_json::to_value(&final_payload).unwrap();
+            broadcast(state, "chat", payload_val, BroadcastOpts::default()).await;
+
+            if !is_silent {
+                // Send push notification when chat response completes
+                #[cfg(feature = "push-notifications")]
+                {
+                    tracing::info!("push: checking push notification (agent mode)");
+                    send_chat_push_notification(state, session_key, &display_text).await;
+                }
+                deliver_channel_replies(state, session_key, &display_text, desired_reply_medium)
+                    .await;
             }
-            deliver_channel_replies(state, session_key, &result.text, desired_reply_medium).await;
             Some((
-                result.text,
+                display_text,
                 result.usage.input_tokens,
                 result.usage.output_tokens,
+                audio_path,
             ))
         },
         Err(e) => {
@@ -2147,18 +3945,17 @@ async fn run_with_tools(
             warn!(run_id, error = %error_str, "agent run error");
             state.set_run_error(run_id, error_str.clone()).await;
             let error_obj = parse_chat_error(&error_str, Some(provider_name));
-            broadcast(
-                state,
-                "chat",
-                serde_json::json!({
-                    "runId": run_id,
-                    "sessionKey": session_key,
-                    "state": "error",
-                    "error": error_obj,
-                }),
-                BroadcastOpts::default(),
-            )
-            .await;
+            mark_unsupported_model(state, model_store, model_id, provider_name, &error_obj).await;
+            let error_payload = ChatErrorBroadcast {
+                run_id: run_id.to_string(),
+                session_key: session_key.to_string(),
+                state: "error",
+                error: error_obj,
+                seq: client_seq,
+            };
+            #[allow(clippy::unwrap_used)] // serializing known-valid struct
+            let payload_val = serde_json::to_value(&error_payload).unwrap();
+            broadcast(state, "chat", payload_val, BroadcastOpts::default()).await;
             None
         },
     }
@@ -2221,6 +4018,9 @@ async fn compact_session(
         input_tokens: None,
         output_tokens: None,
         tool_calls: None,
+        audio: None,
+        seq: None,
+        run_id: None,
     };
     let compacted = vec![compacted_msg.to_value()];
 
@@ -2236,34 +4036,51 @@ async fn compact_session(
 
 async fn run_streaming(
     state: &Arc<GatewayState>,
+    model_store: &Arc<RwLock<DisabledModelsStore>>,
     run_id: &str,
     provider: Arc<dyn moltis_agents::model::LlmProvider>,
-    text: &str,
+    model_id: &str,
+    user_content: &UserContent,
     provider_name: &str,
     history_raw: &[serde_json::Value],
     session_key: &str,
     desired_reply_medium: ReplyMedium,
     project_context: Option<&str>,
-    session_context: Option<&str>,
     user_message_index: usize,
-    skills: &[moltis_skills::types::SkillMetadata],
-) -> Option<(String, u32, u32)> {
+    _skills: &[moltis_skills::types::SkillMetadata],
+    runtime_context: Option<&PromptRuntimeContext>,
+    session_store: Option<&Arc<SessionStore>>,
+    client_seq: Option<u64>,
+) -> Option<(String, u32, u32, Option<String>)> {
+    let persona = load_prompt_persona();
+
+    let system_prompt = build_system_prompt_minimal_runtime(
+        project_context,
+        Some(&persona.identity),
+        Some(&persona.user),
+        persona.soul_text.as_deref(),
+        persona.agents_text.as_deref(),
+        persona.tools_text.as_deref(),
+        runtime_context,
+    );
+
+    // Layer 1: instruct the LLM to write speech-friendly output when voice is active.
+    let system_prompt = if desired_reply_medium == ReplyMedium::Voice {
+        format!("{system_prompt}{VOICE_REPLY_SUFFIX}")
+    } else {
+        system_prompt
+    };
+
     let mut messages: Vec<ChatMessage> = Vec::new();
-    // Prepend session + project context as system messages.
-    if let Some(ctx) = session_context {
-        messages.push(ChatMessage::system(format!("## Current Session\n\n{ctx}")));
-    }
-    if let Some(ctx) = project_context {
-        messages.push(ChatMessage::system(ctx));
-    }
-    // Inject skills into the system prompt for streaming mode too.
-    if !skills.is_empty() {
-        let skills_block = moltis_skills::prompt_gen::generate_skills_prompt(skills);
-        messages.push(ChatMessage::system(skills_block));
-    }
+    messages.push(ChatMessage::system(system_prompt));
     // Convert persisted JSON history to typed ChatMessages for the LLM provider.
     messages.extend(values_to_chat_messages(history_raw));
-    messages.push(ChatMessage::user(text));
+    messages.push(ChatMessage::User {
+        content: user_content.clone(),
+    });
+
+    #[cfg(feature = "metrics")]
+    let stream_start = Instant::now();
 
     let mut stream = provider.stream(messages);
     let mut accumulated = String::new();
@@ -2286,57 +4103,138 @@ async fn run_streaming(
                 .await;
             },
             StreamEvent::Done(usage) => {
-                debug!(
+                clear_unsupported_model(state, model_store, model_id).await;
+
+                // Record streaming completion metrics (mirroring provider_chain.rs)
+                #[cfg(feature = "metrics")]
+                {
+                    let duration = stream_start.elapsed().as_secs_f64();
+                    counter!(
+                        llm_metrics::COMPLETIONS_TOTAL,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .increment(1);
+                    counter!(
+                        llm_metrics::INPUT_TOKENS_TOTAL,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .increment(u64::from(usage.input_tokens));
+                    counter!(
+                        llm_metrics::OUTPUT_TOKENS_TOTAL,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .increment(u64::from(usage.output_tokens));
+                    counter!(
+                        llm_metrics::CACHE_READ_TOKENS_TOTAL,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .increment(u64::from(usage.cache_read_tokens));
+                    counter!(
+                        llm_metrics::CACHE_WRITE_TOKENS_TOTAL,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .increment(u64::from(usage.cache_write_tokens));
+                    histogram!(
+                        llm_metrics::COMPLETION_DURATION_SECONDS,
+                        labels::PROVIDER => provider_name.to_string(),
+                        labels::MODEL => model_id.to_string()
+                    )
+                    .record(duration);
+                }
+
+                let is_silent = accumulated.trim().is_empty();
+
+                info!(
                     run_id,
                     input_tokens = usage.input_tokens,
                     output_tokens = usage.output_tokens,
+                    response = %accumulated,
+                    silent = is_silent,
                     "chat stream done"
                 );
                 let assistant_message_index = user_message_index + 1;
-                broadcast(
-                    state,
-                    "chat",
-                    serde_json::json!({
-                        "runId": run_id,
-                        "sessionKey": session_key,
-                        "state": "final",
-                        "text": accumulated,
-                        "model": provider.id(),
-                        "provider": provider_name,
-                        "inputTokens": usage.input_tokens,
-                        "outputTokens": usage.output_tokens,
-                        "messageIndex": assistant_message_index,
-                        "replyMedium": desired_reply_medium,
-                    }),
-                    BroadcastOpts::default(),
-                )
-                .await;
-                // Send push notification when chat response completes
-                #[cfg(feature = "push-notifications")]
-                {
-                    tracing::info!("push: checking push notification");
-                    send_chat_push_notification(state, session_key, &accumulated).await;
+
+                // Generate & persist TTS audio for voice-medium web UI replies.
+                let audio_path = if !is_silent && desired_reply_medium == ReplyMedium::Voice {
+                    if let Some(bytes) = generate_tts_audio(state, session_key, &accumulated).await
+                    {
+                        let filename = format!("{run_id}.ogg");
+                        if let Some(store) = session_store {
+                            match store.save_media(session_key, &filename, &bytes).await {
+                                Ok(path) => Some(path),
+                                Err(e) => {
+                                    warn!(run_id, error = %e, "failed to save TTS audio to media dir");
+                                    None
+                                },
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let final_payload = ChatFinalBroadcast {
+                    run_id: run_id.to_string(),
+                    session_key: session_key.to_string(),
+                    state: "final",
+                    text: accumulated.clone(),
+                    model: provider.id().to_string(),
+                    provider: provider_name.to_string(),
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    message_index: assistant_message_index,
+                    reply_medium: desired_reply_medium,
+                    iterations: None,
+                    tool_calls_made: None,
+                    audio: audio_path.clone(),
+                    seq: client_seq,
+                };
+                #[allow(clippy::unwrap_used)] // serializing known-valid struct
+                let payload_val = serde_json::to_value(&final_payload).unwrap();
+                broadcast(state, "chat", payload_val, BroadcastOpts::default()).await;
+
+                if !is_silent {
+                    // Send push notification when chat response completes
+                    #[cfg(feature = "push-notifications")]
+                    {
+                        tracing::info!("push: checking push notification");
+                        send_chat_push_notification(state, session_key, &accumulated).await;
+                    }
+                    deliver_channel_replies(state, session_key, &accumulated, desired_reply_medium)
+                        .await;
                 }
-                deliver_channel_replies(state, session_key, &accumulated, desired_reply_medium)
-                    .await;
-                return Some((accumulated, usage.input_tokens, usage.output_tokens));
+                return Some((
+                    accumulated,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    audio_path,
+                ));
             },
             StreamEvent::Error(msg) => {
                 warn!(run_id, error = %msg, "chat stream error");
                 state.set_run_error(run_id, msg.clone()).await;
                 let error_obj = parse_chat_error(&msg, Some(provider_name));
-                broadcast(
-                    state,
-                    "chat",
-                    serde_json::json!({
-                        "runId": run_id,
-                        "sessionKey": session_key,
-                        "state": "error",
-                        "error": error_obj,
-                    }),
-                    BroadcastOpts::default(),
-                )
-                .await;
+                mark_unsupported_model(state, model_store, model_id, provider_name, &error_obj)
+                    .await;
+                let error_payload = ChatErrorBroadcast {
+                    run_id: run_id.to_string(),
+                    session_key: session_key.to_string(),
+                    state: "error",
+                    error: error_obj,
+                    seq: client_seq,
+                };
+                #[allow(clippy::unwrap_used)] // serializing known-valid struct
+                let payload_val = serde_json::to_value(&error_payload).unwrap();
+                broadcast(state, "chat", payload_val, BroadcastOpts::default()).await;
                 return None;
             },
             // Tool events not expected in stream-only mode.
@@ -2419,6 +4317,8 @@ async fn deliver_channel_replies(
         Some(o) => o,
         None => return,
     };
+    // Drain buffered status log entries to build a logbook suffix.
+    let status_log = state.drain_channel_status_log(session_key).await;
     deliver_channel_replies_to_targets(
         outbound,
         targets,
@@ -2426,8 +4326,28 @@ async fn deliver_channel_replies(
         text,
         Arc::clone(state),
         desired_reply_medium,
+        status_log,
     )
     .await;
+}
+
+/// Format buffered status log entries into a Telegram expandable blockquote HTML.
+/// Returns an empty string if there are no entries.
+fn format_logbook_html(entries: &[String]) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from("<blockquote expandable>\n\u{1f4cb} <b>Activity log</b>\n");
+    for entry in entries {
+        // Escape HTML entities in the entry text.
+        let escaped = entry
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        html.push_str(&format!("\u{2022} {escaped}\n"));
+    }
+    html.push_str("</blockquote>");
+    html
 }
 
 async fn deliver_channel_replies_to_targets(
@@ -2437,39 +4357,118 @@ async fn deliver_channel_replies_to_targets(
     text: &str,
     state: Arc<GatewayState>,
     desired_reply_medium: ReplyMedium,
+    status_log: Vec<String>,
 ) {
     let session_key = session_key.to_string();
     let text = text.to_string();
+    let logbook_html = format_logbook_html(&status_log);
     let mut tasks = Vec::with_capacity(targets.len());
     for target in targets {
         let outbound = Arc::clone(&outbound);
         let state = Arc::clone(&state);
         let session_key = session_key.clone();
         let text = text.clone();
+        let logbook_html = logbook_html.clone();
         tasks.push(tokio::spawn(async move {
             let tts_payload = match desired_reply_medium {
                 ReplyMedium::Voice => build_tts_payload(&state, &session_key, &target, &text).await,
                 ReplyMedium::Text => None,
             };
+            let reply_to = target.message_id.as_deref();
             match target.channel_type {
                 moltis_channels::ChannelType::Telegram => match tts_payload {
-                    Some(payload) => {
-                        if let Err(e) = outbound
-                            .send_media(&target.account_id, &target.chat_id, &payload)
-                            .await
-                        {
-                            warn!(
-                                account_id = target.account_id,
-                                chat_id = target.chat_id,
-                                "failed to send channel voice reply: {e}"
-                            );
+                    Some(mut payload) => {
+                        let transcript = std::mem::take(&mut payload.text);
+
+                        // Short transcript fits as a caption on the voice message.
+                        if transcript.len() <= moltis_telegram::markdown::TELEGRAM_CAPTION_LIMIT {
+                            payload.text = transcript;
+                            if let Err(e) = outbound
+                                .send_media(&target.account_id, &target.chat_id, &payload, reply_to)
+                                .await
+                            {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send channel voice reply: {e}"
+                                );
+                            }
+                            // Send logbook as a follow-up if present.
+                            if !logbook_html.is_empty()
+                                && let Err(e) = outbound
+                                    .send_text(
+                                        &target.account_id,
+                                        &target.chat_id,
+                                        &logbook_html,
+                                        None,
+                                    )
+                                    .await
+                            {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send logbook follow-up: {e}"
+                                );
+                            }
+                        } else {
+                            // Transcript too long for a caption — send voice
+                            // without caption, then the full text as a follow-up.
+                            if let Err(e) = outbound
+                                .send_media(&target.account_id, &target.chat_id, &payload, reply_to)
+                                .await
+                            {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send channel voice reply: {e}"
+                                );
+                            }
+                            let text_result = if logbook_html.is_empty() {
+                                outbound
+                                    .send_text(
+                                        &target.account_id,
+                                        &target.chat_id,
+                                        &transcript,
+                                        None,
+                                    )
+                                    .await
+                            } else {
+                                outbound
+                                    .send_text_with_suffix(
+                                        &target.account_id,
+                                        &target.chat_id,
+                                        &transcript,
+                                        &logbook_html,
+                                        None,
+                                    )
+                                    .await
+                            };
+                            if let Err(e) = text_result {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send transcript follow-up: {e}"
+                                );
+                            }
                         }
                     },
                     None => {
-                        if let Err(e) = outbound
-                            .send_text(&target.account_id, &target.chat_id, &text)
-                            .await
-                        {
+                        let result = if logbook_html.is_empty() {
+                            outbound
+                                .send_text(&target.account_id, &target.chat_id, &text, reply_to)
+                                .await
+                        } else {
+                            outbound
+                                .send_text_with_suffix(
+                                    &target.account_id,
+                                    &target.chat_id,
+                                    &text,
+                                    &logbook_html,
+                                    reply_to,
+                                )
+                                .await
+                        };
+                        if let Err(e) = result {
                             warn!(
                                 account_id = target.account_id,
                                 chat_id = target.chat_id,
@@ -2514,6 +4513,58 @@ struct TtsConvertResponse {
     mime_type: Option<String>,
 }
 
+/// Generate TTS audio bytes for a web UI response.
+///
+/// Uses the session-level TTS override if configured, otherwise the global TTS
+/// config. Returns raw audio bytes (OGG format) on success, `None` if TTS is
+/// disabled or generation fails.
+async fn generate_tts_audio(
+    state: &Arc<GatewayState>,
+    session_key: &str,
+    text: &str,
+) -> Option<Vec<u8>> {
+    use base64::Engine;
+
+    let tts_status = state.services.tts.status().await.ok()?;
+    let status: TtsStatusResponse = serde_json::from_value(tts_status).ok()?;
+    if !status.enabled {
+        return None;
+    }
+
+    // Layer 2: strip markdown/URLs the LLM may have included despite the prompt.
+    let text = moltis_voice::tts::sanitize_text_for_tts(text);
+
+    let session_override = {
+        state
+            .inner
+            .read()
+            .await
+            .tts_session_overrides
+            .get(session_key)
+            .cloned()
+    };
+
+    let request = TtsConvertRequest {
+        text: &text,
+        format: "ogg",
+        provider: session_override.as_ref().and_then(|o| o.provider.clone()),
+        voice_id: session_override.as_ref().and_then(|o| o.voice_id.clone()),
+        model: session_override.as_ref().and_then(|o| o.model.clone()),
+    };
+
+    let tts_result = state
+        .services
+        .tts
+        .convert(serde_json::to_value(request).ok()?)
+        .await
+        .ok()?;
+
+    let response: TtsConvertResponse = serde_json::from_value(tts_result).ok()?;
+    base64::engine::general_purpose::STANDARD
+        .decode(&response.audio)
+        .ok()
+}
+
 async fn build_tts_payload(
     state: &Arc<GatewayState>,
     session_key: &str,
@@ -2528,27 +4579,22 @@ async fn build_tts_payload(
         return None;
     }
 
+    // Strip markdown/URLs the LLM may have included — use sanitized text
+    // only for TTS conversion, but keep the original for the caption.
+    let sanitized = moltis_voice::tts::sanitize_text_for_tts(text);
+
     let channel_key = format!("{}:{}", target.channel_type.as_str(), target.account_id);
-    let channel_override = {
-        state
-            .tts_channel_overrides
-            .read()
-            .await
-            .get(&channel_key)
-            .cloned()
-    };
-    let session_override = {
-        state
-            .tts_session_overrides
-            .read()
-            .await
-            .get(session_key)
-            .cloned()
+    let (channel_override, session_override) = {
+        let inner = state.inner.read().await;
+        (
+            inner.tts_channel_overrides.get(&channel_key).cloned(),
+            inner.tts_session_overrides.get(session_key).cloned(),
+        )
     };
     let resolved = channel_override.or(session_override);
 
     let request = TtsConvertRequest {
-        text,
+        text: &sanitized,
         format: "ogg",
         provider: resolved.as_ref().and_then(|o| o.provider.clone()),
         voice_id: resolved.as_ref().and_then(|o| o.voice_id.clone()),
@@ -2569,7 +4615,7 @@ async fn build_tts_payload(
         .unwrap_or_else(|| "audio/ogg".to_string());
 
     Some(ReplyPayload {
-        text: String::new(),
+        text: text.to_string(),
         media: Some(MediaAttachment {
             url: format!("data:{mime_type};base64,{}", response.audio),
             mime_type,
@@ -2579,8 +4625,9 @@ async fn build_tts_payload(
     })
 }
 
-/// Send a tool execution status to all pending channel targets for a session.
-/// Uses `peek_channel_replies` so targets remain for the final text response.
+/// Buffer a tool execution status into the channel status log for a session.
+/// The buffered entries are appended as a collapsible logbook when the final
+/// response is delivered, instead of being sent as separate messages.
 async fn send_tool_status_to_channels(
     state: &Arc<GatewayState>,
     session_key: &str,
@@ -2592,49 +4639,9 @@ async fn send_tool_status_to_channels(
         return;
     }
 
-    let outbound = match state.services.channel_outbound_arc() {
-        Some(o) => o,
-        None => return,
-    };
-
-    // Format a concise tool execution message
+    // Buffer the status message for the logbook
     let message = format_tool_status_message(tool_name, arguments);
-
-    for target in targets {
-        let outbound = Arc::clone(&outbound);
-        let message = message.clone();
-        tokio::spawn(async move {
-            // Send as a silent message to avoid notification spam
-            if let Err(e) = outbound
-                .send_text_silent(&target.account_id, &target.chat_id, &message)
-                .await
-            {
-                debug!(
-                    account_id = target.account_id,
-                    chat_id = target.chat_id,
-                    "failed to send tool status to channel: {e}"
-                );
-            } else {
-                // Re-send typing indicator after status message
-                // (sending a message clears the typing indicator in Telegram)
-                debug!(
-                    account_id = target.account_id,
-                    chat_id = target.chat_id,
-                    "sent tool status, re-sending typing indicator"
-                );
-                if let Err(e) = outbound
-                    .send_typing(&target.account_id, &target.chat_id)
-                    .await
-                {
-                    debug!(
-                        account_id = target.account_id,
-                        chat_id = target.chat_id,
-                        "failed to re-send typing after tool status: {e}"
-                    );
-                }
-            }
-        });
-    }
+    state.push_channel_status_log(session_key, message).await;
 }
 
 /// Format a human-readable tool execution message.
@@ -2766,8 +4773,9 @@ async fn send_screenshot_to_channels(
         tasks.push(tokio::spawn(async move {
             match target.channel_type {
                 moltis_channels::ChannelType::Telegram => {
+                    let reply_to = target.message_id.as_deref();
                     if let Err(e) = outbound
-                        .send_media(&target.account_id, &target.chat_id, &payload)
+                        .send_media(&target.account_id, &target.chat_id, &payload, reply_to)
                         .await
                     {
                         warn!(
@@ -2778,7 +4786,7 @@ async fn send_screenshot_to_channels(
                         // Notify the user of the error
                         let error_msg = format!("⚠️ Failed to send screenshot: {e}");
                         let _ = outbound
-                            .send_text(&target.account_id, &target.chat_id, &error_msg)
+                            .send_text(&target.account_id, &target.chat_id, &error_msg, reply_to)
                             .await;
                     } else {
                         debug!(
@@ -2799,24 +4807,118 @@ async fn send_screenshot_to_channels(
     }
 }
 
+/// Send a native location pin to all pending channel targets for a session.
+/// Uses `peek_channel_replies` so targets remain for the final text response.
+async fn send_location_to_channels(
+    state: &Arc<GatewayState>,
+    session_key: &str,
+    latitude: f64,
+    longitude: f64,
+    title: Option<&str>,
+) {
+    let targets = state.peek_channel_replies(session_key).await;
+    if targets.is_empty() {
+        return;
+    }
+
+    let outbound = match state.services.channel_outbound_arc() {
+        Some(o) => o,
+        None => return,
+    };
+
+    let title_owned = title.map(String::from);
+
+    let mut tasks = Vec::with_capacity(targets.len());
+    for target in targets {
+        let outbound = Arc::clone(&outbound);
+        let title_ref = title_owned.clone();
+        tasks.push(tokio::spawn(async move {
+            let reply_to = target.message_id.as_deref();
+            if let Err(e) = outbound
+                .send_location(
+                    &target.account_id,
+                    &target.chat_id,
+                    latitude,
+                    longitude,
+                    title_ref.as_deref(),
+                    reply_to,
+                )
+                .await
+            {
+                warn!(
+                    account_id = target.account_id,
+                    chat_id = target.chat_id,
+                    "failed to send location to channel: {e}"
+                );
+            } else {
+                debug!(
+                    account_id = target.account_id,
+                    chat_id = target.chat_id,
+                    "sent location pin to telegram"
+                );
+            }
+        }));
+    }
+
+    for task in tasks {
+        if let Err(e) = task.await {
+            warn!(error = %e, "channel location task join failed");
+        }
+    }
+}
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {
         super::*,
         anyhow::Result,
-        moltis_agents::tool_registry::AgentTool,
+        moltis_agents::{model::LlmProvider, tool_registry::AgentTool},
         moltis_common::types::ReplyPayload,
         std::{
+            pin::Pin,
             sync::{
                 Arc,
                 atomic::{AtomicUsize, Ordering},
             },
             time::{Duration, Instant},
         },
+        tokio_stream::Stream,
     };
 
     struct DummyTool {
         name: String,
+    }
+
+    struct StaticProvider {
+        name: String,
+        id: String,
+    }
+
+    #[async_trait]
+    impl LlmProvider for StaticProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn id(&self) -> &str {
+            &self.id
+        }
+
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[serde_json::Value],
+        ) -> anyhow::Result<moltis_agents::model::CompletionResponse> {
+            anyhow::bail!("not implemented for test")
+        }
+
+        fn stream(
+            &self,
+            _messages: Vec<ChatMessage>,
+        ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send + '_>> {
+            Box::pin(tokio_stream::empty())
+        }
     }
 
     #[async_trait]
@@ -2845,7 +4947,13 @@ mod tests {
 
     #[async_trait]
     impl moltis_channels::plugin::ChannelOutbound for MockChannelOutbound {
-        async fn send_text(&self, _account_id: &str, _to: &str, _text: &str) -> Result<()> {
+        async fn send_text(
+            &self,
+            _account_id: &str,
+            _to: &str,
+            _text: &str,
+            _reply_to: Option<&str>,
+        ) -> Result<()> {
             tokio::time::sleep(self.delay).await;
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -2856,6 +4964,7 @@ mod tests {
             _account_id: &str,
             _to: &str,
             _payload: &ReplyPayload,
+            _reply_to: Option<&str>,
         ) -> Result<()> {
             Ok(())
         }
@@ -2873,6 +4982,7 @@ mod tests {
             channel_type: moltis_channels::ChannelType::Telegram,
             account_id: "acct".to_string(),
             chat_id: "123".to_string(),
+            message_id: None,
         }];
         let state = crate::state::GatewayState::new(
             crate::auth::ResolvedAuth {
@@ -2881,7 +4991,6 @@ mod tests {
                 password: None,
             },
             crate::services::GatewayServices::noop(),
-            Arc::new(moltis_tools::approval::ApprovalManager::default()),
         );
 
         let start = Instant::now();
@@ -2892,6 +5001,7 @@ mod tests {
             "hello",
             state,
             ReplyMedium::Text,
+            Vec::new(),
         )
         .await;
 
@@ -3114,6 +5224,74 @@ mod tests {
         assert!(drained.is_empty());
     }
 
+    #[tokio::test]
+    async fn queue_drain_drops_permit_before_send() {
+        // Simulate the fixed drain flow: after `drop(permit)`, the semaphore
+        // should be available for the replayed `chat.send()` to acquire.
+        let sem = Arc::new(Semaphore::new(1));
+        let permit = sem.clone().try_acquire_owned().unwrap();
+
+        // While held, a second acquire must fail (simulates the bug).
+        assert!(sem.clone().try_acquire_owned().is_err());
+
+        // Drop — mirrors the new `drop(permit)` before the drain loop.
+        drop(permit);
+
+        // Now the replayed send can acquire the permit.
+        assert!(
+            sem.clone().try_acquire_owned().is_ok(),
+            "permit should be available after explicit drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn followup_drain_sends_only_first_and_requeues_rest() {
+        let queue = make_message_queue();
+        let key = "sess_drain";
+
+        // Simulate three queued messages.
+        {
+            let mut q = queue.write().await;
+            let entry = q.entry(key.to_string()).or_default();
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "a"}),
+            });
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "b"}),
+            });
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "c"}),
+            });
+        }
+
+        // Drain and apply the send-first/requeue-rest logic.
+        let queued = queue.write().await.remove(key).unwrap_or_default();
+
+        let mut iter = queued.into_iter();
+        let first = iter.next().expect("queued is non-empty");
+        let rest: Vec<QueuedMessage> = iter.collect();
+
+        // The first message is the one to send.
+        assert_eq!(first.params["text"], "a");
+
+        // Remaining messages are re-queued.
+        if !rest.is_empty() {
+            queue
+                .write()
+                .await
+                .entry(key.to_string())
+                .or_default()
+                .extend(rest);
+        }
+
+        // Verify the queue now holds exactly the two remaining messages.
+        let remaining = queue.read().await;
+        let entries = remaining.get(key).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].params["text"], "b");
+        assert_eq!(entries[1].params["text"], "c");
+    }
+
     #[test]
     fn message_queue_mode_default_is_followup() {
         let mode = MessageQueueMode::default();
@@ -3134,6 +5312,70 @@ mod tests {
 
         let collect: Wrapper = toml::from_str(r#"mode = "collect""#).unwrap();
         assert_eq!(collect.mode, MessageQueueMode::Collect);
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_clears_session_queue() {
+        let queue = make_message_queue();
+        let key = "sess_cancel";
+
+        // Enqueue two messages.
+        {
+            let mut q = queue.write().await;
+            let entry = q.entry(key.to_string()).or_default();
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "a"}),
+            });
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "b"}),
+            });
+        }
+
+        // Cancel (same logic as cancel_queued: remove + unwrap_or_default).
+        let removed = queue.write().await.remove(key).unwrap_or_default();
+        assert_eq!(removed.len(), 2);
+
+        // Queue should be empty.
+        assert!(queue.read().await.get(key).is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_returns_count() {
+        let queue = make_message_queue();
+        let key = "sess_count";
+
+        {
+            let mut q = queue.write().await;
+            let entry = q.entry(key.to_string()).or_default();
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "x"}),
+            });
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "y"}),
+            });
+            entry.push(QueuedMessage {
+                params: serde_json::json!({"text": "z"}),
+            });
+        }
+
+        let removed = queue.write().await.remove(key).unwrap_or_default();
+        let count = removed.len();
+        assert_eq!(count, 3);
+        let result = serde_json::json!({ "cleared": count });
+        assert_eq!(result["cleared"], 3);
+    }
+
+    #[tokio::test]
+    async fn cancel_queued_noop_for_empty_queue() {
+        let queue = make_message_queue();
+        let key = "sess_empty";
+
+        // Cancel on a session with no queued messages.
+        let removed = queue.write().await.remove(key).unwrap_or_default();
+        assert_eq!(removed.len(), 0);
+
+        let result = serde_json::json!({ "cleared": removed.len() });
+        assert_eq!(result["cleared"], 0);
     }
 
     #[test]
@@ -3215,5 +5457,401 @@ mod tests {
         let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
         assert!(filtered.get("create_skill").is_some());
         assert!(filtered.get("web_fetch").is_some());
+    }
+
+    #[test]
+    fn priority_models_pin_raw_model_ids_first() {
+        let service = LiveModelService::new(
+            Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+                &moltis_config::schema::ProvidersConfig::default(),
+            ))),
+            Arc::new(RwLock::new(DisabledModelsStore::default())),
+            vec!["gpt-5.2".into(), "claude-opus-4-5".into()],
+        );
+
+        let m1 = moltis_agents::providers::ModelInfo {
+            id: "openai-codex::gpt-5.2".into(),
+            provider: "openai-codex".into(),
+            display_name: "GPT 5.2".into(),
+        };
+        let m2 = moltis_agents::providers::ModelInfo {
+            id: "anthropic::claude-opus-4-5".into(),
+            provider: "anthropic".into(),
+            display_name: "Claude Opus 4.5".into(),
+        };
+        let m3 = moltis_agents::providers::ModelInfo {
+            id: "google::gemini-3-flash".into(),
+            provider: "gemini".into(),
+            display_name: "Gemini 3 Flash".into(),
+        };
+
+        let ordered = service.prioritize_models(vec![&m3, &m2, &m1].into_iter());
+        assert_eq!(ordered[0].id, m1.id);
+        assert_eq!(ordered[1].id, m2.id);
+        assert_eq!(ordered[2].id, m3.id);
+    }
+
+    #[test]
+    fn provider_filter_is_normalized_and_ignores_empty() {
+        let params = serde_json::json!({"provider": "  OpenAI-CODEX "});
+        assert_eq!(
+            provider_filter_from_params(&params).as_deref(),
+            Some("openai-codex")
+        );
+        assert!(provider_filter_from_params(&serde_json::json!({"provider": "   "})).is_none());
+    }
+
+    #[test]
+    fn provider_matches_filter_is_case_insensitive() {
+        assert!(provider_matches_filter(
+            "openai-codex",
+            Some("openai-codex")
+        ));
+        assert!(provider_matches_filter(
+            "OpenAI-Codex",
+            Some("openai-codex")
+        ));
+        assert!(!provider_matches_filter(
+            "github-copilot",
+            Some("openai-codex")
+        ));
+        assert!(provider_matches_filter("github-copilot", None));
+    }
+
+    #[tokio::test]
+    async fn list_all_includes_disabled_models_and_list_hides_them() {
+        let mut registry = ProviderRegistry::from_env_with_config(
+            &moltis_config::schema::ProvidersConfig::default(),
+        );
+        registry.register(
+            moltis_agents::providers::ModelInfo {
+                id: "unit-test-model".to_string(),
+                provider: "unit-test-provider".to_string(),
+                display_name: "Unit Test Model".to_string(),
+            },
+            Arc::new(StaticProvider {
+                name: "unit-test-provider".to_string(),
+                id: "unit-test-model".to_string(),
+            }),
+        );
+
+        let disabled = Arc::new(RwLock::new(DisabledModelsStore::default()));
+        {
+            let mut store = disabled.write().await;
+            store.disable("unit-test-provider::unit-test-model");
+        }
+
+        let service = LiveModelService::new(Arc::new(RwLock::new(registry)), disabled, vec![]);
+
+        let all = service
+            .list_all()
+            .await
+            .expect("models.list_all should succeed");
+        let all_models = all
+            .as_array()
+            .expect("models.list_all should return an array");
+        let all_entry = all_models
+            .iter()
+            .find(|m| {
+                m.get("id").and_then(|v| v.as_str()) == Some("unit-test-provider::unit-test-model")
+            })
+            .expect("disabled model should still appear in models.list_all");
+        assert_eq!(
+            all_entry.get("disabled").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        let visible = service.list().await.expect("models.list should succeed");
+        let visible_models = visible
+            .as_array()
+            .expect("models.list should return an array");
+        assert!(
+            visible_models
+                .iter()
+                .all(|m| m.get("id").and_then(|v| v.as_str())
+                    != Some("unit-test-provider::unit-test-model")),
+            "disabled model should be hidden from models.list",
+        );
+    }
+
+    #[test]
+    fn probe_rate_limit_detection_matches_copilot_429_pattern() {
+        let raw = "github-copilot API error status=429 Too Many Requests body=quota exceeded";
+        let error_obj = parse_chat_error(raw, Some("github-copilot"));
+        assert!(is_probe_rate_limited_error(&error_obj, raw));
+        assert_ne!(error_obj["type"], "unsupported_model");
+    }
+
+    #[test]
+    fn probe_rate_limit_backoff_doubles_and_caps() {
+        assert_eq!(next_probe_rate_limit_backoff_ms(None), 1_000);
+        assert_eq!(next_probe_rate_limit_backoff_ms(Some(1_000)), 2_000);
+        assert_eq!(next_probe_rate_limit_backoff_ms(Some(20_000)), 30_000);
+        assert_eq!(next_probe_rate_limit_backoff_ms(Some(30_000)), 30_000);
+    }
+
+    #[tokio::test]
+    async fn model_test_rejects_missing_model_id() {
+        let service = LiveModelService::new(
+            Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+                &moltis_config::schema::ProvidersConfig::default(),
+            ))),
+            Arc::new(RwLock::new(DisabledModelsStore::default())),
+            vec![],
+        );
+        let result = service.test(serde_json::json!({})).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing 'modelId'"));
+    }
+
+    #[tokio::test]
+    async fn model_test_rejects_unknown_model() {
+        let service = LiveModelService::new(
+            Arc::new(RwLock::new(ProviderRegistry::from_env_with_config(
+                &moltis_config::schema::ProvidersConfig::default(),
+            ))),
+            Arc::new(RwLock::new(DisabledModelsStore::default())),
+            vec![],
+        );
+        let result = service
+            .test(serde_json::json!({"modelId": "nonexistent::model-xyz"}))
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("unknown model"));
+    }
+
+    #[tokio::test]
+    async fn model_test_returns_error_when_provider_fails() {
+        let mut registry = ProviderRegistry::from_env_with_config(
+            &moltis_config::schema::ProvidersConfig::default(),
+        );
+        // StaticProvider's complete() returns an error ("not implemented for test")
+        registry.register(
+            moltis_agents::providers::ModelInfo {
+                id: "test-provider::test-model".to_string(),
+                provider: "test-provider".to_string(),
+                display_name: "Test Model".to_string(),
+            },
+            Arc::new(StaticProvider {
+                name: "test-provider".to_string(),
+                id: "test-provider::test-model".to_string(),
+            }),
+        );
+
+        let service = LiveModelService::new(
+            Arc::new(RwLock::new(registry)),
+            Arc::new(RwLock::new(DisabledModelsStore::default())),
+            vec![],
+        );
+        let result = service
+            .test(serde_json::json!({"modelId": "test-provider::test-model"}))
+            .await;
+        // StaticProvider.complete() returns Err, so test should return an error.
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn probe_parallel_per_provider_defaults_and_clamps() {
+        assert_eq!(probe_max_parallel_per_provider(&serde_json::json!({})), 1);
+        assert_eq!(
+            probe_max_parallel_per_provider(&serde_json::json!({"maxParallelPerProvider": 1})),
+            1
+        );
+        assert_eq!(
+            probe_max_parallel_per_provider(&serde_json::json!({"maxParallelPerProvider": 99})),
+            8
+        );
+    }
+
+    // ── to_user_content tests ─────────────────────────────────────────
+
+    #[test]
+    fn to_user_content_text_only() {
+        let mc = MessageContent::Text("hello".to_string());
+        let uc = to_user_content(&mc);
+        match uc {
+            UserContent::Text(t) => assert_eq!(t, "hello"),
+            _ => panic!("expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn to_user_content_multimodal_with_image() {
+        use moltis_sessions::message::{ContentBlock, ImageUrl as SessionImageUrl};
+
+        let mc = MessageContent::Multimodal(vec![
+            ContentBlock::Text {
+                text: "describe this".to_string(),
+            },
+            ContentBlock::ImageUrl {
+                image_url: SessionImageUrl {
+                    url: "data:image/png;base64,AAAA".to_string(),
+                },
+            },
+        ]);
+        let uc = to_user_content(&mc);
+        match uc {
+            UserContent::Multimodal(parts) => {
+                assert_eq!(parts.len(), 2);
+                match &parts[0] {
+                    ContentPart::Text(t) => assert_eq!(t, "describe this"),
+                    _ => panic!("expected Text part"),
+                }
+                match &parts[1] {
+                    ContentPart::Image { media_type, data } => {
+                        assert_eq!(media_type, "image/png");
+                        assert_eq!(data, "AAAA");
+                    },
+                    _ => panic!("expected Image part"),
+                }
+            },
+            _ => panic!("expected Multimodal variant"),
+        }
+    }
+
+    #[test]
+    fn to_user_content_drops_invalid_data_uri() {
+        use moltis_sessions::message::{ContentBlock, ImageUrl as SessionImageUrl};
+
+        let mc = MessageContent::Multimodal(vec![
+            ContentBlock::Text {
+                text: "just text".to_string(),
+            },
+            ContentBlock::ImageUrl {
+                image_url: SessionImageUrl {
+                    url: "https://example.com/image.png".to_string(),
+                },
+            },
+        ]);
+        let uc = to_user_content(&mc);
+        match uc {
+            UserContent::Multimodal(parts) => {
+                // The https URL is not a data URI, so it should be dropped
+                assert_eq!(parts.len(), 1);
+                match &parts[0] {
+                    ContentPart::Text(t) => assert_eq!(t, "just text"),
+                    _ => panic!("expected Text part"),
+                }
+            },
+            _ => panic!("expected Multimodal variant"),
+        }
+    }
+
+    // ── Logbook formatting tests ─────────────────────────────────────────
+
+    #[test]
+    fn format_logbook_html_empty_entries() {
+        assert_eq!(format_logbook_html(&[]), "");
+    }
+
+    #[test]
+    fn format_logbook_html_single_entry() {
+        let entries = vec!["Using Claude Sonnet 4.5. Use /model to change.".to_string()];
+        let html = format_logbook_html(&entries);
+        assert!(html.starts_with("<blockquote expandable>"));
+        assert!(html.ends_with("</blockquote>"));
+        assert!(html.contains("\u{1f4cb} <b>Activity log</b>"));
+        assert!(html.contains("\u{2022} Using Claude Sonnet 4.5. Use /model to change."));
+    }
+
+    #[test]
+    fn format_logbook_html_multiple_entries() {
+        let entries = vec![
+            "Using Claude Sonnet 4.5. Use /model to change.".to_string(),
+            "\u{1f50d} Searching: rust async patterns".to_string(),
+            "\u{1f4bb} Running: `ls -la`".to_string(),
+        ];
+        let html = format_logbook_html(&entries);
+        // Verify all entries are present as bullet points.
+        for entry in &entries {
+            let escaped = entry
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            assert!(
+                html.contains(&format!("\u{2022} {escaped}")),
+                "missing entry: {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn format_logbook_html_escapes_html_entities() {
+        let entries = vec!["Running: `echo <script>alert(1)</script>`".to_string()];
+        let html = format_logbook_html(&entries);
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn extract_location_from_show_map_result() {
+        let result = serde_json::json!({
+            "latitude": 37.76,
+            "longitude": -122.42,
+            "label": "La Taqueria",
+            "screenshot": "data:image/png;base64,abc",
+            "map_links": {}
+        });
+
+        // Extraction logic mirrors the ToolCallEnd handler
+        let extracted = result
+            .get("latitude")
+            .and_then(|v| v.as_f64())
+            .and_then(|lat| {
+                let lon = result.get("longitude")?.as_f64()?;
+                let label = result
+                    .get("label")
+                    .and_then(|l| l.as_str())
+                    .map(String::from);
+                Some((lat, lon, label))
+            });
+
+        let (lat, lon, label) = extracted.unwrap();
+        assert!((lat - 37.76).abs() < f64::EPSILON);
+        assert!((lon - (-122.42)).abs() < f64::EPSILON);
+        assert_eq!(label.as_deref(), Some("La Taqueria"));
+    }
+
+    #[test]
+    fn extract_location_without_label() {
+        let result = serde_json::json!({
+            "latitude": 48.8566,
+            "longitude": 2.3522,
+            "screenshot": "data:image/png;base64,abc"
+        });
+
+        let extracted = result
+            .get("latitude")
+            .and_then(|v| v.as_f64())
+            .and_then(|lat| {
+                let lon = result.get("longitude")?.as_f64()?;
+                let label = result
+                    .get("label")
+                    .and_then(|l| l.as_str())
+                    .map(String::from);
+                Some((lat, lon, label))
+            });
+
+        let (lat, lon, label) = extracted.unwrap();
+        assert!((lat - 48.8566).abs() < f64::EPSILON);
+        assert!((lon - 2.3522).abs() < f64::EPSILON);
+        assert!(label.is_none());
+    }
+
+    #[test]
+    fn extract_location_missing_coords_returns_none() {
+        let result = serde_json::json!({
+            "screenshot": "data:image/png;base64,abc"
+        });
+
+        let extracted = result
+            .get("latitude")
+            .and_then(|v| v.as_f64())
+            .and_then(|_lat| {
+                let _lon = result.get("longitude")?.as_f64()?;
+                Some(())
+            });
+
+        assert!(extracted.is_none());
     }
 }

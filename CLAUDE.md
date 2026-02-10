@@ -157,7 +157,30 @@ logging, or display. Keep the core logic type-safe.
 
 - Use `anyhow::Result` for application-level errors and `thiserror` for
   library-level errors that callers need to match on.
-- Propagate errors with `?`; avoid `.unwrap()` outside of tests.
+- Propagate errors with `?`.
+- **Never use `.unwrap()` or `.expect()` in production code.** The workspace
+  lints enforce this via `clippy::unwrap_used` and `clippy::expect_used` set
+  to `deny`. Tests are exempt (use `#[allow(clippy::unwrap_used)]` on test
+  modules). Instead of unwrapping, use one of these alternatives:
+
+  ```rust
+  // Propagate with ?
+  let value = something.ok_or_else(|| anyhow::anyhow!("missing value"))?;
+
+  // Mutex/RwLock — recover from poisoning
+  let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+
+  // Pattern match
+  if let Some(v) = optional { /* use v */ }
+
+  // Provide a default
+  let v = optional.unwrap_or_default();
+  ```
+
+  The only acceptable uses of `.expect()` are at process startup for
+  resources that are fundamentally required (e.g. database migrations,
+  TLS config). These must have descriptive messages explaining why the
+  panic is intentional.
 
 ### Date, time, and crate reuse
 
@@ -554,6 +577,28 @@ functions in `sandbox.rs`, parameterised by CLI binary name. The
 config-crate types to tools-crate types — use it instead of manual
 field-by-field conversion.
 
+## Logging Levels
+
+In production, the `debug` level is **never enabled** by default. Any log
+that needs to be visible for diagnosing issues must use `info!` or `warn!`,
+not `debug!`.
+
+- **`error!`** — unrecoverable failures (process will stop or feature is broken).
+- **`warn!`** — unexpected conditions that the system can recover from, but
+  an operator should investigate (e.g. auth failures, network errors, corrupt
+  data).
+- **`info!`** — normal operational milestones (startup, config loaded, tokens
+  saved). Keep these concise — one or two per major operation.
+- **`debug!`** — detailed diagnostic info (request/response bodies, internal
+  state). Expected "not configured" states belong here, **not** at `warn!`.
+- **`trace!`** — very verbose per-item data (token-by-token output, every SSE
+  line).
+
+**Common mistake:** logging `warn!` when a provider simply isn't configured
+(tokens not found, OAuth not set up). This floods the log on every startup
+for users who only use one or two providers. Use `debug!` for these expected
+conditions and reserve `warn!` for genuine failures.
+
 ## Security
 
 ### WebSocket Origin validation (CSWSH protection)
@@ -809,6 +854,18 @@ The Build Packages workflow derives artifact versions from the tag when running
 on tagged pushes, but `Cargo.toml` must still be kept in sync for local builds,
 packaging metadata consistency, and future non-tag runs.
 
+**Cargo.lock must stay in sync.** After changing dependencies or merging
+`main`, run `cargo fetch` (without `--locked`) to sync the lockfile without
+upgrading existing dependency versions, then commit the result. Verify with
+`cargo fetch --locked`. CI uses `--locked` and will reject a stale lockfile.
+`local-validate.sh` handles this automatically — if the lockfile is stale it
+runs `cargo fetch` and auto-commits the update before proceeding.
+
+Only use `cargo update --workspace` when you intentionally want to upgrade
+dependency versions. For routine lockfile sync (e.g. after merging main or
+bumping the workspace version), `cargo fetch` is sufficient and won't change
+versions unnecessarily.
+
 **Merging main into your branch:** When merging `main` into your current branch
 and encountering conflicts, resolve them by keeping both sides of the changes.
 Don't discard either the incoming changes from main or your local changes —
@@ -899,3 +956,42 @@ Be careful about this.
 Helpful suggestion.
 \`\`\`
 ```
+
+## Landing the Plane (Session Completion)
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd sync
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+
+## Issue Tracking
+
+This project uses **bd (beads)** for issue tracking.
+Run `bd prime` for workflow context, or install hooks (`bd hooks install`) for auto-injection.
+
+**Quick reference:**
+- `bd ready` - Find unblocked work
+- `bd create "Title" --type task --priority 2` - Create issue
+- `bd close <id>` - Complete work
+- `bd sync` - Sync with git (run at session end)
+
+For full workflow details: `bd prime`

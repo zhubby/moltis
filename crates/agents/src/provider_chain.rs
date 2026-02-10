@@ -152,7 +152,7 @@ impl ProviderState {
 
     fn record_failure(&self) {
         self.consecutive_failures.fetch_add(1, Ordering::SeqCst);
-        *self.last_failure.lock().unwrap() = Some(Instant::now());
+        *self.last_failure.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
 
     /// Returns `true` when the circuit is open (provider should be skipped).
@@ -162,7 +162,7 @@ impl ProviderState {
         if failures < 3 {
             return false;
         }
-        let last = self.last_failure.lock().unwrap();
+        let last = self.last_failure.lock().unwrap_or_else(|e| e.into_inner());
         match *last {
             Some(t) if t.elapsed() < Duration::from_secs(60) => true,
             _ => {
@@ -275,6 +275,20 @@ impl LlmProvider for ProviderChain {
                         )
                         .increment(u64::from(resp.usage.output_tokens));
 
+                        counter!(
+                            llm_metrics::CACHE_READ_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(resp.usage.cache_read_tokens));
+
+                        counter!(
+                            llm_metrics::CACHE_WRITE_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(resp.usage.cache_write_tokens));
+
                         histogram!(
                             llm_metrics::COMPLETION_DURATION_SECONDS,
                             labels::PROVIDER => provider_name,
@@ -348,6 +362,7 @@ impl LlmProvider for ProviderChain {
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {
@@ -383,6 +398,7 @@ mod tests {
                 usage: Usage {
                     input_tokens: 1,
                     output_tokens: 1,
+                    ..Default::default()
                 },
             })
         }
@@ -394,6 +410,7 @@ mod tests {
             Box::pin(tokio_stream::once(StreamEvent::Done(Usage {
                 input_tokens: 1,
                 output_tokens: 1,
+                ..Default::default()
             })))
         }
     }
@@ -682,6 +699,7 @@ mod tests {
                 usage: Usage {
                     input_tokens: 1,
                     output_tokens: 1,
+                    ..Default::default()
                 },
             })
         }
@@ -693,6 +711,7 @@ mod tests {
             Box::pin(tokio_stream::once(StreamEvent::Done(Usage {
                 input_tokens: 1,
                 output_tokens: 1,
+                ..Default::default()
             })))
         }
 
@@ -705,6 +724,7 @@ mod tests {
             Box::pin(tokio_stream::once(StreamEvent::Done(Usage {
                 input_tokens: 1,
                 output_tokens: 1,
+                ..Default::default()
             })))
         }
     }

@@ -3,9 +3,9 @@ use {
     async_trait::async_trait,
     base64::Engine,
     teloxide::{
-        payloads::SendMessageSetters,
+        payloads::{SendLocationSetters, SendMessageSetters, SendVenueSetters},
         prelude::*,
-        types::{ChatAction, ChatId, InputFile, ParseMode},
+        types::{ChatAction, ChatId, InputFile, MessageId, ParseMode, ReplyParameters},
     },
     tracing::debug,
 };
@@ -29,19 +29,47 @@ pub struct TelegramOutbound {
 
 impl TelegramOutbound {
     fn get_bot(&self, account_id: &str) -> Result<teloxide::Bot> {
-        let accounts = self.accounts.read().unwrap();
+        let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
         accounts
             .get(account_id)
             .map(|s| s.bot.clone())
             .ok_or_else(|| anyhow::anyhow!("unknown account: {account_id}"))
     }
+
+    /// Build reply parameters only when `reply_to_message` is enabled for this account.
+    fn reply_params(&self, account_id: &str, reply_to: Option<&str>) -> Option<ReplyParameters> {
+        let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
+        let enabled = accounts
+            .get(account_id)
+            .is_some_and(|s| s.config.reply_to_message);
+        if enabled {
+            parse_reply_params(reply_to)
+        } else {
+            None
+        }
+    }
+}
+
+/// Parse a platform message ID string into Telegram `ReplyParameters`.
+/// Returns `None` if the string is not a valid i32 (Telegram message IDs are i32).
+fn parse_reply_params(reply_to: Option<&str>) -> Option<ReplyParameters> {
+    reply_to
+        .and_then(|id| id.parse::<i32>().ok())
+        .map(|id| ReplyParameters::new(MessageId(id)).allow_sending_without_reply())
 }
 
 #[async_trait]
 impl ChannelOutbound for TelegramOutbound {
-    async fn send_text(&self, account_id: &str, to: &str, text: &str) -> Result<()> {
+    async fn send_text(
+        &self,
+        account_id: &str,
+        to: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let bot = self.get_bot(account_id)?;
         let chat_id = ChatId(to.parse::<i64>()?);
+        let rp = self.reply_params(account_id, reply_to);
 
         // Send typing indicator
         let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
@@ -49,10 +77,76 @@ impl ChannelOutbound for TelegramOutbound {
         let html = markdown::markdown_to_telegram_html(text);
         let chunks = markdown::chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
 
-        for chunk in chunks {
-            bot.send_message(chat_id, &chunk)
-                .parse_mode(ParseMode::Html)
-                .await?;
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut req = bot.send_message(chat_id, chunk).parse_mode(ParseMode::Html);
+            // Thread only the first chunk as a reply to the original message.
+            if i == 0
+                && let Some(ref rp) = rp
+            {
+                req = req.reply_parameters(rp.clone());
+            }
+            req.await?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_text_with_suffix(
+        &self,
+        account_id: &str,
+        to: &str,
+        text: &str,
+        suffix_html: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
+        let bot = self.get_bot(account_id)?;
+        let chat_id = ChatId(to.parse::<i64>()?);
+        let rp = self.reply_params(account_id, reply_to);
+
+        // Send typing indicator
+        let _ = bot.send_chat_action(chat_id, ChatAction::Typing).await;
+
+        let html = markdown::markdown_to_telegram_html(text);
+
+        // Append the pre-formatted suffix (e.g. activity logbook) to the last chunk.
+        let chunks = markdown::chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
+        let last_idx = chunks.len().saturating_sub(1);
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let content = if i == last_idx {
+                // Append suffix to the last chunk. If it would exceed the limit,
+                // the suffix becomes a separate final message.
+                let combined = format!("{chunk}\n\n{suffix_html}");
+                if combined.len() <= TELEGRAM_MAX_MESSAGE_LEN {
+                    combined
+                } else {
+                    // Send this chunk first, then the suffix as a separate message.
+                    let mut req = bot.send_message(chat_id, chunk).parse_mode(ParseMode::Html);
+                    if i == 0
+                        && let Some(ref rp) = rp
+                    {
+                        req = req.reply_parameters(rp.clone());
+                    }
+                    req.await?;
+                    // Send suffix as the final message (no reply threading).
+                    bot.send_message(chat_id, suffix_html)
+                        .parse_mode(ParseMode::Html)
+                        .disable_notification(true)
+                        .await?;
+                    return Ok(());
+                }
+            } else {
+                chunk.clone()
+            };
+            let mut req = bot
+                .send_message(chat_id, &content)
+                .parse_mode(ParseMode::Html);
+            if i == 0
+                && let Some(ref rp) = rp
+            {
+                req = req.reply_parameters(rp.clone());
+            }
+            req.await?;
         }
 
         Ok(())
@@ -65,26 +159,46 @@ impl ChannelOutbound for TelegramOutbound {
         Ok(())
     }
 
-    async fn send_text_silent(&self, account_id: &str, to: &str, text: &str) -> Result<()> {
+    async fn send_text_silent(
+        &self,
+        account_id: &str,
+        to: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let bot = self.get_bot(account_id)?;
         let chat_id = ChatId(to.parse::<i64>()?);
+        let rp = self.reply_params(account_id, reply_to);
 
         let html = markdown::markdown_to_telegram_html(text);
         let chunks = markdown::chunk_message(&html, TELEGRAM_MAX_MESSAGE_LEN);
 
-        for chunk in chunks {
-            bot.send_message(chat_id, &chunk)
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut req = bot
+                .send_message(chat_id, chunk)
                 .parse_mode(ParseMode::Html)
-                .disable_notification(true) // Silent - no sound/vibration
-                .await?;
+                .disable_notification(true);
+            if i == 0
+                && let Some(ref rp) = rp
+            {
+                req = req.reply_parameters(rp.clone());
+            }
+            req.await?;
         }
 
         Ok(())
     }
 
-    async fn send_media(&self, account_id: &str, to: &str, payload: &ReplyPayload) -> Result<()> {
+    async fn send_media(
+        &self,
+        account_id: &str,
+        to: &str,
+        payload: &ReplyPayload,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
         let bot = self.get_bot(account_id)?;
         let chat_id = ChatId(to.parse::<i64>()?);
+        let rp = self.reply_params(account_id, reply_to);
 
         if let Some(ref media) = payload.media {
             // Handle base64 data URIs (e.g., "data:image/png;base64,...")
@@ -120,6 +234,9 @@ impl ChannelOutbound for TelegramOutbound {
                     let mut req = bot.send_photo(chat_id, input);
                     if !payload.text.is_empty() {
                         req = req.caption(&payload.text);
+                    }
+                    if let Some(ref rp) = rp {
+                        req = req.reply_parameters(rp.clone());
                     }
 
                     match req.await {
@@ -206,7 +323,40 @@ impl ChannelOutbound for TelegramOutbound {
                 }
             }
         } else if !payload.text.is_empty() {
-            self.send_text(account_id, to, &payload.text).await?;
+            self.send_text(account_id, to, &payload.text, reply_to)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_location(
+        &self,
+        account_id: &str,
+        to: &str,
+        latitude: f64,
+        longitude: f64,
+        title: Option<&str>,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
+        let bot = self.get_bot(account_id)?;
+        let chat_id = ChatId(to.parse::<i64>()?);
+        let rp = self.reply_params(account_id, reply_to);
+
+        if let Some(name) = title {
+            // Venue shows the place name in the chat bubble.
+            let address = format!("{latitude:.6}, {longitude:.6}");
+            let mut req = bot.send_venue(chat_id, latitude, longitude, name, address);
+            if let Some(ref rp) = rp {
+                req = req.reply_parameters(rp.clone());
+            }
+            req.await?;
+        } else {
+            let mut req = bot.send_location(chat_id, latitude, longitude);
+            if let Some(ref rp) = rp {
+                req = req.reply_parameters(rp.clone());
+            }
+            req.await?;
         }
 
         Ok(())
@@ -262,7 +412,7 @@ impl ChannelStreamOutbound for TelegramOutbound {
         let chat_id = ChatId(to.parse::<i64>()?);
 
         let throttle_ms = {
-            let accounts = self.accounts.read().unwrap();
+            let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
             accounts
                 .get(account_id)
                 .map(|s| s.config.edit_throttle_ms)
@@ -333,5 +483,31 @@ impl ChannelStreamOutbound for TelegramOutbound {
         }
 
         Ok(())
+    }
+}
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        std::{collections::HashMap, sync::Arc},
+    };
+
+    #[tokio::test]
+    async fn send_location_unknown_account_returns_error() {
+        let accounts: AccountStateMap = Arc::new(std::sync::RwLock::new(HashMap::new()));
+        let outbound = TelegramOutbound {
+            accounts: Arc::clone(&accounts),
+        };
+
+        let result = outbound
+            .send_location("nonexistent", "12345", 48.8566, 2.3522, Some("Paris"), None)
+            .await;
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("unknown account"),
+            "should report unknown account"
+        );
     }
 }

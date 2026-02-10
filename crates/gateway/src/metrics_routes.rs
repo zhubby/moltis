@@ -29,6 +29,7 @@ pub async fn prometheus_metrics_handler(State(state): State<AppState>) -> impl I
     match metrics_handle {
         Some(handle) => {
             let body = handle.render();
+            #[allow(clippy::unwrap_used)] // building response with valid static headers
             Response::builder()
                 .status(StatusCode::OK)
                 .header(
@@ -38,11 +39,14 @@ pub async fn prometheus_metrics_handler(State(state): State<AppState>) -> impl I
                 .body(body)
                 .unwrap()
         },
-        None => Response::builder()
-            .status(StatusCode::SERVICE_UNAVAILABLE)
-            .header(header::CONTENT_TYPE, "text/plain")
-            .body("Metrics not enabled".to_string())
-            .unwrap(),
+        None => {
+            #[allow(clippy::unwrap_used)] // building response with valid static headers
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body("Metrics not enabled".to_string())
+                .unwrap()
+        },
     }
 }
 
@@ -122,8 +126,8 @@ pub async fn api_metrics_summary_handler(State(state): State<AppState>) -> impl 
 /// for rendering charts in the monitoring UI.
 #[cfg(feature = "metrics")]
 pub async fn api_metrics_history_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let history = state.gateway.metrics_history.read().await;
-    let points: Vec<_> = history.iter().collect();
+    let inner = state.gateway.inner.read().await;
+    let points: Vec<_> = inner.metrics_history.iter().collect();
 
     Json(serde_json::json!({
         "enabled": true,

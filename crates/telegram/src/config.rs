@@ -60,6 +60,10 @@ pub struct TelegramAccountConfig {
 
     /// Cooldown in seconds after 3 failed OTP attempts (default: 300).
     pub otp_cooldown_secs: u64,
+
+    /// Send bot responses as Telegram replies to the user's message.
+    /// When false (default), responses are sent as standalone messages.
+    pub reply_to_message: bool,
 }
 
 impl std::fmt::Debug for TelegramAccountConfig {
@@ -94,10 +98,12 @@ impl Default for TelegramAccountConfig {
             model_provider: None,
             otp_self_approval: true,
             otp_cooldown_secs: 300,
+            reply_to_message: false,
         }
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

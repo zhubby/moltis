@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration tests for the auth middleware protecting API endpoints.
 
 use std::{net::SocketAddr, sync::Arc};
@@ -22,16 +23,23 @@ async fn start_auth_server() -> (SocketAddr, Arc<CredentialStore>) {
 
 /// Start a test server and also return the GatewayState for setup code tests.
 async fn start_auth_server_with_state() -> (SocketAddr, Arc<CredentialStore>, Arc<GatewayState>) {
-    start_auth_server_impl(false).await
+    start_auth_server_impl(false, false).await
 }
 
 /// Start a localhost-only test server.
 async fn start_localhost_server() -> (SocketAddr, Arc<CredentialStore>, Arc<GatewayState>) {
-    start_auth_server_impl(true).await
+    start_auth_server_impl(true, false).await
+}
+
+/// Start a test server that simulates being behind a proxy (all connections
+/// treated as remote even though they originate from loopback).
+async fn start_proxied_server() -> (SocketAddr, Arc<CredentialStore>, Arc<GatewayState>) {
+    start_auth_server_impl(false, true).await
 }
 
 async fn start_auth_server_impl(
     localhost_only: bool,
+    behind_proxy: bool,
 ) -> (SocketAddr, Arc<CredentialStore>, Arc<GatewayState>) {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     let auth_config = moltis_config::AuthConfig::default();
@@ -46,16 +54,16 @@ async fn start_auth_server_impl(
     let state = GatewayState::with_options(
         resolved_auth,
         services,
-        Arc::new(moltis_tools::approval::ApprovalManager::default()),
         None,
         Some(Arc::clone(&cred_store)),
         None,
-        None,
         localhost_only,
+        behind_proxy,
         false,
         None,
         None,
         18789,
+        false,
         None,
         #[cfg(feature = "metrics")]
         None,
@@ -65,9 +73,9 @@ async fn start_auth_server_impl(
     let state_clone = Arc::clone(&state);
     let methods = Arc::new(MethodRegistry::new());
     #[cfg(feature = "push-notifications")]
-    let app = build_gateway_app(state, methods, None);
+    let app = build_gateway_app(state, methods, None, false, None);
     #[cfg(not(feature = "push-notifications"))]
-    let app = build_gateway_app(state, methods);
+    let app = build_gateway_app(state, methods, false, None);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -86,16 +94,12 @@ async fn start_auth_server_impl(
 async fn start_noauth_server() -> SocketAddr {
     let resolved_auth = auth::resolve_auth(None, None);
     let services = GatewayServices::noop();
-    let state = GatewayState::new(
-        resolved_auth,
-        services,
-        Arc::new(moltis_tools::approval::ApprovalManager::default()),
-    );
+    let state = GatewayState::new(resolved_auth, services);
     let methods = Arc::new(MethodRegistry::new());
     #[cfg(feature = "push-notifications")]
-    let app = build_gateway_app(state, methods, None);
+    let app = build_gateway_app(state, methods, None, false, None);
     #[cfg(not(feature = "push-notifications"))]
-    let app = build_gateway_app(state, methods);
+    let app = build_gateway_app(state, methods, false, None);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -300,9 +304,10 @@ async fn reenable_auth_after_reset() {
 
     // Reset should have generated a new setup code.
     let code = state
-        .setup_code
+        .inner
         .read()
         .await
+        .setup_code
         .as_ref()
         .unwrap()
         .expose_secret()
@@ -387,7 +392,7 @@ async fn revoked_api_key_returns_401() {
 #[tokio::test]
 async fn setup_without_code_when_required_returns_403() {
     let (addr, _store, state) = start_auth_server_with_state().await;
-    *state.setup_code.write().await = Some(secrecy::Secret::new("123456".to_string()));
+    state.inner.write().await.setup_code = Some(secrecy::Secret::new("123456".to_string()));
 
     let client = reqwest::Client::new();
     let resp = client
@@ -405,7 +410,7 @@ async fn setup_without_code_when_required_returns_403() {
 #[tokio::test]
 async fn setup_with_wrong_code_returns_403() {
     let (addr, _store, state) = start_auth_server_with_state().await;
-    *state.setup_code.write().await = Some(secrecy::Secret::new("123456".to_string()));
+    state.inner.write().await.setup_code = Some(secrecy::Secret::new("123456".to_string()));
 
     let client = reqwest::Client::new();
     let resp = client
@@ -423,7 +428,7 @@ async fn setup_with_wrong_code_returns_403() {
 #[tokio::test]
 async fn setup_with_correct_code_succeeds() {
     let (addr, _store, state) = start_auth_server_with_state().await;
-    *state.setup_code.write().await = Some(secrecy::Secret::new("123456".to_string()));
+    state.inner.write().await.setup_code = Some(secrecy::Secret::new("123456".to_string()));
 
     let client = reqwest::Client::new();
     let resp = client
@@ -436,7 +441,7 @@ async fn setup_with_correct_code_succeeds() {
     assert_eq!(resp.status(), 200);
 
     // Code should be cleared after successful setup.
-    assert!(state.setup_code.read().await.is_none());
+    assert!(state.inner.read().await.setup_code.is_none());
 }
 
 /// Setup code not required when already set up.
@@ -454,11 +459,14 @@ async fn setup_code_not_required_when_already_setup() {
 }
 
 /// Status reports setup_code_required when code is set.
+/// Uses a "proxied" server so the local connection is treated as remote
+/// (otherwise the three-tier model auto-bypasses auth for local connections
+/// without a password, making setup_required = false).
 #[cfg(feature = "web-ui")]
 #[tokio::test]
 async fn status_reports_setup_code_required() {
-    let (addr, _store, state) = start_auth_server_with_state().await;
-    *state.setup_code.write().await = Some(secrecy::Secret::new("654321".to_string()));
+    let (addr, _store, state) = start_proxied_server().await;
+    state.inner.write().await.setup_code = Some(secrecy::Secret::new("654321".to_string()));
 
     let resp = reqwest::get(format!("http://{addr}/api/auth/status"))
         .await
@@ -548,6 +556,63 @@ async fn localhost_set_password_without_current() {
     assert!(store.verify_password("newpass123").await.unwrap());
 }
 
+/// Unauthenticated POST to /api/sessions/:key/upload returns 401.
+#[cfg(feature = "web-ui")]
+#[tokio::test]
+async fn upload_endpoint_requires_auth() {
+    let (addr, store) = start_auth_server().await;
+    store.set_initial_password("testpass123").await.unwrap();
+
+    // Unauthenticated POST should get 401.
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{addr}/api/sessions/main/upload"))
+        .header("Content-Type", "audio/webm")
+        .body(vec![0u8; 100])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    // Authenticated POST should NOT get 401 (may get 503 since session store
+    // is noop, but definitely not 401).
+    let token = store.create_session().await.unwrap();
+    let resp = client
+        .post(format!("http://{addr}/api/sessions/main/upload"))
+        .header("Cookie", format!("moltis_session={token}"))
+        .header("Content-Type", "audio/webm")
+        .body(vec![0u8; 100])
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), 401);
+}
+
+/// Unauthenticated GET to /api/sessions/:key/media/:file returns 401.
+#[cfg(feature = "web-ui")]
+#[tokio::test]
+async fn media_endpoint_requires_auth() {
+    let (addr, store) = start_auth_server().await;
+    store.set_initial_password("testpass123").await.unwrap();
+
+    // Unauthenticated GET should get 401.
+    let resp = reqwest::get(format!("http://{addr}/api/sessions/main/media/test.png"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    // Authenticated GET should NOT get 401.
+    let token = store.create_session().await.unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{addr}/api/sessions/main/media/test.png"))
+        .header("Cookie", format!("moltis_session={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), 401);
+}
+
 /// On localhost with password set, status returns has_password: true.
 #[cfg(feature = "web-ui")]
 #[tokio::test]
@@ -563,4 +628,61 @@ async fn localhost_with_password_requires_login() {
     assert_eq!(body["setup_required"], false);
     // Not authenticated without a session.
     assert_eq!(body["authenticated"], false);
+}
+
+// ── Three-tier model tests ──────────────────────────────────────────────────
+
+/// Tier 3: proxied server + no password → protected API returns 401.
+/// Remote connections without a password can only reach /api/auth/* for setup.
+#[cfg(feature = "web-ui")]
+#[tokio::test]
+async fn proxied_no_password_protected_returns_401() {
+    let (addr, _store, _state) = start_proxied_server().await;
+    let resp = reqwest::get(format!("http://{addr}/api/bootstrap"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "remote connection without password must not access protected API"
+    );
+}
+
+/// Tier 3: proxied server + no password → auth status is accessible (public route).
+#[cfg(feature = "web-ui")]
+#[tokio::test]
+async fn proxied_no_password_auth_status_accessible() {
+    let (addr, _store, _state) = start_proxied_server().await;
+    let resp = reqwest::get(format!("http://{addr}/api/auth/status"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    // Remote connection: not auto-authenticated despite no password.
+    assert_eq!(body["authenticated"], false);
+    assert_eq!(body["setup_required"], true);
+}
+
+/// Tier 1: proxied server + password set → always requires auth.
+#[cfg(feature = "web-ui")]
+#[tokio::test]
+async fn proxied_with_password_requires_auth() {
+    let (addr, store, _state) = start_proxied_server().await;
+    store.set_initial_password("testpass123").await.unwrap();
+
+    let resp = reqwest::get(format!("http://{addr}/api/bootstrap"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401);
+
+    // With a valid session, it works.
+    let token = store.create_session().await.unwrap();
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{addr}/api/bootstrap"))
+        .header("Cookie", format!("moltis_session={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 }

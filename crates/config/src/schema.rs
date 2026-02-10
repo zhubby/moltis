@@ -17,12 +17,128 @@ pub struct AgentIdentity {
     pub vibe: Option<String>,
 }
 
+/// IANA timezone (e.g. `"Europe/Paris"`).
+///
+/// Wraps [`chrono_tz::Tz`] and (de)serialises as a plain string so it stays
+/// compatible with the YAML frontmatter in `USER.md`.
+#[derive(Debug, Clone)]
+pub struct Timezone(pub chrono_tz::Tz);
+
+impl Timezone {
+    /// The IANA name, e.g. `"Europe/Paris"`.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    /// The inner [`chrono_tz::Tz`] value.
+    #[must_use]
+    pub fn tz(&self) -> chrono_tz::Tz {
+        self.0
+    }
+}
+
+impl std::fmt::Display for Timezone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.name())
+    }
+}
+
+impl std::str::FromStr for Timezone {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<chrono_tz::Tz>()
+            .map(Self)
+            .map_err(|_| format!("unknown IANA timezone: {s}"))
+    }
+}
+
+impl From<chrono_tz::Tz> for Timezone {
+    fn from(tz: chrono_tz::Tz) -> Self {
+        Self(tz)
+    }
+}
+
+impl Serialize for Timezone {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Timezone {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse::<chrono_tz::Tz>()
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Geographic coordinates (WGS 84).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeoLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Human-readable place name from reverse geocoding (e.g. "Noe Valley, San Francisco, CA").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub place: Option<String>,
+    /// Unix epoch seconds when the location was last updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+}
+
+impl GeoLocation {
+    /// Create a new `GeoLocation` stamped with the current time.
+    pub fn now(latitude: f64, longitude: f64, place: Option<String>) -> Self {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        Self {
+            latitude,
+            longitude,
+            place,
+            updated_at: Some(ts),
+        }
+    }
+}
+
+impl std::fmt::Display for GeoLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(ref place) = self.place {
+            write!(f, "{place}")?;
+        } else {
+            write!(f, "{},{}", self.latitude, self.longitude)?;
+        }
+        if let Some(ts) = self.updated_at {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let age_secs = now.saturating_sub(ts);
+            let age_str = if age_secs < 60 {
+                "just now".to_string()
+            } else if age_secs < 3600 {
+                format!("{}m ago", age_secs / 60)
+            } else if age_secs < 86400 {
+                format!("{}h ago", age_secs / 3600)
+            } else {
+                format!("{}d ago", age_secs / 86400)
+            };
+            write!(f, " (updated {age_str})")?;
+        }
+        Ok(())
+    }
+}
+
 /// User profile collected during onboarding.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserProfile {
     pub name: Option<String>,
-    pub timezone: Option<String>,
+    pub timezone: Option<Timezone>,
+    pub location: Option<GeoLocation>,
 }
 
 /// Resolved identity combining agent identity and user profile.
@@ -511,6 +627,12 @@ pub struct ServerConfig {
     /// Port to listen on. When a new config is created, a random available port
     /// is generated so each installation gets a unique port.
     pub port: u16,
+    /// Enable verbose Axum/Tower HTTP request logs (`http_request` spans).
+    /// Useful for debugging redirects and request flow.
+    pub http_request_logs: bool,
+    /// Enable WebSocket request/response logs (`ws:` entries).
+    /// Useful for debugging RPC calls from the web UI.
+    pub ws_request_logs: bool,
     /// Optional GitHub repository URL used by the update checker.
     ///
     /// When unset, Moltis falls back to the package repository metadata.
@@ -522,6 +644,8 @@ impl Default for ServerConfig {
         Self {
             bind: "127.0.0.1".into(),
             port: 0, // Will be replaced with a random port when config is created
+            http_request_logs: false,
+            ws_request_logs: false,
             update_repository_url: None,
         }
     }
@@ -872,6 +996,8 @@ impl Default for TlsConfig {
 pub struct ChatConfig {
     /// How to handle messages that arrive while an agent run is active.
     pub message_queue_mode: MessageQueueMode,
+    /// Preferred model IDs to show first in selectors (full or raw model IDs).
+    pub priority_models: Vec<String>,
 }
 
 /// Behaviour when `chat.send()` is called during an active run.
@@ -1235,6 +1361,10 @@ fn default_sandbox_packages() -> Vec<String> {
         "patchelf",
         // Text processing & search
         "ripgrep",
+        "fd-find",
+        "yq",
+        // Terminal multiplexer (useful for capturing ncurses apps)
+        "tmux",
         // Browser automation (for browser tool)
         "chromium",
         "libxss1",
@@ -1253,6 +1383,68 @@ fn default_sandbox_packages() -> Vec<String> {
         "libxrandr2",
         "libxkbcommon0",
         "fonts-liberation",
+        // Image processing (headless)
+        "imagemagick",
+        "graphicsmagick",
+        "libvips-tools",
+        "pngquant",
+        "optipng",
+        "jpegoptim",
+        "webp",
+        "libimage-exiftool-perl",
+        "libheif-dev",
+        // Audio / video / media
+        "ffmpeg",
+        "sox",
+        "lame",
+        "flac",
+        "vorbis-tools",
+        "opus-tools",
+        "mediainfo",
+        // Document & office conversion
+        "pandoc",
+        "poppler-utils",
+        "ghostscript",
+        "texlive-latex-base",
+        "texlive-latex-extra",
+        "texlive-fonts-recommended",
+        "antiword",
+        "catdoc",
+        "unrtf",
+        "libreoffice-core",
+        "libreoffice-writer",
+        // Data processing & conversion
+        "csvtool",
+        "xmlstarlet",
+        "html2text",
+        "dos2unix",
+        "miller",
+        "datamash",
+        // GIS / OpenStreetMap / map generation
+        "gdal-bin",
+        "mapnik-utils",
+        "osm2pgsql",
+        "osmium-tool",
+        "osmctools",
+        "python3-mapnik",
+        "libgdal-dev",
+        // CalDAV / CardDAV
+        "vdirsyncer",
+        "khal",
+        "python3-caldav",
+        // Email (IMAP sync, indexing, CLI clients)
+        "isync",
+        "offlineimap3",
+        "notmuch",
+        "notmuch-mutt",
+        "aerc",
+        "mutt",
+        "neomutt",
+        // Newsgroups (NNTP)
+        "tin",
+        "slrn",
+        // Messaging APIs
+        "python3-discord",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -1342,6 +1534,11 @@ pub struct OAuthProviderConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProvidersConfig {
+    /// Optional allowlist of providers offered in web UI pickers (onboarding and
+    /// "add provider" modal). Empty means show all known providers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub offered: Vec<String>,
+
     /// Provider-specific settings keyed by provider name.
     /// Known keys: "anthropic", "openai", "gemini", "groq", "xai", "deepseek"
     #[serde(flatten)]
@@ -1436,5 +1633,62 @@ impl ProvidersConfig {
     /// Get the configured entry for a provider, if any.
     pub fn get(&self, name: &str) -> Option<&ProviderEntry> {
         self.providers.get(name)
+    }
+}
+
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geolocation_display_with_place() {
+        let loc = GeoLocation {
+            latitude: 37.759,
+            longitude: -122.433,
+            place: Some("Noe Valley, San Francisco, CA".to_string()),
+            updated_at: None,
+        };
+        assert_eq!(loc.to_string(), "Noe Valley, San Francisco, CA");
+    }
+
+    #[test]
+    fn geolocation_display_without_place() {
+        let loc = GeoLocation {
+            latitude: 37.759,
+            longitude: -122.433,
+            place: None,
+            updated_at: None,
+        };
+        assert_eq!(loc.to_string(), "37.759,-122.433");
+    }
+
+    #[test]
+    fn geolocation_serde_backward_compat() {
+        // Old JSON without `place` field should deserialize fine.
+        let json = r#"{"latitude":48.8566,"longitude":2.3522,"updated_at":1700000000}"#;
+        let loc: GeoLocation = serde_json::from_str(json).unwrap();
+        assert!((loc.latitude - 48.8566).abs() < 1e-6);
+        assert!(loc.place.is_none());
+    }
+
+    #[test]
+    fn geolocation_serde_with_place() {
+        let loc = GeoLocation {
+            latitude: 48.8566,
+            longitude: 2.3522,
+            place: Some("Paris, France".to_string()),
+            updated_at: Some(1_700_000_000),
+        };
+        let json = serde_json::to_string(&loc).unwrap();
+        let parsed: GeoLocation = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.place.as_deref(), Some("Paris, France"));
+    }
+
+    #[test]
+    fn geolocation_now_stores_place() {
+        let loc = GeoLocation::now(37.0, -122.0, Some("San Francisco".to_string()));
+        assert_eq!(loc.place.as_deref(), Some("San Francisco"));
+        assert!(loc.updated_at.is_some());
     }
 }

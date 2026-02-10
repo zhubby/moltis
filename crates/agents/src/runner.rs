@@ -5,10 +5,15 @@ use {
     tracing::{debug, info, trace, warn},
 };
 
+#[cfg(feature = "metrics")]
+use moltis_metrics::{counter, histogram, labels, llm as llm_metrics};
+
 use moltis_common::hooks::{HookAction, HookPayload, HookRegistry};
 
 use crate::{
-    model::{ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage},
+    model::{
+        ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage, UserContent,
+    },
     tool_registry::ToolRegistry,
 };
 
@@ -35,6 +40,30 @@ fn is_context_window_error(msg: &str) -> bool {
     let lower = msg.to_lowercase();
     CONTEXT_WINDOW_PATTERNS.iter().any(|p| lower.contains(p))
 }
+
+/// Error patterns that indicate a transient server error worth retrying.
+const RETRYABLE_PATTERNS: &[&str] = &[
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 529",
+    "server_error",
+    "internal server error",
+    "overloaded",
+    "bad gateway",
+    "service unavailable",
+    "the server had an error processing your request",
+];
+
+/// Check if an error looks like a transient provider failure that may
+/// succeed on retry (5xx, overloaded, etc.).
+fn is_retryable_server_error(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    RETRYABLE_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// Delay before retrying a failed LLM call.
+const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Typed errors from the agent loop.
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +123,8 @@ pub enum RunnerEvent {
         iterations: usize,
         tool_calls_made: usize,
     },
+    /// A transient LLM error occurred and the runner will retry.
+    RetryingAfterError(String),
 }
 
 /// Try to parse a tool call from the LLM's text response.
@@ -185,7 +216,7 @@ fn strip_base64_blobs(input: &str) -> String {
                 if mime_part.starts_with("image/") {
                     result.push_str("[screenshot captured and displayed in UI]");
                 } else {
-                    write!(result, "[{mime_part} data removed — {total_uri_len} bytes]").unwrap();
+                    let _ = write!(result, "[{mime_part} data removed — {total_uri_len} bytes]");
                 }
                 rest = &rest[start + total_uri_len..];
                 continue;
@@ -217,7 +248,7 @@ fn strip_hex_blobs(input: &str) -> String {
             }
             let run = end - start;
             if run >= BLOB_MIN_LEN {
-                write!(result, "[hex data removed — {run} chars]").unwrap();
+                let _ = write!(result, "[hex data removed — {run} chars]");
             } else {
                 result.push_str(&input[start..end]);
             }
@@ -249,7 +280,7 @@ pub fn sanitize_tool_result(input: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     result.truncate(end);
-    write!(result, "\n\n[truncated — {original_len} bytes total]").unwrap();
+    let _ = write!(result, "\n\n[truncated — {original_len} bytes total]");
     result
 }
 
@@ -311,6 +342,7 @@ fn extract_images_from_text_impl(input: &str) -> (Vec<ExtractedImage>, String) {
 }
 
 /// Test alias for extract_images_from_text_impl
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 fn extract_images_from_text(input: &str) -> (Vec<ExtractedImage>, String) {
     extract_images_from_text_impl(input)
@@ -383,7 +415,7 @@ pub async fn run_agent_loop(
     provider: Arc<dyn LlmProvider>,
     tools: &ToolRegistry,
     system_prompt: &str,
-    user_message: &str,
+    user_content: &UserContent,
     on_event: Option<&OnEvent>,
     history: Option<Vec<ChatMessage>>,
 ) -> Result<AgentRunResult, AgentRunError> {
@@ -391,7 +423,7 @@ pub async fn run_agent_loop(
         provider,
         tools,
         system_prompt,
-        user_message,
+        user_content,
         on_event,
         history,
         None,
@@ -406,7 +438,7 @@ pub async fn run_agent_loop_with_context(
     provider: Arc<dyn LlmProvider>,
     tools: &ToolRegistry,
     system_prompt: &str,
-    user_message: &str,
+    user_content: &UserContent,
     on_event: Option<&OnEvent>,
     history: Option<Vec<ChatMessage>>,
     tool_context: Option<serde_json::Value>,
@@ -418,11 +450,13 @@ pub async fn run_agent_loop_with_context(
         .max_tool_result_bytes;
     let tool_schemas = tools.list_schemas();
 
+    let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
         provider = provider.name(),
         model = provider.id(),
         native_tools,
         tools_count = tool_schemas.len(),
+        is_multimodal,
         "starting agent loop"
     );
 
@@ -433,7 +467,9 @@ pub async fn run_agent_loop_with_context(
         messages.extend(hist);
     }
 
-    messages.push(ChatMessage::user(user_message));
+    messages.push(ChatMessage::User {
+        content: user_content.clone(),
+    });
 
     // Only send tool schemas to providers that support them natively.
     let schemas_for_api = if native_tools {
@@ -446,6 +482,7 @@ pub async fn run_agent_loop_with_context(
     let mut total_tool_calls = 0;
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
+    let mut retries_remaining: u8 = 1;
 
     loop {
         iterations += 1;
@@ -471,16 +508,31 @@ pub async fn run_agent_loop_with_context(
             cb(RunnerEvent::Thinking);
         }
 
-        let mut response: CompletionResponse = provider
-            .complete(&messages, schemas_for_api)
-            .await
-            .map_err(|e| {
-                if is_context_window_error(&e.to_string()) {
-                    AgentRunError::ContextWindowExceeded(e.to_string())
-                } else {
-                    AgentRunError::Other(e)
-                }
-            })?;
+        let mut response: CompletionResponse =
+            match provider.complete(&messages, schemas_for_api).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if is_context_window_error(&msg) {
+                        return Err(AgentRunError::ContextWindowExceeded(msg));
+                    }
+                    if retries_remaining > 0 && is_retryable_server_error(&msg) {
+                        retries_remaining -= 1;
+                        iterations -= 1;
+                        warn!(
+                            error = %msg,
+                            retries_remaining,
+                            "transient LLM error, retrying after delay"
+                        );
+                        if let Some(cb) = on_event {
+                            cb(RunnerEvent::RetryingAfterError(msg));
+                        }
+                        tokio::time::sleep(RETRY_DELAY).await;
+                        continue;
+                    }
+                    return Err(AgentRunError::Other(e));
+                },
+            };
 
         if let Some(cb) = on_event {
             cb(RunnerEvent::ThinkingDone);
@@ -540,6 +592,7 @@ pub async fn run_agent_loop_with_context(
                 usage: Usage {
                     input_tokens: total_input_tokens,
                     output_tokens: total_output_tokens,
+                    ..Default::default()
                 },
             });
         }
@@ -754,7 +807,7 @@ pub async fn run_agent_loop_streaming(
     provider: Arc<dyn LlmProvider>,
     tools: &ToolRegistry,
     system_prompt: &str,
-    user_message: &str,
+    user_content: &UserContent,
     on_event: Option<&OnEvent>,
     history: Option<Vec<ChatMessage>>,
     tool_context: Option<serde_json::Value>,
@@ -766,11 +819,13 @@ pub async fn run_agent_loop_streaming(
         .max_tool_result_bytes;
     let tool_schemas = tools.list_schemas();
 
+    let is_multimodal = matches!(user_content, UserContent::Multimodal(_));
     info!(
         provider = provider.name(),
         model = provider.id(),
         native_tools,
         tools_count = tool_schemas.len(),
+        is_multimodal,
         "starting streaming agent loop"
     );
 
@@ -781,7 +836,9 @@ pub async fn run_agent_loop_streaming(
         messages.extend(hist);
     }
 
-    messages.push(ChatMessage::user(user_message));
+    messages.push(ChatMessage::User {
+        content: user_content.clone(),
+    });
 
     // Only send tool schemas to providers that support them natively.
     let schemas_for_api = if native_tools {
@@ -801,6 +858,7 @@ pub async fn run_agent_loop_streaming(
     let mut total_tool_calls = 0;
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
+    let mut retries_remaining: u8 = 1;
 
     loop {
         iterations += 1;
@@ -830,6 +888,8 @@ pub async fn run_agent_loop_streaming(
         }
 
         // Use streaming API.
+        #[cfg(feature = "metrics")]
+        let iter_start = std::time::Instant::now();
         let mut stream = provider.stream_with_tools(messages.clone(), schemas_for_api.clone());
 
         // Accumulate text and tool calls from the stream.
@@ -881,6 +941,49 @@ pub async fn run_agent_loop_streaming(
                     input_tokens = usage.input_tokens;
                     output_tokens = usage.output_tokens;
                     debug!(input_tokens, output_tokens, "stream done");
+
+                    #[cfg(feature = "metrics")]
+                    {
+                        let provider_name = provider.name().to_string();
+                        let model_id = provider.id().to_string();
+                        let duration = iter_start.elapsed().as_secs_f64();
+                        counter!(
+                            llm_metrics::COMPLETIONS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(1);
+                        counter!(
+                            llm_metrics::INPUT_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(usage.input_tokens));
+                        counter!(
+                            llm_metrics::OUTPUT_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(usage.output_tokens));
+                        counter!(
+                            llm_metrics::CACHE_READ_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(usage.cache_read_tokens));
+                        counter!(
+                            llm_metrics::CACHE_WRITE_TOKENS_TOTAL,
+                            labels::PROVIDER => provider_name.clone(),
+                            labels::MODEL => model_id.clone()
+                        )
+                        .increment(u64::from(usage.cache_write_tokens));
+                        histogram!(
+                            llm_metrics::COMPLETION_DURATION_SECONDS,
+                            labels::PROVIDER => provider_name,
+                            labels::MODEL => model_id
+                        )
+                        .record(duration);
+                    }
                 },
                 StreamEvent::Error(msg) => {
                     stream_error = Some(msg);
@@ -893,10 +996,25 @@ pub async fn run_agent_loop_streaming(
             cb(RunnerEvent::ThinkingDone);
         }
 
-        // Handle stream error.
+        // Handle stream error — retry once on transient server failures.
         if let Some(err) = stream_error {
             if is_context_window_error(&err) {
                 return Err(AgentRunError::ContextWindowExceeded(err));
+            }
+            if retries_remaining > 0 && is_retryable_server_error(&err) {
+                retries_remaining -= 1;
+                // Don't count the failed attempt as an iteration.
+                iterations -= 1;
+                warn!(
+                    error = %err,
+                    retries_remaining,
+                    "transient LLM error, retrying after delay"
+                );
+                if let Some(cb) = on_event {
+                    cb(RunnerEvent::RetryingAfterError(err));
+                }
+                tokio::time::sleep(RETRY_DELAY).await;
+                continue;
             }
             return Err(AgentRunError::Other(anyhow::anyhow!(err)));
         }
@@ -954,6 +1072,7 @@ pub async fn run_agent_loop_streaming(
                 usage: Usage {
                     input_tokens: total_input_tokens,
                     output_tokens: total_output_tokens,
+                    ..Default::default()
                 },
             });
         }
@@ -1149,6 +1268,7 @@ pub async fn run_agent_loop_streaming(
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {
@@ -1222,6 +1342,7 @@ mod tests {
                 usage: Usage {
                     input_tokens: 10,
                     output_tokens: 5,
+                    ..Default::default()
                 },
             })
         }
@@ -1272,6 +1393,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -1281,6 +1403,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 20,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             }
@@ -1326,7 +1449,7 @@ mod tests {
                 Ok(CompletionResponse {
                     text: Some("```tool_call\n{\"tool\": \"exec\", \"arguments\": {\"command\": \"echo hello\"}}\n```".into()),
                     tool_calls: vec![],
-                    usage: Usage { input_tokens: 10, output_tokens: 20 },
+                    usage: Usage { input_tokens: 10, output_tokens: 20, ..Default::default() },
                 })
             } else {
                 // Verify tool result was fed back.
@@ -1350,6 +1473,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 30,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             }
@@ -1431,7 +1555,8 @@ mod tests {
             response_text: "Hello!".into(),
         });
         let tools = ToolRegistry::new();
-        let result = run_agent_loop(provider, &tools, "You are a test bot.", "Hi", None, None)
+        let uc = UserContent::text("Hi");
+        let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, None, None)
             .await
             .unwrap();
         assert_eq!(result.text, "Hello!");
@@ -1447,16 +1572,10 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Box::new(EchoTool));
 
-        let result = run_agent_loop(
-            provider,
-            &tools,
-            "You are a test bot.",
-            "Use the tool",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let uc = UserContent::text("Use the tool");
+        let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.text, "Done!");
         assert_eq!(result.iterations, 2);
@@ -1501,6 +1620,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -1524,6 +1644,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 20,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             }
@@ -1552,11 +1673,12 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
+        let uc = UserContent::text("Run echo hello");
         let result = run_agent_loop(
             provider,
             &tools,
             "You are a test bot.",
-            "Run echo hello",
+            &uc,
             Some(&on_event),
             None,
         )
@@ -1607,11 +1729,12 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
+        let uc = UserContent::text("Run echo hello");
         let result = run_agent_loop(
             provider,
             &tools,
             "You are a test bot.",
-            "Run echo hello",
+            &uc,
             Some(&on_event),
             None,
         )
@@ -1719,6 +1842,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -1728,6 +1852,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 20,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             }
@@ -1785,16 +1910,10 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
-        let result = run_agent_loop(
-            provider,
-            &tools,
-            "Test bot",
-            "Use all tools",
-            Some(&on_event),
-            None,
-        )
-        .await
-        .unwrap();
+        let uc = UserContent::text("Use all tools");
+        let result = run_agent_loop(provider, &tools, "Test bot", &uc, Some(&on_event), None)
+            .await
+            .unwrap();
 
         assert_eq!(result.text, "All done");
         assert_eq!(result.tool_calls_made, 3);
@@ -1862,16 +1981,10 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
-        let result = run_agent_loop(
-            provider,
-            &tools,
-            "Test bot",
-            "Use all tools",
-            Some(&on_event),
-            None,
-        )
-        .await
-        .unwrap();
+        let uc = UserContent::text("Use all tools");
+        let result = run_agent_loop(provider, &tools, "Test bot", &uc, Some(&on_event), None)
+            .await
+            .unwrap();
 
         assert_eq!(result.text, "All done");
         assert_eq!(result.tool_calls_made, 3);
@@ -1928,7 +2041,8 @@ mod tests {
         }));
 
         let start = std::time::Instant::now();
-        let result = run_agent_loop(provider, &tools, "Test bot", "Use all tools", None, None)
+        let uc = UserContent::text("Use all tools");
+        let result = run_agent_loop(provider, &tools, "Test bot", &uc, None, None)
             .await
             .unwrap();
         let elapsed = start.elapsed();
@@ -2181,6 +2295,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -2213,6 +2328,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 20,
                         output_tokens: 10,
+                        ..Default::default()
                     },
                 })
             }
@@ -2264,16 +2380,10 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Box::new(ScreenshotTool));
 
-        let result = run_agent_loop(
-            provider,
-            &tools,
-            "You are a test bot.",
-            "Take a screenshot",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let uc = UserContent::text("Take a screenshot");
+        let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.text, "Screenshot processed successfully");
         assert_eq!(result.tool_calls_made, 1);
@@ -2296,11 +2406,12 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
+        let uc = UserContent::text("Take a screenshot");
         let result = run_agent_loop(
             provider,
             &tools,
             "You are a test bot.",
-            "Take a screenshot",
+            &uc,
             Some(&on_event),
             None,
         )
@@ -2480,10 +2591,7 @@ mod tests {
             Ok(CompletionResponse {
                 text: Some("fallback".into()),
                 tool_calls: vec![],
-                usage: Usage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: Usage::default(),
             })
         }
 
@@ -2523,6 +2631,7 @@ mod tests {
                     StreamEvent::Done(Usage {
                         input_tokens: 10,
                         output_tokens: 5,
+                        ..Default::default()
                     }),
                 ]))
             } else {
@@ -2532,6 +2641,7 @@ mod tests {
                     StreamEvent::Done(Usage {
                         input_tokens: 5,
                         output_tokens: 3,
+                        ..Default::default()
                     }),
                 ]))
             }
@@ -2560,11 +2670,12 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
+        let user_content = UserContent::Text("Create something".to_string());
         let result = run_agent_loop_streaming(
             provider,
             &tools,
             "You are a test bot.",
-            "Create something",
+            &user_content,
             Some(&on_event),
             None,
             None,
@@ -2633,10 +2744,7 @@ mod tests {
             Ok(CompletionResponse {
                 text: Some("fallback".into()),
                 tool_calls: vec![],
-                usage: Usage {
-                    input_tokens: 0,
-                    output_tokens: 0,
-                },
+                usage: Usage::default(),
             })
         }
 
@@ -2682,6 +2790,7 @@ mod tests {
                     StreamEvent::Done(Usage {
                         input_tokens: 15,
                         output_tokens: 10,
+                        ..Default::default()
                     }),
                 ]))
             } else {
@@ -2690,6 +2799,7 @@ mod tests {
                     StreamEvent::Done(Usage {
                         input_tokens: 5,
                         output_tokens: 3,
+                        ..Default::default()
                     }),
                 ]))
             }
@@ -2711,11 +2821,12 @@ mod tests {
             events_clone.lock().unwrap().push(event);
         });
 
+        let user_content = UserContent::Text("Do two things".to_string());
         let result = run_agent_loop_streaming(
             provider,
             &tools,
             "You are a test bot.",
-            "Do two things",
+            &user_content,
             Some(&on_event),
             None,
             None,
@@ -2752,5 +2863,124 @@ mod tests {
             "second tool call args — got: {}",
             tool_starts[1]
         );
+    }
+
+    // ── Retry tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_retryable_server_error() {
+        assert!(is_retryable_server_error(
+            "openai-codex API error HTTP 500 Internal Server Error: {}"
+        ));
+        assert!(is_retryable_server_error(
+            "The server had an error processing your request."
+        ));
+        assert!(is_retryable_server_error("HTTP 502 Bad Gateway"));
+        assert!(is_retryable_server_error("HTTP 503 Service Unavailable"));
+        assert!(is_retryable_server_error(
+            "overloaded_error: server is overloaded"
+        ));
+        assert!(!is_retryable_server_error("context_length_exceeded"));
+        assert!(!is_retryable_server_error("invalid API key"));
+    }
+
+    /// Provider that fails with a 500 on the first call, succeeds on the second.
+    struct TransientFailProvider {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl LlmProvider for TransientFailProvider {
+        fn name(&self) -> &str {
+            "transient-fail"
+        }
+
+        fn id(&self) -> &str {
+            "transient-fail-model"
+        }
+
+        fn supports_tools(&self) -> bool {
+            true
+        }
+
+        async fn complete(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[serde_json::Value],
+        ) -> Result<CompletionResponse> {
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count == 0 {
+                bail!("HTTP 500 Internal Server Error: server_error")
+            } else {
+                Ok(CompletionResponse {
+                    text: Some("Recovered!".into()),
+                    tool_calls: vec![],
+                    usage: Usage::default(),
+                })
+            }
+        }
+
+        fn stream(
+            &self,
+            _messages: Vec<ChatMessage>,
+        ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send + '_>> {
+            let count = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count == 0 {
+                Box::pin(tokio_stream::once(StreamEvent::Error(
+                    "HTTP 500 Internal Server Error: server_error".into(),
+                )))
+            } else {
+                Box::pin(tokio_stream::iter(vec![
+                    StreamEvent::Delta("Recovered!".into()),
+                    StreamEvent::Done(Usage::default()),
+                ]))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retry_on_transient_error_non_streaming() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(TransientFailProvider {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let tools = ToolRegistry::new();
+
+        let result = run_agent_loop(
+            provider,
+            &tools,
+            "sys",
+            &UserContent::text("hello"),
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_ok(), "should recover after retry: {result:?}");
+        assert_eq!(result.unwrap().text, "Recovered!");
+    }
+
+    #[tokio::test]
+    async fn test_retry_on_transient_error_streaming() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(TransientFailProvider {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let tools = ToolRegistry::new();
+
+        let result = run_agent_loop_streaming(
+            provider,
+            &tools,
+            "sys",
+            &UserContent::text("hello"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_ok(), "should recover after retry: {result:?}");
+        assert_eq!(result.unwrap().text, "Recovered!");
     }
 }

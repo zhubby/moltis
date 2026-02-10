@@ -20,6 +20,14 @@ use crate::{
     state::{ConnectedClient, GatewayState},
 };
 
+fn top_level_param_keys(params: &Option<serde_json::Value>) -> Vec<String> {
+    params
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 /// Handle a single WebSocket connection through its full lifecycle:
 /// handshake (with auth) → message loop → cleanup.
 pub async fn handle_connection(
@@ -28,11 +36,13 @@ pub async fn handle_connection(
     methods: Arc<MethodRegistry>,
     remote_addr: SocketAddr,
     accept_language: Option<String>,
+    remote_ip: Option<String>,
     header_authenticated: bool,
+    is_local: bool,
 ) {
     let conn_id = uuid::Uuid::new_v4().to_string();
-    let remote_ip = remote_addr.ip().to_string();
-    info!(conn_id = %conn_id, remote_ip = %remote_ip, "ws: new connection");
+    let conn_remote_ip = remote_addr.ip().to_string();
+    info!(conn_id = %conn_id, remote_ip = %conn_remote_ip, "ws: new connection");
 
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<String>();
@@ -73,6 +83,21 @@ pub async fn handle_connection(
 
     let (request_id, params) = connect_result;
 
+    if state.ws_request_logs {
+        let connect_param_keys = serde_json::to_value(&params)
+            .ok()
+            .and_then(|v| v.as_object().cloned())
+            .map(|obj| obj.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        info!(
+            conn_id = %conn_id,
+            request_id = %request_id,
+            method = "connect",
+            param_keys = ?connect_param_keys,
+            "ws: received request frame"
+        );
+    }
+
     // Validate protocol version.
     if params.min_protocol > PROTOCOL_VERSION || params.max_protocol < PROTOCOL_VERSION {
         let err = ResponseFrame::err(
@@ -85,6 +110,7 @@ pub async fn handle_connection(
                 ),
             ),
         );
+        #[allow(clippy::unwrap_used)] // serializing known-valid struct
         let _ = client_tx.send(serde_json::to_string(&err).unwrap());
         drop(client_tx);
         write_handle.abort();
@@ -92,11 +118,20 @@ pub async fn handle_connection(
     }
 
     // ── Auth validation ──────────────────────────────────────────────────
-    let is_loopback = auth::is_loopback(&remote_ip);
-
-    // Try credential-store auth first (API key, password hash), then fall
-    // back to legacy env-var auth.
-    let mut authenticated = is_loopback || header_authenticated;
+    // SECURITY: Three-tier auth model (see docs/src/security.md):
+    //
+    // 1. Password set → always require credentials, any IP.
+    // 2. No password + genuine local connection → full access (dev convenience).
+    // 3. No password + remote/proxied → onboarding only.
+    //
+    // `is_local` is computed per-request by `is_local_connection()` using:
+    //   - MOLTIS_BEHIND_PROXY env var (hard override)
+    //   - Proxy header detection (X-Forwarded-For, X-Real-IP, etc.)
+    //   - Host header loopback check
+    //   - TCP source IP loopback check
+    //
+    // See CVE-2026-25253 for the analogous OpenClaw vulnerability.
+    let mut authenticated = header_authenticated;
     // Scopes from API key verification (if any).
     let mut api_key_scopes: Option<Vec<String>> = None;
 
@@ -107,7 +142,7 @@ pub async fn handle_connection(
                 && let Ok(Some(verification)) = cred_store.verify_api_key(api_key).await
             {
                 authenticated = true;
-                // Store the scopes from the API key (empty = full access)
+                // Store the scopes from the API key (empty = no access)
                 api_key_scopes = Some(verification.scopes);
             }
             // Check password against DB hash.
@@ -118,8 +153,11 @@ pub async fn handle_connection(
                 authenticated = true;
             }
         } else {
-            // Setup not complete yet — allow all connections.
-            authenticated = true;
+            // Setup not complete yet — only allow local connections.
+            // Remote connections must go through the onboarding/setup flow.
+            if is_local {
+                authenticated = true;
+            }
         }
     }
 
@@ -133,7 +171,7 @@ pub async fn handle_connection(
                 &state.auth,
                 provided_token,
                 provided_password,
-                Some(&remote_ip),
+                Some(&conn_remote_ip),
             );
             if auth_result.ok {
                 authenticated = true;
@@ -150,6 +188,7 @@ pub async fn handle_connection(
             &request_id,
             ErrorShape::new(error_codes::INVALID_REQUEST, "authentication failed"),
         );
+        #[allow(clippy::unwrap_used)] // serializing known-valid struct
         let _ = client_tx.send(serde_json::to_string(&err).unwrap());
         drop(client_tx);
         write_handle.abort();
@@ -158,12 +197,29 @@ pub async fn handle_connection(
 
     let role = params.role.clone().unwrap_or_else(|| "operator".into());
 
-    // Determine scopes: use API key scopes if provided, otherwise default to full access.
-    // Empty API key scopes means full access (backward compatibility).
+    // Determine scopes based on auth method.
+    // API keys MUST declare scopes explicitly — empty scopes means no access.
+    // Non-API-key auth (password, local, legacy) gets full access.
     let scopes = match api_key_scopes {
         Some(key_scopes) if !key_scopes.is_empty() => key_scopes,
-        _ => {
-            // Full access: either no API key used, or API key has no scope restrictions
+        Some(_empty) => {
+            // API key with no scopes → reject (least-privilege).
+            warn!(conn_id = %conn_id, "ws: API key has no scopes, denying access");
+            let err = ResponseFrame::err(
+                &request_id,
+                ErrorShape::new(
+                    error_codes::INVALID_REQUEST,
+                    "API key has no scopes — specify at least one scope when creating the key",
+                ),
+            );
+            #[allow(clippy::unwrap_used)] // serializing known-valid struct
+            let _ = client_tx.send(serde_json::to_string(&err).unwrap());
+            drop(client_tx);
+            write_handle.abort();
+            return;
+        },
+        None => {
+            // Non-API-key auth (password, local, legacy) → full access.
             vec![
                 "operator.admin".into(),
                 "operator.read".into(),
@@ -219,7 +275,10 @@ pub async fn handle_connection(
         auth: Some(hello_auth),
         policy: Policy::default_policy(),
     };
-    let resp = ResponseFrame::ok(&request_id, serde_json::to_value(&hello).unwrap());
+    #[allow(clippy::unwrap_used)] // serializing known-valid struct
+    let hello_val = serde_json::to_value(&hello).unwrap();
+    let resp = ResponseFrame::ok(&request_id, hello_val);
+    #[allow(clippy::unwrap_used)] // serializing known-valid struct
     let _ = client_tx.send(serde_json::to_string(&resp).unwrap());
 
     info!(
@@ -235,6 +294,28 @@ pub async fn handle_connection(
     let mut resolved_params = params.clone();
     resolved_params.scopes = Some(scopes.clone());
     resolved_params.role = Some(role.clone());
+    let browser_timezone = params.timezone.clone();
+
+    // Auto-persist browser timezone to USER.md on first connect (one-time).
+    if let Some(ref tz_str) = browser_timezone
+        && let Ok(tz) = tz_str.parse::<chrono_tz::Tz>()
+    {
+        let existing_user = moltis_config::load_user();
+        if existing_user
+            .as_ref()
+            .and_then(|u| u.timezone.as_ref())
+            .is_none()
+        {
+            let mut user = existing_user.unwrap_or_default();
+            user.timezone = Some(moltis_config::Timezone::from(tz));
+            if let Err(e) = moltis_config::save_user(&user) {
+                warn!(conn_id = %conn_id, error = %e, "ws: failed to auto-persist timezone");
+            } else {
+                info!(conn_id = %conn_id, timezone = %tz_str, "ws: auto-persisted browser timezone to USER.md");
+            }
+        }
+    }
+
     let client = ConnectedClient {
         conn_id: conn_id.clone(),
         connect_params: resolved_params,
@@ -242,8 +323,16 @@ pub async fn handle_connection(
         connected_at: now,
         last_activity: now,
         accept_language,
+        remote_ip,
+        timezone: browser_timezone,
     };
     state.register_client(client).await;
+
+    #[cfg(feature = "metrics")]
+    {
+        moltis_metrics::counter!(moltis_metrics::websocket::CONNECTIONS_TOTAL).increment(1);
+        moltis_metrics::gauge!(moltis_metrics::websocket::CONNECTIONS_ACTIVE).increment(1.0);
+    }
 
     // If node role, register in node registry.
     if role == "node" {
@@ -269,10 +358,10 @@ pub async fn handle_connection(
             commands,
             permissions,
             path_env: params.path_env.clone(),
-            remote_ip: Some(remote_ip.clone()),
+            remote_ip: Some(conn_remote_ip.clone()),
             connected_at: now,
         };
-        state.nodes.write().await.register(node);
+        state.inner.write().await.nodes.register(node);
         info!(conn_id = %conn_id, node_id = %params.client.id, "node registered");
 
         // Broadcast presence change.
@@ -310,6 +399,7 @@ pub async fn handle_connection(
                 serde_json::json!({ "message": "payload too large", "maxBytes": MAX_PAYLOAD_BYTES }),
                 state.next_seq(),
             );
+            #[allow(clippy::unwrap_used)] // serializing known-valid struct
             let _ = client_tx.send(serde_json::to_string(&err).unwrap());
             continue;
         }
@@ -323,18 +413,28 @@ pub async fn handle_connection(
                     serde_json::json!({ "message": "invalid frame" }),
                     state.next_seq(),
                 );
+                #[allow(clippy::unwrap_used)] // serializing known-valid struct
                 let _ = client_tx.send(serde_json::to_string(&err).unwrap());
                 continue;
             },
         };
 
         // Touch activity timestamp.
-        if let Some(client) = state.clients.write().await.get_mut(&conn_id) {
+        if let Some(client) = state.inner.write().await.clients.get_mut(&conn_id) {
             client.touch();
         }
 
         match frame {
             GatewayFrame::Request(req) => {
+                if state.ws_request_logs {
+                    info!(
+                        conn_id = %conn_id,
+                        request_id = %req.id,
+                        method = %req.method,
+                        param_keys = ?top_level_param_keys(&req.params),
+                        "ws: received request frame"
+                    );
+                }
                 let ctx = MethodContext {
                     request_id: req.id.clone(),
                     method: req.method.clone(),
@@ -345,6 +445,16 @@ pub async fn handle_connection(
                     state: Arc::clone(&state),
                 };
                 let response = methods.dispatch(ctx).await;
+                if state.ws_request_logs {
+                    info!(
+                        conn_id = %conn_id,
+                        request_id = %req.id,
+                        method = %req.method,
+                        ok = response.ok,
+                        "ws: sent response frame"
+                    );
+                }
+                #[allow(clippy::unwrap_used)] // serializing known-valid struct
                 let _ = client_tx.send(serde_json::to_string(&response).unwrap());
             },
             _ => {
@@ -356,7 +466,7 @@ pub async fn handle_connection(
     // ── Cleanup ──────────────────────────────────────────────────────────
 
     // Unregister node if applicable.
-    let removed_node = state.nodes.write().await.unregister_by_conn(&conn_id);
+    let removed_node = state.inner.write().await.nodes.unregister_by_conn(&conn_id);
     if let Some(node) = &removed_node {
         info!(conn_id = %conn_id, node_id = %node.node_id, "node unregistered");
         broadcast(
@@ -376,6 +486,9 @@ pub async fn handle_connection(
         .await
         .map(|c| c.connected_at.elapsed())
         .unwrap_or_default();
+
+    #[cfg(feature = "metrics")]
+    moltis_metrics::gauge!(moltis_metrics::websocket::CONNECTIONS_ACTIVE).decrement(1.0);
 
     info!(
         conn_id = %conn_id,

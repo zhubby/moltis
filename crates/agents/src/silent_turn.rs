@@ -49,7 +49,7 @@ impl MemoryWriteFileTool {
     }
 
     fn take_written_paths(&self) -> Vec<PathBuf> {
-        std::mem::take(&mut *self.written_paths.lock().unwrap())
+        std::mem::take(&mut *self.written_paths.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
@@ -112,7 +112,10 @@ impl AgentTool for MemoryWriteFileTool {
             tokio::fs::write(&full_path, content).await?;
         }
 
-        self.written_paths.lock().unwrap().push(full_path.clone());
+        self.written_paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(full_path.clone());
 
         debug!(path = %full_path.display(), "silent memory turn: wrote file");
         Ok(serde_json::json!({ "ok": true, "path": full_path.to_string_lossy() }))
@@ -187,11 +190,12 @@ pub async fn run_silent_memory_turn(
         "running silent memory turn before compaction"
     );
 
+    let user_content = crate::model::UserContent::Text(conversation_text);
     let result = run_agent_loop(
         provider,
         &tools,
         MEMORY_FLUSH_SYSTEM_PROMPT,
-        &conversation_text,
+        &user_content,
         None, // no event callbacks — silent
         None, // no history
     )
@@ -214,6 +218,7 @@ pub async fn run_silent_memory_turn(
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {
@@ -264,6 +269,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 100,
                         output_tokens: 50,
+                        ..Default::default()
                     },
                 })
             } else {
@@ -273,6 +279,7 @@ mod tests {
                     usage: Usage {
                         input_tokens: 50,
                         output_tokens: 5,
+                        ..Default::default()
                     },
                 })
             }

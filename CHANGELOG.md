@@ -16,6 +16,294 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Backward compatible: `no_network: true` maps to `blocked`, `false` to `open`
   - Metrics: `domain_checks_total`, `domain_approval_*`, `proxy_connections_*`, `proxy_requests_total`, `proxy_bytes_transferred_total`
   - UI: Network policy selector on Images page to change policy without editing config
+- **`moltis doctor` command**: Comprehensive health check that validates config,
+  audits security (file permissions, API keys in config), checks directory and
+  database health, verifies provider readiness (API keys via config or env vars),
+  inspects TLS certificates, and validates MCP server commands on PATH.
+
+### Security
+
+- **npm install --ignore-scripts**: Skill dependency installation now passes
+  `--ignore-scripts` to npm, preventing supply chain attacks via malicious
+  postinstall scripts in npm packages.
+- **API key scope enforcement**: API keys with empty/no scopes are now denied
+  access instead of silently receiving full admin privileges. Keys must specify
+  at least one scope explicitly (least-privilege by default).
+
+## [0.4.1] - 2026-02-09
+
+### Fixed
+
+- **Clippy lint in map test**: Replace `is_some()`/`unwrap()` with `if let Some` to
+  fix `clippy::unnecessary_unwrap` that broke the v0.4.0 release build.
+
+## [0.4.0] - 2026-02-09
+
+### Added
+
+- **Auto-import external OAuth tokens**: At startup, auto-detected provider
+  tokens (e.g. Codex CLI `~/.codex/auth.json`) are imported into the central
+  `oauth_tokens.json` store so users can manage all providers from the UI.
+- **Passkey onboarding**: The security setup step now offers passkey registration
+  (Touch ID, Face ID, security keys) as the recommended default, with password
+  as a fallback option.
+- **`providers.validate_key` RPC method**: Test provider credentials without
+  saving them — builds a temporary registry, probes with a "ping" message, and
+  returns validation status with available models.
+- **`providers.save_model` RPC method**: Save the preferred model for any
+  configured provider without changing credentials.
+- **`models.test` RPC method**: Test a single model from the live registry with
+  a real LLM request before committing to it.
+- **Model selection for auto-detected providers**: The Providers settings page
+  now shows a "Select Model" button for providers that have available models but
+  no preferred model set. This lets users pick their favorite model for
+  auto-detected providers (e.g. OpenAI Codex detected from `~/.codex/auth.json`).
+- **`show_map` tool**: New LLM-callable tool that composes a static map image
+  from OSM tiles with red/blue marker pins (destination + user location), plus
+  clickable links to Google Maps, Apple Maps, and OpenStreetMap. Supports
+  `user_latitude`/`user_longitude` to show both positions with auto-zoom.
+  Solves the "I can't share links" problem in voice mode.
+- **Location precision modes**: The `get_user_location` tool now accepts a
+  `precision` parameter — `"precise"` (GPS-level, default) for nearby places
+  and directions, or `"coarse"` (city-level, faster) for flights, weather, and
+  time zones. The LLM picks the appropriate mode based on the user's query.
+
+### Changed
+
+- Show "No LLM Providers Connected" card instead of welcome greeting when no
+  providers are configured.
+- **Onboarding provider setup**: Credentials are now validated before saving.
+  After successful validation, a model selector shows available models for the
+  provider. The selected model is tested with a real request before completing
+  setup. Clear error messages are shown for common failures (invalid API key,
+  rate limits, connection issues).
+- **Settings provider setup**: The main Providers settings page now uses the
+  same validate-first flow as onboarding. Credentials are validated before
+  saving (bad keys are never persisted), a model selector appears after
+  validation, and OAuth flows show model selection after authentication.
+
+### Fixed
+
+- **Docker RAM detection**: Fall back to `/proc/meminfo` when `sysinfo` returns
+  0 bytes for memory inside Docker/cgroup environments.
+- **MLX model suggested on Linux**: Use backend-aware model suggestion so MLX
+  models are only suggested on Apple Silicon, not on Linux servers.
+- **Host package provisioning noise**: Skip `apt-get` when running as non-root
+  with no passwordless sudo, instead of failing with permission denied warnings.
+- **Browser image pull without runtime**: Guard browser container image pull to
+  skip when no usable container runtime is available (backend = "none").
+- **OAuth token store logging**: Replace silent `.ok()?` chains with explicit
+  `warn!`/`info!` logging in `TokenStore` load/save/delete for diagnosability.
+- **Provider warning noise**: Downgrade "tokens not found" log from `warn!` to
+  `debug!` for unconfigured providers (GitHub Copilot, OpenAI Codex).
+- **models.detect_supported noise**: Downgrade UNAVAILABLE RPC errors from
+  `warn!` to `debug!` since they indicate expected "not ready yet" states.
+## [0.3.8] - 2026-02-09
+
+### Changed
+
+- **Release CI parallelization**: Split clippy and test into separate parallel
+  jobs in the release workflow for faster feedback on GitHub-hosted runners.
+
+### Fixed
+
+- **CodSpeed workflow zizmor audit**: Pinned `CodSpeedHQ/action@v4` to commit
+  SHA to satisfy zizmor's `unpinned-uses` audit.
+
+## [0.3.7] - 2026-02-09
+
+### Fixed
+
+- **Clippy warnings**: Fixed `MutexGuard` held across await in telegram
+  test, `field assignment outside initializer` in provider setup test, and
+  `items after test module` in gateway services.
+
+## [0.3.6] - 2026-02-09
+
+### Fixed
+
+- **Release CI zizmor audit**: Removed `rust-cache` from the release workflow's
+  clippy-test job entirely instead of using `save-if: false`, which zizmor does
+  not recognize as a cache-poisoning mitigation.
+
+## [0.3.5] - 2026-02-09
+
+### Fixed
+
+- **Release CI cache-poisoning**: Set `save-if: false` on `rust-cache` in the
+  release workflow to satisfy zizmor's cache-poisoning audit for tag-triggered
+  workflows that publish artifacts.
+
+## [0.3.4] - 2026-02-09
+
+### Fixed
+
+- **Session file lock contention**: Replaced non-blocking `try_write()` with
+  blocking `write()` in `SessionStore::append()` and `replace_history()` so
+  concurrent tool-result persists wait for the file lock instead of failing
+  with `EAGAIN` (OS error 35).
+
+### Changed
+
+- **Release CI quality gates**: The Build Packages workflow now runs biome,
+  format, clippy, and test checks before building any packages, ensuring code
+  correctness before artifacts are produced.
+
+## [0.3.3] - 2026-02-09
+
+### Fixed
+
+- **OpenAI Codex token refresh panic**: Made `get_valid_token()` async to fix
+  `block_on` inside async runtime panic when refreshing expired OAuth tokens.
+- **Channel session binding**: Ensure session row exists before setting channel
+  binding, fixing `get_user_location` failures on first Telegram message.
+- **Cargo.lock sync**: Lock file now matches workspace version.
+
+## [0.3.0] - 2026-02-08
+
+### Added
+
+- **Silent replies**: The system prompt instructs the LLM to return an empty
+  response when tool output speaks for itself, suppressing empty chat bubbles,
+  push notifications, and channel replies. Empty assistant messages are not
+  persisted to session history.
+
+- **Persist TTS audio to session media**: When TTS is enabled and the reply
+  medium is `voice`, the server generates TTS audio, saves it to the session
+  media directory, and includes the media path in the persisted assistant
+  message. On session reload the frontend renders an `<audio>` player from
+  the media API instead of re-generating audio via RPC.
+
+- **Per-session media directory**: Screenshots from the browser tool are now
+  persisted to `sessions/media/<key>/` and served via
+  `GET /api/sessions/:key/media/:filename`. Session history reload renders
+  screenshots from the API instead of losing them. Media files are cleaned
+  up when a session is deleted.
+
+- **Process tool for interactive terminal sessions**: New `process` tool lets
+  the LLM manage interactive/TUI programs (htop, vim, REPLs, etc.) via tmux
+  sessions inside the sandbox. Supports start, poll, send_keys, paste, kill,
+  and list actions. Includes a built-in `tmux` skill with usage instructions.
+
+- **Runtime host+sandbox prompt context**: Chat system prompts now include a
+  `## Runtime` section with host details (hostname, OS, arch, shell, provider,
+  model, session, sudo non-interactive capability) and `exec` sandbox details
+  (enabled state, mode, backend, scope, image, workspace mount, network policy,
+  session override). Tool-mode prompts also add routing guidance so the agent
+  asks before requesting host installs or changing sandbox mode.
+
+- **Telegram location sharing**: Telegram channels now support receiving shared
+  locations and live location updates. Live locations are tracked until they
+  expire or the user stops sharing.
+
+- **Telegram reply threading**: Telegram channel replies now use
+  `reply_to_message_id` to thread responses under the original user message,
+  keeping conversations visually grouped in the chat.
+
+- **`get_user_location` tool**: New browser-based geolocation tool lets the LLM
+  request the user's current coordinates via the Geolocation API, with a
+  permission prompt in the UI.
+
+- **`sandbox_packages` tool**: New tool for on-demand package discovery inside
+  the sandbox, allowing the LLM to query available and installable packages at
+  runtime.
+
+- **Sandbox package expansions**: Pre-built sandbox images now include expanded
+  package groups — GIS/OpenStreetMap, document/office/search,
+  image/audio/media/data-processing, and communication packages. Mise is also
+  available for runtime version management.
+
+- **Queued message UI**: When a message is submitted while the LLM is already
+  responding, it is shown in a dedicated bottom tray with cancel support.
+  Queued messages are moved into the conversation only after the current
+  response finishes rendering.
+
+- **Full context view**: New "Context" button in the chat header opens a panel
+  showing the full LLM messages array sent to the provider, with a Copy button
+  for easy debugging.
+
+- **Browser timezone auto-detection**: The gateway now auto-detects the user's
+  timezone from the browser via `Intl.DateTimeFormat` and includes it in
+  session context, removing the need for manual timezone configuration.
+
+- **Logs download**: New Download button on the logs page streams the JSONL log
+  file via `GET /api/logs/download` with gzip/zstd compression.
+
+- **Gateway middleware hardening**: Consolidated middleware into
+  `apply_middleware_stack()` with security and observability layers:
+  - Replace `allow_origin(Any)` with dynamic host-based CORS validation
+    reusing the WebSocket CSWSH `is_same_origin` logic, safe for
+    Docker/cloud deployments with unknown hostnames
+  - `CatchPanicLayer` to convert handler panics to 500 responses
+  - `RequestBodyLimitLayer` (16 MiB) to prevent memory exhaustion
+  - `SetSensitiveHeadersLayer` to redact Authorization/Cookie in traces
+  - Security response headers (`X-Content-Type-Options`, `X-Frame-Options`,
+    `Referrer-Policy`)
+  - `SetRequestIdLayer` + `PropagateRequestIdLayer` for `x-request-id`
+    correlation across HTTP request logs
+  - zstd compression alongside gzip for better ratios
+
+- **Message run tracking**: Persisted messages now carry `run_id` and `seq`
+  fields for parent/child linking across multi-turn tool runs, plus a
+  client-side sequence number for ordering diagnostics.
+
+- **Cache token metrics**: Provider responses now populate cache-hit and
+  cache-miss token counters in the metrics subsystem.
+
+### Changed
+
+- **Provider auto-detection observability**: When no explicit provider settings are present in `moltis.toml`, startup now logs each auto-detected provider with its source (`env`, config file key, OAuth token file, provider key file, or Codex auth file). Added `server.http_request_logs` (Axum HTTP traces) and `server.ws_request_logs` (WebSocket RPC request/response traces) config options (both default `false`) for on-demand transport debugging without code changes.
+- **Dynamic OpenAI Codex model catalog**: OpenAI Codex providers now load model IDs from `https://chatgpt.com/backend-api/codex/models` at startup (with fallback defaults), and the gateway refreshes Codex models hourly so long-running sessions pick up newly available models (for example `gpt-5.3`) without restart.
+- **Model availability probing UX**: Model support probing now runs in parallel with bounded concurrency, starts automatically after provider connect/startup, and streams live progress (`start`/`progress`/`complete`) over WebSocket so the Providers page can render a progress bar.
+- **Provider-scoped probing on connect**: Connecting a provider from the Providers UI now probes only that provider's models (instead of all providers), reducing noise and startup load when adding accounts one by one.
+- **Configurable model ordering**: Added `chat.priority_models` in `moltis.toml` to pin preferred models at the top of model selectors without rebuilding. Runtime model selectors (`models.list`, chat model dropdown, Telegram `/model`) hide unsupported models, while Providers diagnostics continue to show full catalog entries (including unsupported flags).
+- **Configurable provider offerings in UI**: Added `[providers] offered = [...]` allowlist in `moltis.toml` to control which providers are shown in onboarding/provider-picker UI. New config templates default this to `["openai", "github-copilot"]`; setting `offered = []` shows all known providers. Configured providers remain visible for management.
+
+### Fixed
+
+- **Web search DuckDuckGo fallback**: When no search API key (Brave or
+  Perplexity) is configured, `web_search` now automatically falls back to
+  DuckDuckGo HTML search instead of returning an error and forcing the LLM
+  to ask the user about using the browser.
+
+- **Web onboarding flash and redirect timing**: The web server now performs onboarding redirects before rendering the main app shell. When onboarding is incomplete, non-onboarding routes redirect directly to `/onboarding`; once onboarding is complete, `/onboarding` redirects back to `/`. The onboarding route now serves a dedicated onboarding HTML/JS entry instead of the full app bundle, preventing duplicate bootstrap/navigation flashes in Safari.
+- **Local model cache path visibility**: Startup logs for local LLM providers now explicitly print the model cache directory and cached model IDs, making `MOLTIS_DATA_DIR` behavior easier to verify without noisy model-catalog output.
+- **Kimi device-flow OAuth in web UI**: Kimi OAuth now uses provider-specific headers and prefers `verification_uri_complete` (or synthesizes `?user_code=` fallback) so mobile-device sign-in links no longer fail with missing `user_code`.
+- **Kimi Code provider authentication compatibility**: `kimi-code` is now API-key-first in the web UI (`KIMI_API_KEY`, default base URL `https://api.moonshot.ai/v1`), while still honoring previously stored OAuth tokens for backward compatibility. Provider errors now include a targeted hint to switch to API-key auth when Kimi returns `access_terminated_error`.
+- **Provider setup success feedback**: API-key provider setup now runs an immediate model probe after saving credentials. The onboarding and Providers modal only show success when at least one model validates, and otherwise display a validation failure message instead of a false-positive "configured" state.
+- **Heartbeat/cron duplicate runs**: Skip heartbeat LLM turn when no prompt is
+  configured, and fix duplicate cron job executions that could fire the same
+  scheduled run twice.
+- **Onboarding finish screen removed**: Onboarding now skips the final
+  "congratulations" screen and redirects straight to the chat view.
+- **User message footer leak**: Model name footer and timestamp are no longer
+  incorrectly attached to user messages in the chat UI.
+- **TTS counterpart auto-enable on STT save**: Saving an ElevenLabs or Google
+  Cloud STT key now automatically enables the matching TTS provider, mirroring
+  the onboarding voice-test behavior.
+- **Voice-generating indicator removed**: The separate "voice generating"
+  spinner during TTS playback has been removed in favor of the unified
+  response indicator.
+- **Config restart crash loop prevention**: The gateway now validates the
+  configuration file before restarting, returning an error to the UI instead
+  of entering a crash loop when the config is invalid.
+- **Safari dev-mode cache busting**: Development mode now busts the Safari
+  asset cache on reload, and fixes a missing border on detected-provider cards.
+
+### Refactored
+
+- **McpManager lock consolidation**: Replaced per-field `RwLock`s in
+  `McpManager` with a single `RwLock<McpManagerInner>` to reduce lock
+  contention and simplify state management.
+- **GatewayState lock consolidation**: Replaced per-field `RwLock`s in
+  `GatewayState` with a single `RwLock<GatewayInner>` for the same reasons.
+- **Typed chat broadcast payloads**: Chat WebSocket broadcasts now use typed
+  Rust structs instead of ad-hoc `serde_json::Value` maps.
+
+### Documentation
+
+- Expanded default `SOUL.md` with the full OpenClaw reference text for agent
+  personality bootstrapping.
 
 ## [0.2.9] - 2026-02-08
 
@@ -32,7 +320,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chat UI reply badge visibility**: Assistant footer now reliably shows the selected reply medium badge.
 - **Voice UX polish**: Improved microphone timing behavior and preserved settings scroll state in voice configuration views.
-
 ## [0.2.8] - 2026-02-07
 
 ### Changed

@@ -36,6 +36,13 @@ pub enum UserContent {
     Multimodal(Vec<ContentPart>),
 }
 
+impl UserContent {
+    /// Create a text-only user content.
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text(s.into())
+    }
+}
+
 /// A single part of a multimodal content array.
 #[derive(Debug, Clone)]
 pub enum ContentPart {
@@ -253,6 +260,9 @@ pub fn values_to_chat_messages(values: &[serde_json::Value]) -> Vec<ChatMessage>
                 };
                 messages.push(ChatMessage::tool(tool_call_id, content));
             },
+            // tool_result entries are UI-only metadata (persisted tool execution
+            // output); they are not part of the LLM conversation context.
+            "tool_result" => continue,
             other => {
                 tracing::warn!(
                     index = i,
@@ -371,12 +381,15 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub cache_read_tokens: u32,
+    pub cache_write_tokens: u32,
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,5 +605,24 @@ mod tests {
         let values: Vec<serde_json::Value> = original.iter().map(|m| m.to_openai_value()).collect();
         let roundtripped = values_to_chat_messages(&values);
         assert_eq!(roundtripped.len(), 4);
+    }
+
+    #[test]
+    fn convert_skips_tool_result_entries() {
+        let values = vec![
+            serde_json::json!({"role": "user", "content": "run ls"}),
+            serde_json::json!({
+                "role": "tool_result",
+                "tool_call_id": "call_1",
+                "tool_name": "exec",
+                "success": true,
+                "result": {"stdout": "file.txt", "exit_code": 0}
+            }),
+            serde_json::json!({"role": "assistant", "content": "done"}),
+        ];
+        let msgs = values_to_chat_messages(&values);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(&msgs[0], ChatMessage::User { .. }));
+        assert!(matches!(&msgs[1], ChatMessage::Assistant { .. }));
     }
 }

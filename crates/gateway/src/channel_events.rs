@@ -125,10 +125,11 @@ impl ChannelEventSink for GatewayChannelEventSink {
             if let Ok(binding_json) = serde_json::to_string(&reply_to)
                 && let Some(ref session_meta) = state.services.session_metadata
             {
-                // Label the first session "Telegram 1" if it has no label yet.
-                if let Some(entry) = session_meta.get(&session_key).await
-                    && entry.channel_binding.is_none()
-                {
+                // Ensure the session row exists and label it on first use.
+                // `set_channel_binding` is an UPDATE, so the row must exist
+                // before we can set the binding column.
+                let entry = session_meta.get(&session_key).await;
+                if entry.as_ref().is_none_or(|e| e.channel_binding.is_none()) {
                     let existing = session_meta
                         .list_channel_sessions(
                             reply_to.channel_type.as_str(),
@@ -177,7 +178,7 @@ impl ChannelEventSink for GatewayChannelEventSink {
                         }))
                         .await;
 
-                    // Look up displayName for the notification.
+                    // Buffer model notification for the logbook instead of sending separately.
                     let display: String = if let Ok(models_val) = state.services.model.list().await
                         && let Some(models) = models_val.as_array()
                     {
@@ -190,12 +191,8 @@ impl ChannelEventSink for GatewayChannelEventSink {
                     } else {
                         model.clone()
                     };
-                    if let Some(outbound) = state.services.channel_outbound_arc() {
-                        let msg = format!("Using *{display}*. Use /model to change.");
-                        let _ = outbound
-                            .send_text(&reply_to.account_id, &reply_to.chat_id, &msg)
-                            .await;
-                    }
+                    let msg = format!("Using {display}. Use /model to change.");
+                    state.push_channel_status_log(&session_key, msg).await;
                 }
             } else {
                 let session_has_model = if let Some(ref sm) = state.services.session_metadata {
@@ -210,8 +207,6 @@ impl ChannelEventSink for GatewayChannelEventSink {
                     && let Some(id) = first.get("id").and_then(|v| v.as_str())
                 {
                     params["model"] = serde_json::json!(id);
-                    // Also persist on the session so subsequent messages
-                    // (including from the web UI) use the same model.
                     let _ = state
                         .services
                         .session
@@ -221,17 +216,13 @@ impl ChannelEventSink for GatewayChannelEventSink {
                         }))
                         .await;
 
-                    // Notify the user which model was auto-selected.
+                    // Buffer model notification for the logbook.
                     let display = first
                         .get("displayName")
                         .and_then(|v| v.as_str())
                         .unwrap_or(id);
-                    if let Some(outbound) = state.services.channel_outbound_arc() {
-                        let msg = format!("Using *{display}*. Use /model to change.");
-                        let _ = outbound
-                            .send_text(&reply_to.account_id, &reply_to.chat_id, &msg)
-                            .await;
-                    }
+                    let msg = format!("Using {display}. Use /model to change.");
+                    state.push_channel_status_log(&session_key, msg).await;
                 }
             }
 
@@ -294,7 +285,12 @@ impl ChannelEventSink for GatewayChannelEventSink {
                 if let Some(outbound) = state.services.channel_outbound_arc() {
                     let error_msg = format!("⚠️ {e}");
                     if let Err(send_err) = outbound
-                        .send_text(&reply_to.account_id, &reply_to.chat_id, &error_msg)
+                        .send_text(
+                            &reply_to.account_id,
+                            &reply_to.chat_id,
+                            &error_msg,
+                            reply_to.message_id.as_deref(),
+                        )
                         .await
                     {
                         warn!("failed to send error back to channel: {send_err}");
@@ -385,19 +381,16 @@ impl ChannelEventSink for GatewayChannelEventSink {
             .get()
             .ok_or_else(|| anyhow!("gateway not ready"))?;
 
-        // Encode audio as base64 for the STT service
-        let audio_base64 =
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, audio_data);
-
-        let params = serde_json::json!({
-            "audio": audio_base64,
-            "format": format,
-        });
-
         let result = state
             .services
             .stt
-            .transcribe(params)
+            .transcribe_bytes(
+                bytes::Bytes::copy_from_slice(audio_data),
+                format,
+                None,
+                None,
+                None,
+            )
             .await
             .map_err(|e| anyhow!("transcription failed: {}", e))?;
 
@@ -421,6 +414,58 @@ impl ChannelEventSink for GatewayChannelEventSink {
                 .unwrap_or(false),
             Err(_) => false,
         }
+    }
+
+    async fn update_location(
+        &self,
+        reply_to: &ChannelReplyTarget,
+        latitude: f64,
+        longitude: f64,
+    ) -> bool {
+        let Some(state) = self.state.get() else {
+            warn!("update_location: gateway not ready");
+            return false;
+        };
+
+        let session_key = if let Some(ref sm) = state.services.session_metadata {
+            resolve_channel_session(reply_to, sm).await
+        } else {
+            default_channel_session_key(reply_to)
+        };
+
+        // Update in-memory cache.
+        let geo = moltis_config::GeoLocation::now(latitude, longitude, None);
+        state.inner.write().await.cached_location = Some(geo.clone());
+
+        // Persist to USER.md (best-effort).
+        let mut user = moltis_config::load_user().unwrap_or_default();
+        user.location = Some(geo);
+        if let Err(e) = moltis_config::save_user(&user) {
+            warn!(error = %e, "failed to persist location to USER.md");
+        }
+
+        // Check for a pending tool-triggered location request.
+        let pending_key = format!("channel_location:{session_key}");
+        let pending = state
+            .inner
+            .write()
+            .await
+            .pending_invokes
+            .remove(&pending_key);
+        if let Some(invoke) = pending {
+            let result = serde_json::json!({
+                "location": {
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "accuracy": 0.0,
+                }
+            });
+            let _ = invoke.sender.send(result);
+            info!(session_key, "resolved pending channel location request");
+            return true;
+        }
+
+        false
     }
 
     async fn dispatch_to_chat_with_attachments(
@@ -507,13 +552,13 @@ impl ChannelEventSink for GatewayChannelEventSink {
             .push_channel_reply(&session_key, reply_to.clone())
             .await;
 
-        // Persist channel binding
+        // Persist channel binding (ensure session row exists first —
+        // set_channel_binding is an UPDATE so the row must already be present).
         if let Ok(binding_json) = serde_json::to_string(&reply_to)
             && let Some(ref session_meta) = state.services.session_metadata
         {
-            if let Some(entry) = session_meta.get(&session_key).await
-                && entry.channel_binding.is_none()
-            {
+            let entry = session_meta.get(&session_key).await;
+            if entry.as_ref().is_none_or(|e| e.channel_binding.is_none()) {
                 let existing = session_meta
                     .list_channel_sessions(
                         reply_to.channel_type.as_str(),
@@ -569,12 +614,8 @@ impl ChannelEventSink for GatewayChannelEventSink {
                 } else {
                     model.clone()
                 };
-                if let Some(outbound) = state.services.channel_outbound_arc() {
-                    let msg = format!("Using *{display}*. Use /model to change.");
-                    let _ = outbound
-                        .send_text(&reply_to.account_id, &reply_to.chat_id, &msg)
-                        .await;
-                }
+                let msg = format!("Using {display}. Use /model to change.");
+                state.push_channel_status_log(&session_key, msg).await;
             }
         } else {
             let session_has_model = if let Some(ref sm) = state.services.session_metadata {
@@ -602,12 +643,8 @@ impl ChannelEventSink for GatewayChannelEventSink {
                     .get("displayName")
                     .and_then(|v| v.as_str())
                     .unwrap_or(id);
-                if let Some(outbound) = state.services.channel_outbound_arc() {
-                    let msg = format!("Using *{display}*. Use /model to change.");
-                    let _ = outbound
-                        .send_text(&reply_to.account_id, &reply_to.chat_id, &msg)
-                        .await;
-                }
+                let msg = format!("Using {display}. Use /model to change.");
+                state.push_channel_status_log(&session_key, msg).await;
             }
         }
 
@@ -639,7 +676,12 @@ impl ChannelEventSink for GatewayChannelEventSink {
             if let Some(outbound) = state.services.channel_outbound_arc() {
                 let error_msg = format!("⚠️ {e}");
                 if let Err(send_err) = outbound
-                    .send_text(&reply_to.account_id, &reply_to.chat_id, &error_msg)
+                    .send_text(
+                        &reply_to.account_id,
+                        &reply_to.chat_id,
+                        &error_msg,
+                        reply_to.message_id.as_deref(),
+                    )
                     .await
                 {
                     warn!("failed to send error back to channel: {send_err}");
@@ -1236,6 +1278,7 @@ fn format_model_list(
     lines.join("\n")
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {super::*, moltis_channels::ChannelType};
@@ -1268,6 +1311,7 @@ mod tests {
             channel_type: ChannelType::Telegram,
             account_id: "bot1".into(),
             chat_id: "12345".into(),
+            message_id: None,
         };
         assert_eq!(default_channel_session_key(&target), "telegram:bot1:12345");
     }
@@ -1278,6 +1322,7 @@ mod tests {
             channel_type: ChannelType::Telegram,
             account_id: "bot1".into(),
             chat_id: "-100999".into(),
+            message_id: None,
         };
         assert_eq!(
             default_channel_session_key(&target),

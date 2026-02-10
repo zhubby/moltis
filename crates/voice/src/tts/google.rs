@@ -3,7 +3,7 @@
 use {
     crate::{
         config::GoogleTtsConfig,
-        tts::{AudioFormat, AudioOutput, SynthesizeRequest, TtsProvider, Voice},
+        tts::{AudioFormat, AudioOutput, SynthesizeRequest, TtsProvider, Voice, contains_ssml},
     },
     anyhow::{Result, anyhow},
     async_trait::async_trait,
@@ -58,6 +58,10 @@ impl TtsProvider for GoogleTts {
 
     fn is_configured(&self) -> bool {
         self.api_key.is_some()
+    }
+
+    fn supports_ssml(&self) -> bool {
+        true
     }
 
     async fn voices(&self) -> Result<Vec<Voice>> {
@@ -120,13 +124,31 @@ impl TtsProvider for GoogleTts {
         // Map output format to Google's encoding
         let audio_encoding = match request.output_format {
             AudioFormat::Mp3 => "MP3",
-            AudioFormat::Opus => "OGG_OPUS",
+            AudioFormat::Opus | AudioFormat::Webm => "OGG_OPUS",
             AudioFormat::Aac => "MP3", // AAC not supported, fallback to MP3
             AudioFormat::Pcm => "LINEAR16",
         };
 
+        let input = if contains_ssml(&request.text) {
+            // Wrap in <speak> if not already wrapped, use native SSML field
+            let ssml = if request.text.trim_start().starts_with("<speak") {
+                request.text.clone()
+            } else {
+                format!("<speak>{}</speak>", request.text)
+            };
+            SynthesisInput {
+                text: None,
+                ssml: Some(ssml),
+            }
+        } else {
+            SynthesisInput {
+                text: Some(request.text.clone()),
+                ssml: None,
+            }
+        };
+
         let req_body = SynthesizeRequestBody {
-            input: SynthesisInput { text: request.text },
+            input,
             voice: VoiceSelectionParams {
                 language_code: self.language_code.clone(),
                 name: voice_name,
@@ -180,7 +202,10 @@ struct SynthesizeRequestBody {
 
 #[derive(Serialize)]
 struct SynthesisInput {
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ssml: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -241,5 +266,6 @@ mod tests {
         let tts = GoogleTts::new(&config);
         assert_eq!(tts.id(), "google");
         assert_eq!(tts.name(), "Google Cloud TTS");
+        assert!(tts.supports_ssml());
     }
 }

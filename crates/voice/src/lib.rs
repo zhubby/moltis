@@ -20,6 +20,7 @@ pub use {
     },
     tts::{
         AudioFormat, AudioOutput, CoquiTts, ElevenLabsTts, GoogleTts, OpenAiTts, PiperTts,
-        SynthesizeRequest, TtsProvider, Voice,
+        SynthesizeRequest, TtsProvider, Voice, contains_ssml, sanitize_text_for_tts,
+        strip_ssml_tags,
     },
 };

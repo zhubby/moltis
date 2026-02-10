@@ -96,7 +96,7 @@ impl OpenAiTts {
     fn response_format(format: AudioFormat) -> &'static str {
         match format {
             AudioFormat::Mp3 => "mp3",
-            AudioFormat::Opus => "opus",
+            AudioFormat::Opus | AudioFormat::Webm => "opus",
             AudioFormat::Aac => "aac",
             AudioFormat::Pcm => "pcm",
         }
@@ -134,7 +134,6 @@ impl TtsProvider for OpenAiTts {
         let api_key = self.get_api_key()?;
         let voice = request.voice_id.as_deref().unwrap_or(&self.default_voice);
         let model = request.model.as_deref().unwrap_or(&self.default_model);
-
         let body = TtsRequest {
             model,
             input: &request.text,
@@ -188,6 +187,7 @@ struct TtsRequest<'a> {
     speed: Option<f32>,
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +198,7 @@ mod tests {
         assert_eq!(provider.id(), "openai");
         assert_eq!(provider.name(), "OpenAI");
         assert!(!provider.is_configured());
+        assert!(!provider.supports_ssml());
 
         let configured = OpenAiTts::new(Some(Secret::new("test-key".into())));
         assert!(configured.is_configured());

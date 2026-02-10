@@ -34,31 +34,41 @@ static DATA_DIR_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// Can be called multiple times (e.g. in tests) — each call replaces the
 /// previous override.
 pub fn set_config_dir(path: PathBuf) {
-    *CONFIG_DIR_OVERRIDE.lock().unwrap() = Some(path);
+    *CONFIG_DIR_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(path);
 }
 
 /// Clear the config directory override, restoring default discovery.
 pub fn clear_config_dir() {
-    *CONFIG_DIR_OVERRIDE.lock().unwrap() = None;
+    *CONFIG_DIR_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 fn config_dir_override() -> Option<PathBuf> {
-    CONFIG_DIR_OVERRIDE.lock().unwrap().clone()
+    CONFIG_DIR_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Set a custom data directory. When set, `data_dir()` returns this path
 /// instead of the default.
 pub fn set_data_dir(path: PathBuf) {
-    *DATA_DIR_OVERRIDE.lock().unwrap() = Some(path);
+    *DATA_DIR_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
 }
 
 /// Clear the data directory override, restoring default discovery.
 pub fn clear_data_dir() {
-    *DATA_DIR_OVERRIDE.lock().unwrap() = None;
+    *DATA_DIR_OVERRIDE.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 fn data_dir_override() -> Option<PathBuf> {
-    DATA_DIR_OVERRIDE.lock().unwrap().clone()
+    DATA_DIR_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Load config from the given path (any supported format).
@@ -176,6 +186,37 @@ pub fn config_dir() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".config").join("moltis"))
 }
 
+/// Returns the user-global config directory (`~/.config/moltis`) without
+/// considering overrides like `MOLTIS_CONFIG_DIR`.
+pub fn user_global_config_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".config").join("moltis"))
+}
+
+/// Returns the user-global config directory only when it differs from the
+/// active config directory (i.e. when `MOLTIS_CONFIG_DIR` or `--config-dir`
+/// is overriding the default). Returns `None` when they are the same path.
+pub fn user_global_config_dir_if_different() -> Option<PathBuf> {
+    let home = user_global_config_dir()?;
+    let current = config_dir()?;
+    if home == current {
+        None
+    } else {
+        Some(home)
+    }
+}
+
+/// Finds a config file in the user-global config directory only.
+pub fn find_user_global_config_file() -> Option<PathBuf> {
+    let dir = user_global_config_dir()?;
+    for name in CONFIG_FILENAMES {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Returns the data directory: programmatic override → `MOLTIS_DATA_DIR` env →
 /// `~/.moltis/`.
 pub fn data_dir() -> PathBuf {
@@ -245,7 +286,7 @@ pub fn load_user() -> Option<UserProfile> {
     let content = std::fs::read_to_string(path).ok()?;
     let frontmatter = extract_yaml_frontmatter(&content)?;
     let user = parse_user_frontmatter(frontmatter);
-    if user.name.is_none() && user.timezone.is_none() {
+    if user.name.is_none() && user.timezone.is_none() && user.location.is_none() {
         None
     } else {
         Some(user)
@@ -345,7 +386,7 @@ pub fn save_identity(identity: &AgentIdentity) -> anyhow::Result<PathBuf> {
 /// Persist user values to `USER.md` using YAML frontmatter.
 pub fn save_user(user: &UserProfile) -> anyhow::Result<PathBuf> {
     let path = user_path();
-    let has_values = user.name.is_some() || user.timezone.is_some();
+    let has_values = user.name.is_some() || user.timezone.is_some() || user.location.is_some();
 
     if !has_values {
         if path.exists() {
@@ -362,8 +403,18 @@ pub fn save_user(user: &UserProfile) -> anyhow::Result<PathBuf> {
     if let Some(name) = user.name.as_deref() {
         yaml_lines.push(format!("name: {}", yaml_scalar(name)));
     }
-    if let Some(timezone) = user.timezone.as_deref() {
-        yaml_lines.push(format!("timezone: {}", yaml_scalar(timezone)));
+    if let Some(ref tz) = user.timezone {
+        yaml_lines.push(format!("timezone: {}", yaml_scalar(tz.name())));
+    }
+    if let Some(ref loc) = user.location {
+        yaml_lines.push(format!("latitude: {}", loc.latitude));
+        yaml_lines.push(format!("longitude: {}", loc.longitude));
+        if let Some(ref place) = loc.place {
+            yaml_lines.push(format!("location_place: {}", yaml_scalar(place)));
+        }
+        if let Some(ts) = loc.updated_at {
+            yaml_lines.push(format!("location_updated_at: {ts}"));
+        }
     }
     let yaml = yaml_lines.join("\n");
     let content = format!(
@@ -413,6 +464,11 @@ fn parse_identity_frontmatter(frontmatter: &str) -> AgentIdentity {
 
 fn parse_user_frontmatter(frontmatter: &str) -> UserProfile {
     let mut user = UserProfile::default();
+    let mut latitude: Option<f64> = None;
+    let mut longitude: Option<f64> = None;
+    let mut location_updated_at: Option<i64> = None;
+    let mut location_place: Option<String> = None;
+
     for raw in frontmatter.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -428,10 +484,28 @@ fn parse_user_frontmatter(frontmatter: &str) -> UserProfile {
         }
         match key {
             "name" => user.name = Some(value.to_string()),
-            "timezone" => user.timezone = Some(value.to_string()),
+            "timezone" => {
+                if let Ok(tz) = value.parse::<chrono_tz::Tz>() {
+                    user.timezone = Some(crate::schema::Timezone::from(tz));
+                }
+            },
+            "latitude" => latitude = value.parse().ok(),
+            "longitude" => longitude = value.parse().ok(),
+            "location_updated_at" => location_updated_at = value.parse().ok(),
+            "location_place" => location_place = Some(value.to_string()),
             _ => {},
         }
     }
+
+    if let (Some(lat), Some(lon)) = (latitude, longitude) {
+        user.location = Some(crate::schema::GeoLocation {
+            latitude: lat,
+            longitude: lon,
+            place: location_place,
+            updated_at: location_updated_at,
+        });
+    }
+
     user
 }
 
@@ -511,7 +585,7 @@ static CONFIG_SAVE_LOCK: Mutex<ConfigSaveState> = Mutex::new(ConfigSaveState { t
 /// Acquires a process-wide lock so concurrent callers cannot race.
 /// Returns the path written to.
 pub fn update_config(f: impl FnOnce(&mut MoltisConfig)) -> anyhow::Result<PathBuf> {
-    let mut guard = CONFIG_SAVE_LOCK.lock().unwrap();
+    let mut guard = CONFIG_SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let target_path = find_or_default_config_path();
     guard.target_path = Some(target_path.clone());
     let mut config = discover_and_load();
@@ -525,7 +599,7 @@ pub fn update_config(f: impl FnOnce(&mut MoltisConfig)) -> anyhow::Result<PathBu
 ///
 /// Prefer [`update_config`] for read-modify-write cycles to avoid races.
 pub fn save_config(config: &MoltisConfig) -> anyhow::Result<PathBuf> {
-    let mut guard = CONFIG_SAVE_LOCK.lock().unwrap();
+    let mut guard = CONFIG_SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let target_path = find_or_default_config_path();
     guard.target_path = Some(target_path.clone());
     save_config_to_path(&target_path, config)
@@ -639,6 +713,17 @@ fn apply_env_overrides_with(
 
 /// Parse a string env value into a JSON value, trying bool and number first.
 fn parse_env_value(val: &str) -> serde_json::Value {
+    let trimmed = val.trim();
+
+    // Support JSON arrays/objects for list-like env overrides, e.g.
+    // MOLTIS_PROVIDERS__OFFERED='["openai","github-copilot"]' or '[]'.
+    if ((trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}')))
+        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        return parsed;
+    }
+
     if val.eq_ignore_ascii_case("true") {
         return serde_json::Value::Bool(true);
     }
@@ -674,7 +759,10 @@ fn set_nested(root: &mut serde_json::Value, path: &[String], val: serde_json::Va
         {
             map.insert(key.clone(), serde_json::Value::Object(Default::default()));
         }
-        current = current.get_mut(key).unwrap();
+        let Some(next) = current.get_mut(key) else {
+            return;
+        };
+        current = next;
     }
 }
 
@@ -706,6 +794,7 @@ fn parse_config_value(raw: &str, path: &Path) -> anyhow::Result<serde_json::Valu
     }
 }
 
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -735,6 +824,14 @@ mod tests {
         assert_eq!(
             parse_env_value("hello"),
             serde_json::Value::String("hello".into())
+        );
+    }
+
+    #[test]
+    fn parse_env_value_json_array() {
+        assert_eq!(
+            parse_env_value("[\"openai\",\"github-copilot\"]"),
+            serde_json::json!(["openai", "github-copilot"])
         );
     }
 
@@ -805,6 +902,28 @@ mod tests {
         )];
         let config = apply_env_overrides_with(MoltisConfig::default(), vars.into_iter());
         assert_eq!(config.tools.exec.default_timeout_secs, 60);
+    }
+
+    #[test]
+    fn apply_env_overrides_providers_offered_array() {
+        let vars = vec![(
+            "MOLTIS_PROVIDERS__OFFERED".into(),
+            "[\"openai\",\"github-copilot\"]".into(),
+        )];
+        let config = apply_env_overrides_with(MoltisConfig::default(), vars.into_iter());
+        assert_eq!(config.providers.offered, vec!["openai", "github-copilot"]);
+    }
+
+    #[test]
+    fn apply_env_overrides_providers_offered_empty_array() {
+        let vars = vec![("MOLTIS_PROVIDERS__OFFERED".into(), "[]".into())];
+        let mut base = MoltisConfig::default();
+        base.providers.offered = vec!["openai".into()];
+        let config = apply_env_overrides_with(base, vars.into_iter());
+        assert!(
+            config.providers.offered.is_empty(),
+            "empty JSON array env override should clear providers.offered"
+        );
     }
 
     #[test]
@@ -906,7 +1025,8 @@ mod tests {
 
         let user = UserProfile {
             name: Some("Alice".to_string()),
-            timezone: Some("Europe/Berlin".to_string()),
+            timezone: Some(crate::schema::Timezone::from(chrono_tz::Europe::Berlin)),
+            location: None,
         };
 
         let path = save_user(&user).expect("save user");
@@ -914,7 +1034,43 @@ mod tests {
 
         let loaded = load_user().expect("load user");
         assert_eq!(loaded.name.as_deref(), Some("Alice"));
-        assert_eq!(loaded.timezone.as_deref(), Some("Europe/Berlin"));
+        assert_eq!(
+            loaded.timezone.as_ref().map(|tz| tz.name()),
+            Some("Europe/Berlin")
+        );
+
+        clear_data_dir();
+    }
+
+    #[test]
+    fn save_and_load_user_with_location() {
+        let _guard = DATA_DIR_TEST_LOCK.lock().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        set_data_dir(dir.path().to_path_buf());
+
+        let user = UserProfile {
+            name: Some("Bob".to_string()),
+            timezone: Some(crate::schema::Timezone::from(chrono_tz::US::Eastern)),
+            location: Some(crate::schema::GeoLocation {
+                latitude: 48.8566,
+                longitude: 2.3522,
+                place: Some("Paris, France".to_string()),
+                updated_at: Some(1_700_000_000),
+            }),
+        };
+
+        save_user(&user).expect("save user with location");
+
+        let loaded = load_user().expect("load user with location");
+        assert_eq!(loaded.name.as_deref(), Some("Bob"));
+        assert_eq!(
+            loaded.timezone.as_ref().map(|tz| tz.name()),
+            Some("US/Eastern")
+        );
+        let loc = loaded.location.expect("location should be present");
+        assert!((loc.latitude - 48.8566).abs() < 1e-6);
+        assert!((loc.longitude - 2.3522).abs() < 1e-6);
+        assert_eq!(loc.place.as_deref(), Some("Paris, France"));
 
         clear_data_dir();
     }
@@ -928,6 +1084,7 @@ mod tests {
         let seeded = UserProfile {
             name: Some("Alice".to_string()),
             timezone: None,
+            location: None,
         };
         let path = save_user(&seeded).expect("seed user");
         assert!(path.exists());

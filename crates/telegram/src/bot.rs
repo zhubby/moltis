@@ -86,7 +86,7 @@ pub async fn start_polling(
     };
 
     {
-        let mut map = accounts.write().unwrap();
+        let mut map = accounts.write().unwrap_or_else(|e| e.into_inner());
         map.insert(account_id.clone(), state);
     }
 
@@ -107,7 +107,11 @@ pub async fn start_polling(
                 .get_updates()
                 .offset(offset)
                 .timeout(30)
-                .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::CallbackQuery])
+                .allowed_updates(vec![
+                    AllowedUpdate::Message,
+                    AllowedUpdate::EditedMessage,
+                    AllowedUpdate::CallbackQuery,
+                ])
                 .await;
 
             match result {
@@ -134,6 +138,23 @@ pub async fn start_polling(
                                         account_id = aid,
                                         error = %e,
                                         "error handling telegram message"
+                                    );
+                                }
+                            },
+                            UpdateKind::EditedMessage(msg) => {
+                                debug!(
+                                    account_id = aid,
+                                    chat_id = msg.chat.id.0,
+                                    "received telegram edited message"
+                                );
+                                if let Err(e) =
+                                    handlers::handle_edited_location(msg, &aid, &poll_accounts)
+                                        .await
+                                {
+                                    error!(
+                                        account_id = aid,
+                                        error = %e,
+                                        "error handling telegram edited message"
                                     );
                                 }
                             },
@@ -177,7 +198,7 @@ pub async fn start_polling(
 
                         // Request the gateway to disable this channel.
                         let event_sink = {
-                            let accounts = poll_accounts.read().unwrap();
+                            let accounts = poll_accounts.read().unwrap_or_else(|e| e.into_inner());
                             accounts.get(&aid).and_then(|s| s.event_sink.clone())
                         };
                         if let Some(sink) = event_sink {
