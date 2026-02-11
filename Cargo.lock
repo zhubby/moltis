@@ -4608,7 +4608,7 @@ dependencies = [
 
 [[package]]
 name = "moltis-discord"
-version = "0.3.8"
+version = "0.8.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4929,7 +4929,7 @@ dependencies = [
 
 [[package]]
 name = "moltis-slack"
-version = "0.3.8"
+version = "0.8.8"
 dependencies = [
  "anyhow",
  "async-trait",
