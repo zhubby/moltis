@@ -191,12 +191,30 @@ Registry on every release.</p>
 <pre><code class="language-bash">docker run -d \
   --name moltis \
   -p 13131:13131 \
+  -p 13132:13132 \
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/moltis-org/moltis:latest
 </code></pre>
-<p>Open http://localhost:13131 in your browser and configure your LLM provider to start chatting.</p>
+<p>Open https://localhost:13131 in your browser and configure your LLM provider to start chatting.</p>
+<h3 id="trusting-the-tls-certificate"><a class="header" href="#trusting-the-tls-certificate">Trusting the TLS certificate</a></h3>
+<p>Moltis generates a self-signed CA on first run. Browsers will show a security
+warning until you trust this CA. Port 13132 serves the certificate over plain
+HTTP so you can download it:</p>
+<pre><code class="language-bash"># Download the CA certificate
+curl -o moltis-ca.pem http://localhost:13132/certs/ca.pem
+
+# macOS — add to system Keychain and trust it
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain moltis-ca.pem
+
+# Linux (Debian/Ubuntu)
+sudo cp moltis-ca.pem /usr/local/share/ca-certificates/moltis-ca.crt
+sudo update-ca-certificates
+</code></pre>
+<p>After trusting the CA, restart your browser. The warning will not appear again
+(the CA persists in the mounted config volume).</p>
 <div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
 <div class="admonition-title">
 <div id="admonition-note-title">
@@ -223,6 +241,7 @@ for easier access to configuration files:</p>
 <pre><code class="language-bash">docker run -d \
   --name moltis \
   -p 13131:13131 \
+  -p 13132:13132 \
   -v ./config:/home/moltis/.config/moltis \
   -v ./data:/home/moltis/.moltis \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -257,6 +276,7 @@ complete example:</p>
     restart: unless-stopped
     ports:
       - "13131:13131"
+      - "13132:13132"
     volumes:
       - ./config:/home/moltis/.config/moltis
       - ./data:/home/moltis/.moltis
@@ -273,6 +293,7 @@ socket instead of the Docker socket:</p>
 podman run -d \
   --name moltis \
   -p 13131:13131 \
+  -p 13132:13132 \
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock \
@@ -282,6 +303,7 @@ podman run -d \
 podman run -d \
   --name moltis \
   -p 13131:13131 \
+  -p 13132:13132 \
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /run/podman/podman.sock:/var/run/docker.sock \
@@ -304,6 +326,7 @@ sudo systemctl enable --now podman.socket
 <pre><code class="language-bash">docker run -d \
   --name moltis \
   -p 13131:13131 \
+  -p 13132:13132 \
   -e MOLTIS_CONFIG_DIR=/config \
   -e MOLTIS_DATA_DIR=/data \
   -v ./config:/config \
