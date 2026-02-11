@@ -234,7 +234,9 @@ pub async fn vault_guard(
         return next.run(request).await;
     }
 
-    if !vault.is_unsealed().await {
+    // Only block when vault is *sealed* (initialized but locked).
+    // Uninitialized vaults pass through — the user hasn't set up encryption yet.
+    if let Ok(moltis_vault::VaultStatus::Sealed) = vault.status().await {
         return (
             StatusCode::LOCKED,
             Json(serde_json::json!({"error": "vault is sealed", "status": "sealed"})),
