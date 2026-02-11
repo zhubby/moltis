@@ -2,17 +2,20 @@
 default:
     @just --list
 
+# Keep local formatting/linting toolchain aligned with CI/release workflows.
+nightly_toolchain := "nightly-2025-11-30"
+
 # Format Rust code
 format:
-    cargo +nightly fmt --all
+    cargo +{{nightly_toolchain}} fmt --all
 
 # Check if code is formatted
 format-check:
-    cargo +nightly fmt -- --check
+    cargo +{{nightly_toolchain}} fmt --all -- --check
 
 # Lint Rust code using clippy
 lint:
-    cargo clippy --bins --tests --benches --examples --all-features --all-targets -- -D warnings
+    cargo +{{nightly_toolchain}} clippy -Z unstable-options --workspace --all-features --all-targets --timings -- -D warnings
 
 # Build the project
 build:
@@ -181,9 +184,31 @@ flatpak:
 # Run all CI checks (format, lint, build, test)
 ci: format-check lint build test
 
+# Run the same Rust preflight gates used before release packaging.
+release-preflight:
+    cargo +{{nightly_toolchain}} fmt --all -- --check
+    cargo +{{nightly_toolchain}} clippy -Z unstable-options --workspace --all-features --all-targets --timings -- -D warnings
+
+# Commit all changes, push branch, create/update PR, and run local validation.
+# All args are optional; defaults are auto-generated from branch + changed files.
+ship commit_message='' pr_title='' pr_body='':
+    ./scripts/ship-pr.sh {{ quote(commit_message) }} {{ quote(pr_title) }} {{ quote(pr_body) }}
+
 # Run all tests
 test:
     cargo test --all-features
+
+# Install browser tooling for gateway web UI e2e tests.
+ui-e2e-install:
+    cd crates/gateway/ui && npm install && npm run e2e:install
+
+# Run gateway web UI e2e tests (Playwright).
+ui-e2e:
+    cd crates/gateway/ui && npm run e2e
+
+# Run gateway web UI e2e tests with headed browser.
+ui-e2e-headed:
+    cd crates/gateway/ui && npm run e2e:headed
 
 # Build all Linux packages (deb + rpm + arch + appimage) for all architectures
 packages-all: deb-all rpm-all arch-pkg-all

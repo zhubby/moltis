@@ -1,11 +1,12 @@
 ---
-description: "Git workflow standards: proper commit messages, pre-commit checks, and git worktree usage for independent feature work"
+description: "Moltis engineering guide for Claude/Codex agents: Rust architecture, testing, security, and release workflows"
 alwaysApply: true
 ---
 
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and agents when
+working with code in this repository.
 
 ## General
 
@@ -220,6 +221,30 @@ whichever is already imported in the crate you're editing, but default to
 `time` for new code since it's lighter.
 
 ### General style
+
+- **Prefer guard clauses (early returns)** over nested `if` blocks. Check
+  for edge cases at the top of a function or block and `return` immediately,
+  then continue with the main logic at the top indentation level. This
+  reduces nesting and makes the happy path easier to follow.
+
+  ```rust
+  // Good — guard clause, flat structure
+  if items.is_empty() {
+      return;
+  }
+  info!(count = items.len(), "processing items");
+  for item in items { /* ... */ }
+
+  // Bad — unnecessary nesting
+  if !items.is_empty() {
+      info!(count = items.len(), "processing items");
+      for item in items { /* ... */ }
+  }
+  ```
+
+  Apply this to all control flow: `return`, `return Ok(...)`, `continue`,
+  `break`. When a function has multiple preconditions, stack the guards at
+  the top so the reader hits the happy path quickly.
 
 - Prefer iterators and combinators (`.map()`, `.filter()`, `.collect()`)
   over manual loops when they express intent more clearly.
@@ -528,11 +553,50 @@ cargo test <module>::               # Run all tests in a module
 cargo test -- --nocapture            # Run tests with stdout visible
 ```
 
+### E2E Tests (Web UI)
+
+**Every change to the web UI must have a matching E2E test.** This applies to:
+
+- **JavaScript changes** — new features, event handlers, state management,
+  WebSocket behavior, RPC calls.
+- **HTML changes** — new pages, layout changes, element additions/removals,
+  form inputs, navigation.
+- **CSS/Tailwind changes** — theme behavior, dark mode, visibility toggles,
+  responsive layout. Test that the right classes are applied and elements
+  are visible/hidden as expected.
+- **Feature completeness** — when adding a full feature (new settings page,
+  new wizard step, etc.), write E2E tests that exercise the entire user flow,
+  not just that the page loads.
+
+E2E tests live in `crates/gateway/ui/e2e/specs/` and use Playwright. Shared
+helpers are in `crates/gateway/ui/e2e/helpers.js`.
+
+```bash
+cd crates/gateway/ui
+npx playwright test                  # Run all E2E tests
+npx playwright test e2e/specs/chat-input.spec.js  # Run a specific spec
+npx playwright test --headed         # Run with visible browser
+```
+
+**Writing E2E tests:**
+
+- Use specific selectors — `getByRole()`, `getByPlaceholder()`, `getByText()`
+  with `{ exact: true }` — over loose CSS selectors or regex patterns.
+- Use the shared helpers (`navigateAndWait`, `waitForWsConnected`,
+  `expectPageContentMounted`, `watchPageErrors`) for consistency.
+- Always assert no JS errors: `const pageErrors = watchPageErrors(page);`
+  at the start, `expect(pageErrors).toEqual([]);` at the end.
+- Avoid `waitForTimeout()` — prefer Playwright's built-in auto-waiting
+  (`toBeVisible()`, `toHaveURL()`, `expect.poll()`).
+- Place new tests in the appropriate existing spec file, or create a new
+  spec file if the feature maps to a new page/domain.
+
 ## Code Quality
 
 ```bash
-cargo +nightly fmt       # Format code (uses nightly)
-cargo +nightly clippy    # Run linter (uses nightly)
+just format              # Format Rust with pinned nightly toolchain
+just format-check        # Exact format check used by CI/release
+just release-preflight   # Rust pre-release gates (fmt + clippy)
 cargo check              # Fast compile check without producing binary
 taplo fmt                # Format TOML files (Cargo.toml, etc.)
 biome check --write      # Lint & format JavaScript files (installed via mise)
@@ -900,8 +964,8 @@ concrete (commands to run, UI paths to click, and expected results).
 - [ ] **No secrets or private tokens are included** (CRITICAL)
 - [ ] `taplo fmt` (when TOML files were modified)
 - [ ] `biome check --write` (when JS files were modified; CI runs `biome ci`)
-- [ ] Code is formatted (`cargo +nightly fmt --all` / `just format-check` passes)
-- [ ] Code passes clippy linting (`cargo +nightly clippy --workspace --all-targets --all-features` / `just lint` passes)
+- [ ] Code is formatted (`just format-check` passes)
+- [ ] Code passes release clippy gate (`just release-preflight` passes)
 - [ ] All tests pass (`cargo test`)
 - [ ] Commit message follows conventional commit format
 - [ ] Changes are logically grouped in the commit

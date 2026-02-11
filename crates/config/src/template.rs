@@ -84,6 +84,11 @@ auto_generate = true              # Auto-generate local CA and server certificat
 
 [providers]
 offered = ["openai", "github-copilot"]      # Providers shown in onboarding/picker UI ([] = show all)
+# All available providers:
+#   "anthropic", "openai", "gemini", "groq", "xai", "deepseek",
+#   "mistral", "openrouter", "cerebras", "minimax", "moonshot",
+#   "venice", "ollama", "local-llm", "openai-codex", "github-copilot",
+#   "kimi-code"
 
 # ── Anthropic (Claude) ────────────────────────────────────────
 # [providers.anthropic]
@@ -146,6 +151,10 @@ message_queue_mode = "followup"   # How to handle messages during an active agen
                                   #   "followup" - Queue messages, replay one-by-one after run
                                   #   "collect"  - Buffer messages, concatenate as single message
 # priority_models = ["claude-opus-4-5", "gpt-5.2", "gemini-3-flash"]  # Optional: models to pin first in selectors
+# allowed_models = ["opus", "gpt 5.2", "gemini-3"]  # Optional: only show models matching these patterns (local-llm/ollama are always included)
+# recent + popular patterns: "gpt 5.2", "sonnet 4.5", "gemini 3", "kimi-k2.5", "minimax m2.1", "glm 4.7"
+# value-focused patterns: "haiku", "mini", "nano", "flash", "kimi-k2.5", "minimax m2.1", "glm 4.7"
+allowed_models = ["gpt 5.2", "sonnet 4.5", "haiku", "mini", "flash", "kimi-k2.5", "minimax m2.1", "glm 4.7"]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOLS
@@ -449,11 +458,16 @@ fallback_models = []              # Ordered list of fallback models
 enabled = false                   # Enable text-to-speech
 provider = "elevenlabs"           # Active TTS provider
 providers = ["elevenlabs"]        # UI allowlist (empty = show all TTS providers)
+# All available TTS providers:
+#   "elevenlabs", "openai", "google", "piper", "coqui"
 
 [voice.stt]
 enabled = false                   # Enable speech-to-text
 provider = "mistral"              # Active STT provider
 providers = ["mistral", "elevenlabs"] # UI allowlist (empty = show all STT providers)
+# All available STT providers:
+#   "whisper", "groq", "deepgram", "google", "mistral",
+#   "voxtral-local", "whisper-cli", "sherpa-onnx", "elevenlabs-stt"
 
 # [voice.tts.elevenlabs]
 # api_key = "${{ELEVENLABS_API_KEY}}" # Or set ELEVENLABS_API_KEY env var
@@ -511,20 +525,33 @@ reset_on_exit = true              # Reset serve/funnel when gateway shuts down
 
 # [hooks]
 # [[hooks.hooks]]
-# name = "notify-on-complete"     # Hook name (for logging)
-# command = "/path/to/script.sh"  # Command to run
-# events = [                      # Events that trigger this hook:
-#     "agent.turn.start",         #   Agent turn started
-#     "agent.turn.complete",      #   Agent turn completed
-#     "tool.call.start",          #   Tool call started
-#     "tool.call.complete",       #   Tool call completed
-#     "session.create",           #   Session created
-#     "session.close",            #   Session closed
+# name = "my-hook"                # Hook name (for logging)
+# command = "/path/to/handler.sh" # Command to run
+# events = [
+#     # ── Modifying events (can block or modify payload) ──
+#     "BeforeAgentStart",          # Before the agent loop starts
+#     "BeforeLLMCall",             # Before prompt is sent to the LLM provider
+#     "AfterLLMCall",              # After LLM response, before tool execution
+#     "BeforeToolCall",            # Before a tool executes
+#     "BeforeCompaction",          # Before context window compaction
+#     "MessageSending",            # Before sending a response to the user
+#     "ToolResultPersist",         # When a tool result is persisted
+#     #
+#     # ── Read-only events (observe only, run in parallel) ──
+#     "AfterToolCall",             # After a tool completes
+#     "AfterCompaction",           # After context is compacted
+#     "AgentEnd",                  # When the agent loop finishes
+#     "MessageReceived",           # When a user message arrives
+#     "MessageSent",               # After a response is delivered
+#     "SessionStart",              # When a new session begins
+#     "SessionEnd",                # When a session ends
+#     "GatewayStart",              # When Moltis starts
+#     "GatewayStop",               # When Moltis shuts down
+#     "Command",                   # When a slash command is used
 # ]
 # timeout = 10                    # Command timeout in seconds
 # [hooks.hooks.env]               # Environment variables passed to command
 # CUSTOM_VAR = "value"
-# SESSION_ID = "${{SESSION_ID}}"    # Variables are substituted
 "##
     )
 }

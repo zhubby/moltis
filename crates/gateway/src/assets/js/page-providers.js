@@ -1,4 +1,4 @@
-// ── Providers page (Preact + HTM + Signals) ─────────────────
+// ── LLMs page (Preact + HTM + Signals) ──────────────────────
 
 import { signal } from "@preact/signals";
 import { html } from "htm/preact";
@@ -9,7 +9,6 @@ import { sendRpc } from "./helpers.js";
 import { fetchModels } from "./models.js";
 import { updateNavCount } from "./nav-counts.js";
 import { openModelSelectorForProvider, openProviderModal } from "./providers.js";
-import { registerPage } from "./router.js";
 import { connected } from "./signals.js";
 import * as S from "./state.js";
 import { ConfirmDialog, requestConfirm } from "./ui.js";
@@ -265,7 +264,7 @@ function ProviderSection(props) {
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
 									<div class="text-sm font-medium text-[var(--text-strong)] truncate">${model.displayName || model.id}</div>
-									${model.unsupported ? html`<span class="provider-item-badge warning" title=${model.unsupportedReason || "Model is not supported for this account/provider"}>Unsupported</span>` : null}
+									${model.unsupported ? html`<span class="provider-item-badge warning" title=${model.unsupportedReason || "Model is not supported for this account"}>Unsupported</span>` : null}
 									${model.supportsTools ? null : html`<span class="provider-item-badge warning">Chat only</span>`}
 									${model.disabled ? html`<span class="provider-item-badge muted">Disabled</span>` : null}
 								</div>
@@ -300,14 +299,14 @@ function ProvidersPage() {
 	return html`
 		<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
 				<div class="flex items-center gap-3">
-					<h2 class="text-lg font-medium text-[var(--text-strong)]">Providers</h2>
+					<h2 class="text-lg font-medium text-[var(--text-strong)]">LLMs</h2>
 					<button
 						class="provider-btn"
 						onClick=${() => {
 							if (connected.value) openProviderModal();
 						}}
 					>
-						Add Provider
+						Add LLM
 					</button>
 					<button
 						class="provider-btn provider-btn-secondary"
@@ -350,7 +349,7 @@ function ProvidersPage() {
 					loading.value && configuredModels.value.length === 0
 						? html`<div class="text-xs text-[var(--muted)]">Loading…</div>`
 						: configuredModels.value.length === 0
-							? html`<div class="text-xs text-[var(--muted)]" style="padding:12px 0;">No providers configured yet.</div>`
+							? html`<div class="text-xs text-[var(--muted)]" style="padding:12px 0;">No LLM providers configured yet.</div>`
 							: html`<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
 								${groupProviderRows(configuredModels.value, providerMetaSig.value).map((g) => html`<${ProviderSection} key=${g.provider} group=${g} />`)}
 							</div>`
@@ -362,15 +361,16 @@ function ProvidersPage() {
 		`;
 }
 
-registerPage(
-	"/providers",
-	function initProviders(container) {
-		container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
-		render(html`<${ProvidersPage} />`, container);
-	},
-	function teardownProviders() {
-		S.setRefreshProvidersPage(null);
-		var container = S.$("pageContent");
-		if (container) render(null, container);
-	},
-);
+var _providersContainer = null;
+
+export function initProviders(container) {
+	_providersContainer = container;
+	container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
+	render(html`<${ProvidersPage} />`, container);
+}
+
+export function teardownProviders() {
+	S.setRefreshProvidersPage(null);
+	if (_providersContainer) render(null, _providersContainer);
+	_providersContainer = null;
+}

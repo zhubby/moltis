@@ -21,6 +21,8 @@ pub struct SessionEntry {
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: u32,
+    #[serde(default)]
+    pub last_seen_message_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(default)]
@@ -39,6 +41,10 @@ pub struct SessionEntry {
     pub fork_point: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_disabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub version: u64,
 }
 
 /// JSON file-backed index mapping session key → SessionEntry.
@@ -92,6 +98,7 @@ impl SessionMetadata {
                 {
                     e.label = label.clone();
                     e.updated_at = now;
+                    e.version += 1;
                 }
             })
             .or_insert_with(|| SessionEntry {
@@ -102,6 +109,7 @@ impl SessionMetadata {
                 created_at: now,
                 updated_at: now,
                 message_count: 0,
+                last_seen_message_count: 0,
                 project_id: None,
                 archived: false,
                 worktree_branch: None,
@@ -111,6 +119,8 @@ impl SessionMetadata {
                 parent_session_key: None,
                 fork_point: None,
                 mcp_disabled: None,
+                preview: None,
+                version: 0,
             })
     }
 
@@ -119,6 +129,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.model = model;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -127,6 +138,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.message_count = message_count;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -135,6 +147,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.project_id = project_id;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -143,6 +156,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.worktree_branch = branch;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -151,6 +165,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.sandbox_image = image;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -159,6 +174,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.sandbox_enabled = enabled;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -167,6 +183,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.mcp_disabled = disabled;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -175,6 +192,7 @@ impl SessionMetadata {
         if let Some(entry) = self.entries.get_mut(key) {
             entry.channel_binding = binding;
             entry.updated_at = now_ms();
+            entry.version += 1;
         }
     }
 
@@ -207,6 +225,7 @@ struct SessionRow {
     created_at: i64,
     updated_at: i64,
     message_count: i32,
+    last_seen_message_count: i32,
     project_id: Option<String>,
     archived: i32,
     worktree_branch: Option<String>,
@@ -216,6 +235,8 @@ struct SessionRow {
     parent_session_key: Option<String>,
     fork_point: Option<i32>,
     mcp_disabled: Option<i32>,
+    preview: Option<String>,
+    version: i64,
 }
 
 impl From<SessionRow> for SessionEntry {
@@ -228,6 +249,7 @@ impl From<SessionRow> for SessionEntry {
             created_at: r.created_at as u64,
             updated_at: r.updated_at as u64,
             message_count: r.message_count as u32,
+            last_seen_message_count: r.last_seen_message_count as u32,
             project_id: r.project_id,
             archived: r.archived != 0,
             worktree_branch: r.worktree_branch,
@@ -237,6 +259,8 @@ impl From<SessionRow> for SessionEntry {
             parent_session_key: r.parent_session_key,
             fork_point: r.fork_point.map(|v| v as u32),
             mcp_disabled: r.mcp_disabled.map(|v| v != 0),
+            preview: r.preview,
+            version: r.version as u64,
         }
     }
 }
@@ -261,6 +285,7 @@ impl SqliteSessionMetadata {
                 created_at      INTEGER NOT NULL,
                 updated_at      INTEGER NOT NULL,
                 message_count   INTEGER NOT NULL DEFAULT 0,
+                last_seen_message_count INTEGER NOT NULL DEFAULT 0,
                 project_id      TEXT    REFERENCES projects(id) ON DELETE SET NULL,
                 archived        INTEGER NOT NULL DEFAULT 0,
                 worktree_branch TEXT,
@@ -269,7 +294,9 @@ impl SqliteSessionMetadata {
                 channel_binding     TEXT,
                 parent_session_key  TEXT,
                 fork_point          INTEGER,
-                mcp_disabled        INTEGER
+                mcp_disabled        INTEGER,
+                preview             TEXT,
+                version             INTEGER NOT NULL DEFAULT 0
             )"#,
         )
         .execute(pool)
@@ -319,10 +346,11 @@ impl SqliteSessionMetadata {
         let now = now_ms() as i64;
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
-            r#"INSERT INTO sessions (key, id, label, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)
+            r#"INSERT INTO sessions (key, id, label, created_at, updated_at, version)
+               VALUES (?, ?, ?, ?, ?, 0)
                ON CONFLICT(key) DO UPDATE SET
-                 label = COALESCE(excluded.label, sessions.label)"#,
+                 label = COALESCE(excluded.label, sessions.label),
+                 version = sessions.version + 1"#,
         )
         .bind(key)
         .bind(&id)
@@ -336,21 +364,47 @@ impl SqliteSessionMetadata {
 
     pub async fn set_model(&self, key: &str, model: Option<String>) {
         let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET model = ?, updated_at = ? WHERE key = ?")
-            .bind(&model)
-            .bind(now)
+        sqlx::query(
+            "UPDATE sessions SET model = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(&model)
+        .bind(now)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .ok();
+    }
+
+    pub async fn touch(&self, key: &str, message_count: u32) {
+        let now = now_ms() as i64;
+        sqlx::query(
+            "UPDATE sessions SET message_count = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(message_count as i32)
+        .bind(now)
+        .bind(key)
+            .execute(&self.pool)
+            .await
+            .ok();
+    }
+
+    /// Store a short preview of the first user message for sidebar display.
+    pub async fn set_preview(&self, key: &str, preview: Option<&str>) {
+        sqlx::query("UPDATE sessions SET preview = ?, version = version + 1 WHERE key = ?")
+            .bind(preview)
             .bind(key)
             .execute(&self.pool)
             .await
             .ok();
     }
 
-    pub async fn touch(&self, key: &str, message_count: u32) {
-        let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET message_count = ?, updated_at = ? WHERE key = ?")
-            .bind(message_count as i32)
-            .bind(now)
-            .bind(key)
+    /// Mark a session as "seen" by setting `last_seen_message_count` to the
+    /// current `message_count`.
+    pub async fn mark_seen(&self, key: &str) {
+        sqlx::query(
+            "UPDATE sessions SET last_seen_message_count = message_count, version = version + 1 WHERE key = ?",
+        )
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -358,10 +412,12 @@ impl SqliteSessionMetadata {
 
     pub async fn set_project_id(&self, key: &str, project_id: Option<String>) {
         let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET project_id = ?, updated_at = ? WHERE key = ?")
-            .bind(&project_id)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET project_id = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(&project_id)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -369,10 +425,12 @@ impl SqliteSessionMetadata {
 
     pub async fn set_sandbox_image(&self, key: &str, image: Option<String>) {
         let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET sandbox_image = ?, updated_at = ? WHERE key = ?")
-            .bind(&image)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET sandbox_image = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(&image)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -381,10 +439,12 @@ impl SqliteSessionMetadata {
     pub async fn set_sandbox_enabled(&self, key: &str, enabled: Option<bool>) {
         let now = now_ms() as i64;
         let val = enabled.map(|b| b as i32);
-        sqlx::query("UPDATE sessions SET sandbox_enabled = ?, updated_at = ? WHERE key = ?")
-            .bind(val)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET sandbox_enabled = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(val)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -392,10 +452,12 @@ impl SqliteSessionMetadata {
 
     pub async fn set_worktree_branch(&self, key: &str, branch: Option<String>) {
         let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET worktree_branch = ?, updated_at = ? WHERE key = ?")
-            .bind(&branch)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET worktree_branch = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(&branch)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -404,10 +466,12 @@ impl SqliteSessionMetadata {
     pub async fn set_mcp_disabled(&self, key: &str, disabled: Option<bool>) {
         let now = now_ms() as i64;
         let val = disabled.map(|b| b as i32);
-        sqlx::query("UPDATE sessions SET mcp_disabled = ?, updated_at = ? WHERE key = ?")
-            .bind(val)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET mcp_disabled = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(val)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -415,10 +479,12 @@ impl SqliteSessionMetadata {
 
     pub async fn set_channel_binding(&self, key: &str, binding: Option<String>) {
         let now = now_ms() as i64;
-        sqlx::query("UPDATE sessions SET channel_binding = ?, updated_at = ? WHERE key = ?")
-            .bind(&binding)
-            .bind(now)
-            .bind(key)
+        sqlx::query(
+            "UPDATE sessions SET channel_binding = ?, updated_at = ?, version = version + 1 WHERE key = ?",
+        )
+        .bind(&binding)
+        .bind(now)
+        .bind(key)
             .execute(&self.pool)
             .await
             .ok();
@@ -429,7 +495,7 @@ impl SqliteSessionMetadata {
         let now = now_ms() as i64;
         let fp = fork_point.map(|v| v as i32);
         sqlx::query(
-            "UPDATE sessions SET parent_session_key = ?, fork_point = ?, updated_at = ? WHERE key = ?",
+            "UPDATE sessions SET parent_session_key = ?, fork_point = ?, updated_at = ?, version = version + 1 WHERE key = ?",
         )
         .bind(&parent_key)
         .bind(fp)
@@ -681,6 +747,33 @@ mod tests {
         meta.upsert("main", None).await.unwrap();
         meta.touch("main", 5).await;
         assert_eq!(meta.get("main").await.unwrap().message_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_mark_seen() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        meta.upsert("main", None).await.unwrap();
+        // New session starts with last_seen_message_count = 0.
+        assert_eq!(meta.get("main").await.unwrap().last_seen_message_count, 0);
+
+        // Simulate receiving messages.
+        meta.touch("main", 5).await;
+        // touch does NOT change last_seen_message_count.
+        assert_eq!(meta.get("main").await.unwrap().last_seen_message_count, 0);
+
+        // Mark as seen.
+        meta.mark_seen("main").await;
+        let entry = meta.get("main").await.unwrap();
+        assert_eq!(entry.last_seen_message_count, 5);
+        assert_eq!(entry.message_count, 5);
+
+        // More messages arrive — last_seen stays at previous value.
+        meta.touch("main", 8).await;
+        let entry = meta.get("main").await.unwrap();
+        assert_eq!(entry.message_count, 8);
+        assert_eq!(entry.last_seen_message_count, 5);
     }
 
     #[test]
@@ -1006,5 +1099,124 @@ mod tests {
 
         meta.set_mcp_disabled("main", None).await;
         assert!(meta.get("main").await.unwrap().mcp_disabled.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_version_starts_at_zero() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        let entry = meta.upsert("main", None).await.unwrap();
+        assert_eq!(entry.version, 0);
+    }
+
+    #[tokio::test]
+    async fn test_version_increments_on_mutation() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        meta.upsert("main", None).await.unwrap();
+        assert_eq!(meta.get("main").await.unwrap().version, 0);
+
+        meta.set_model("main", Some("gpt-4".to_string())).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 1);
+
+        meta.touch("main", 5).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 2);
+
+        // Insert a project row so the FK constraint is satisfied.
+        sqlx::query("INSERT INTO projects (id) VALUES ('proj1')")
+            .execute(&meta.pool)
+            .await
+            .unwrap();
+        meta.set_project_id("main", Some("proj1".to_string())).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 3);
+
+        meta.set_sandbox_enabled("main", Some(true)).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 4);
+
+        meta.set_sandbox_image("main", Some("img:1".to_string()))
+            .await;
+        assert_eq!(meta.get("main").await.unwrap().version, 5);
+
+        meta.set_worktree_branch("main", Some("branch".to_string()))
+            .await;
+        assert_eq!(meta.get("main").await.unwrap().version, 6);
+
+        meta.set_mcp_disabled("main", Some(true)).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 7);
+
+        meta.set_channel_binding("main", Some("{}".to_string()))
+            .await;
+        assert_eq!(meta.get("main").await.unwrap().version, 8);
+
+        meta.set_parent("main", Some("parent".to_string()), Some(0))
+            .await;
+        assert_eq!(meta.get("main").await.unwrap().version, 9);
+
+        meta.mark_seen("main").await;
+        assert_eq!(meta.get("main").await.unwrap().version, 10);
+
+        meta.set_preview("main", Some("hello")).await;
+        assert_eq!(meta.get("main").await.unwrap().version, 11);
+    }
+
+    #[tokio::test]
+    async fn test_version_increments_on_upsert_update() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        meta.upsert("main", Some("First".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(meta.get("main").await.unwrap().version, 0);
+
+        // Upsert with existing key bumps version via ON CONFLICT.
+        meta.upsert("main", Some("Second".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(meta.get("main").await.unwrap().version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_version_in_list() {
+        let pool = sqlite_pool().await;
+        let meta = SqliteSessionMetadata::new(pool);
+
+        meta.upsert("main", None).await.unwrap();
+        meta.touch("main", 3).await;
+
+        let list = meta.list().await;
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].version, 1);
+    }
+
+    #[test]
+    fn test_json_backend_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("meta.json");
+        let mut meta = SessionMetadata::load(path.clone()).unwrap();
+
+        meta.upsert("main", None);
+        assert_eq!(meta.get("main").unwrap().version, 0);
+
+        meta.set_model("main", Some("gpt-4".to_string()));
+        assert_eq!(meta.get("main").unwrap().version, 1);
+
+        meta.touch("main", 5);
+        assert_eq!(meta.get("main").unwrap().version, 2);
+
+        // Upsert with label change bumps version.
+        meta.upsert("main", Some("New Label".to_string()));
+        assert_eq!(meta.get("main").unwrap().version, 3);
+
+        // Upsert without change does not bump version.
+        meta.upsert("main", Some("New Label".to_string()));
+        assert_eq!(meta.get("main").unwrap().version, 3);
+
+        // Round-trip through save/load preserves version.
+        meta.save().unwrap();
+        let reloaded = SessionMetadata::load(path).unwrap();
+        assert_eq!(reloaded.get("main").unwrap().version, 3);
     }
 }

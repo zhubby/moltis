@@ -6,6 +6,9 @@ use secrecy::ExposeSecret;
 use std::path::PathBuf;
 
 #[cfg(feature = "web-ui")]
+use askama::Template;
+
+#[cfg(feature = "web-ui")]
 use axum::response::{Html, Redirect};
 use {
     axum::{
@@ -311,6 +314,51 @@ fn should_prebuild_sandbox_image(
     !matches!(mode, moltis_tools::sandbox::SandboxMode::Off) && !packages.is_empty()
 }
 
+fn instance_slug(config: &moltis_config::MoltisConfig) -> String {
+    let mut raw_name = config.identity.name.clone();
+    if let Some(file_identity) = moltis_config::load_identity()
+        && file_identity.name.is_some()
+    {
+        raw_name = file_identity.name;
+    }
+
+    let base = raw_name
+        .unwrap_or_else(|| "moltis".to_string())
+        .to_lowercase();
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in base.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch
+        } else {
+            '-'
+        };
+        if mapped == '-' {
+            if !last_dash {
+                out.push(mapped);
+            }
+            last_dash = true;
+        } else {
+            out.push(mapped);
+            last_dash = false;
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "moltis".to_string()
+    } else {
+        out
+    }
+}
+
+fn sandbox_container_prefix(instance_slug: &str) -> String {
+    format!("moltis-{instance_slug}-sandbox")
+}
+
+fn browser_container_prefix(instance_slug: &str) -> String {
+    format!("moltis-{instance_slug}-browser")
+}
+
 async fn ollama_has_model(base_url: &str, model: &str) -> bool {
     let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
     let response = match reqwest::Client::new().get(url).send().await {
@@ -401,15 +449,19 @@ fn approval_manager_from_config(config: &moltis_config::MoltisConfig) -> Approva
 pub struct AppState {
     pub gateway: Arc<GatewayState>,
     pub methods: Arc<MethodRegistry>,
+    pub request_throttle: Arc<crate::request_throttle::RequestThrottle>,
     #[cfg(feature = "push-notifications")]
     pub push_service: Option<Arc<crate::push::PushService>>,
 }
 
 // ── Server startup ───────────────────────────────────────────────────────────
 
-/// Build the protected API routes (shared between both build_gateway_app versions).
+/// Build the API routes (shared between both build_gateway_app versions).
+///
+/// Auth is enforced by `auth_gate` middleware on the whole router — these
+/// routes no longer carry their own auth layer.
 #[cfg(feature = "web-ui")]
-fn build_protected_api_routes() -> Router<AppState> {
+fn build_api_routes() -> Router<AppState> {
     let protected = Router::new()
         .route("/api/bootstrap", get(api_bootstrap_handler))
         .route("/api/gon", get(api_gon_handler))
@@ -494,33 +546,21 @@ fn build_protected_api_routes() -> Router<AppState> {
     protected
 }
 
-/// Apply auth middleware and feature-specific routes to protected API routes.
+/// Add feature-specific routes to API routes.
 #[cfg(feature = "web-ui")]
-fn finalize_protected_routes(protected: Router<AppState>, app_state: AppState) -> Router<AppState> {
-    // Vault guard: return 423 Locked when vault is sealed.
-    #[cfg(feature = "vault")]
-    let protected = protected.layer(axum::middleware::from_fn_with_state(
-        app_state.clone(),
-        crate::auth_middleware::vault_guard,
-    ));
-
-    let protected = protected.layer(axum::middleware::from_fn_with_state(
-        app_state,
-        crate::auth_middleware::require_auth,
-    ));
-
-    // Mount tailscale routes (protected) when the feature is enabled.
+fn add_feature_routes(routes: Router<AppState>) -> Router<AppState> {
+    // Mount tailscale routes when the feature is enabled.
     #[cfg(feature = "tailscale")]
-    let protected = protected.nest(
+    let routes = routes.nest(
         "/api/tailscale",
         crate::tailscale_routes::tailscale_router(),
     );
 
     // Mount push notification routes when the feature is enabled.
     #[cfg(feature = "push-notifications")]
-    let protected = protected.nest("/api/push", crate::push_routes::push_router());
+    let routes = routes.nest("/api/push", crate::push_routes::push_router());
 
-    protected
+    routes
 }
 
 /// Build the CORS layer with dynamic host-based origin validation.
@@ -679,25 +719,42 @@ pub fn build_gateway_app(
     let app_state = AppState {
         gateway: state,
         methods,
+        request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
         push_service,
     };
 
     #[cfg(feature = "web-ui")]
     let router = {
-        let protected = build_protected_api_routes();
-        let protected = finalize_protected_routes(protected, app_state.clone());
+        let api = build_api_routes();
+        let api = add_feature_routes(api);
 
-        // Public routes (assets, PWA files, SPA fallback).
         router
             .route("/auth/callback", get(oauth_callback_handler))
             .route("/onboarding", get(onboarding_handler))
+            .route("/login", get(login_handler_page))
             .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
             .route("/assets/{*path}", get(asset_handler))
             .route("/manifest.json", get(manifest_handler))
             .route("/sw.js", get(service_worker_handler))
-            .merge(protected)
+            .merge(api)
             .fallback(spa_fallback)
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::auth_middleware::auth_gate,
+            ))
     };
+
+    // Vault guard: return 423 Locked when vault is sealed.
+    #[cfg(feature = "vault")]
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::auth_middleware::vault_guard,
+    ));
+
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::request_throttle::throttle_gate,
+    ));
 
     let router = apply_middleware_stack(router, cors, http_request_logs);
 
@@ -740,24 +797,41 @@ pub fn build_gateway_app(
     let app_state = AppState {
         gateway: state,
         methods,
+        request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
     };
 
     #[cfg(feature = "web-ui")]
     let router = {
-        let protected = build_protected_api_routes();
-        let protected = finalize_protected_routes(protected, app_state.clone());
+        let api = build_api_routes();
+        let api = add_feature_routes(api);
 
-        // Public routes (assets, PWA files, SPA fallback).
         router
             .route("/auth/callback", get(oauth_callback_handler))
             .route("/onboarding", get(onboarding_handler))
+            .route("/login", get(login_handler_page))
             .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
             .route("/assets/{*path}", get(asset_handler))
             .route("/manifest.json", get(manifest_handler))
             .route("/sw.js", get(service_worker_handler))
-            .merge(protected)
+            .merge(api)
             .fallback(spa_fallback)
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::auth_middleware::auth_gate,
+            ))
     };
+
+    // Vault guard: return 423 Locked when vault is sealed.
+    #[cfg(feature = "vault")]
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::auth_middleware::vault_guard,
+    ));
+
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::request_throttle::throttle_gate,
+    ));
 
     let router = apply_middleware_stack(router, cors, http_request_logs);
 
@@ -793,6 +867,9 @@ pub async fn start_gateway(
 
     // Load config file (moltis.toml / .yaml / .json) if present.
     let mut config = moltis_config::discover_and_load();
+    let instance_slug_value = instance_slug(&config);
+    let browser_container_prefix = browser_container_prefix(&instance_slug_value);
+    let sandbox_container_prefix = sandbox_container_prefix(&instance_slug_value);
 
     // CLI --no-tls / MOLTIS_NO_TLS overrides config file TLS setting.
     if no_tls {
@@ -889,7 +966,9 @@ pub async fn start_gateway(
     services.exec_approval = Arc::new(LiveExecApprovalService::new(Arc::clone(&approval_manager)));
 
     // Wire browser service if enabled.
-    if let Some(browser_svc) = crate::services::RealBrowserService::from_config(&config) {
+    if let Some(browser_svc) =
+        crate::services::RealBrowserService::from_config(&config, browser_container_prefix)
+    {
         services.browser = Arc::new(browser_svc);
     }
 
@@ -904,6 +983,7 @@ pub async fn start_gateway(
         Arc::clone(&registry),
         config.providers.clone(),
         deploy_platform.clone(),
+        config.chat.allowed_models.clone(),
     ));
 
     // Wire live local-llm service when the feature is enabled.
@@ -939,6 +1019,7 @@ pub async fn start_gateway(
             Arc::clone(&registry),
             Arc::clone(&model_store),
             config.chat.priority_models.clone(),
+            config.chat.allowed_models.clone(),
         ));
         services = services.with_model(Arc::clone(&svc) as Arc<dyn crate::services::ModelService>);
         Some(svc)
@@ -1096,18 +1177,41 @@ pub async fn start_gateway(
     );
 
     // Initialize WebAuthn state for passkey support.
-    // RP ID defaults to "localhost"; override with MOLTIS_WEBAUTHN_RP_ID.
-    let rp_id = std::env::var("MOLTIS_WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".into());
+    // RP ID: explicit env > PaaS env (DO, Render, Fly, Railway) > "localhost"
+    let rp_id = std::env::var("MOLTIS_WEBAUTHN_RP_ID")
+        .or_else(|_| std::env::var("APP_DOMAIN"))
+        .or_else(|_| std::env::var("RENDER_EXTERNAL_HOSTNAME"))
+        .or_else(|_| std::env::var("FLY_APP_NAME").map(|name| format!("{name}.fly.dev")))
+        .or_else(|_| std::env::var("RAILWAY_PUBLIC_DOMAIN"))
+        .unwrap_or_else(|_| "localhost".into());
     let default_scheme = if config.tls.enabled {
         "https"
     } else {
         "http"
     };
+    // Origin: explicit env > PaaS env (DO, Render, Fly) > scheme://rp_id(:port)
+    // PaaS platforms proxy on standard ports, so skip the port when rp_id isn't localhost.
     let rp_origin_str = std::env::var("MOLTIS_WEBAUTHN_ORIGIN")
-        .unwrap_or_else(|_| format!("{default_scheme}://{rp_id}:{port}"));
+        .or_else(|_| std::env::var("APP_URL"))
+        .or_else(|_| std::env::var("RENDER_EXTERNAL_URL"))
+        .unwrap_or_else(|_| {
+            if rp_id == "localhost" {
+                format!("{default_scheme}://{rp_id}:{port}")
+            } else {
+                // PaaS platforms terminate TLS at the proxy, so the browser always
+                // sees https even though the app runs with --no-tls.
+                format!("https://{rp_id}")
+            }
+        });
     // Build extra allowed origins so passkeys work when accessed via mDNS
     // hostname (e.g. http://m4max.local:18080) in addition to localhost.
     let mut extra_origins = Vec::new();
+    if rp_id == "localhost"
+        && let Ok(url) =
+            webauthn_rs::prelude::Url::parse(&format!("{default_scheme}://moltis.localhost:{port}"))
+    {
+        extra_origins.push(url);
+    }
     if let Ok(hn) = hostname::get() {
         let hn_str = hn.to_string_lossy();
         if hn_str != rp_id && hn_str != "localhost" {
@@ -1405,6 +1509,7 @@ pub async fn start_gateway(
 
     // Build sandbox router from config (shared across sessions).
     let mut sandbox_config = moltis_tools::sandbox::SandboxConfig::from(&config.tools.exec.sandbox);
+    sandbox_config.container_prefix = Some(sandbox_container_prefix);
     sandbox_config.timezone = config
         .user
         .timezone
@@ -1750,13 +1855,14 @@ pub async fn start_gateway(
     let (hook_registry, discovered_hooks_info) =
         discover_and_build_hooks(&persisted_disabled, Some(&session_store)).await;
 
-    // Wire live session service with sandbox router, project store, and hooks.
+    // Wire live session service with sandbox router, project store, hooks, and browser.
     {
         let mut session_svc =
             LiveSessionService::new(Arc::clone(&session_store), Arc::clone(&session_metadata))
                 .with_sandbox_router(Arc::clone(&sandbox_router))
                 .with_project_store(Arc::clone(&project_store))
-                .with_state_store(Arc::clone(&session_state_store));
+                .with_state_store(Arc::clone(&session_state_store))
+                .with_browser_service(Arc::clone(&services.browser));
         if let Some(ref hooks) = hook_registry {
             session_svc = session_svc.with_hooks(Arc::clone(hooks));
         }
@@ -2122,6 +2228,9 @@ pub async fn start_gateway(
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
+    // Keep a reference to the browser service for periodic cleanup and shutdown.
+    let browser_for_lifecycle = Arc::clone(&services.browser);
+
     let state = GatewayState::with_options(
         resolved_auth,
         services,
@@ -2156,7 +2265,8 @@ pub async fn start_gateway(
     // Generate a one-time setup code if setup is pending and auth is not disabled.
     let setup_code_display =
         if !credential_store.is_setup_complete() && !credential_store.is_auth_disabled() {
-            let code = crate::auth_routes::generate_setup_code();
+            let code = std::env::var("MOLTIS_E2E_SETUP_CODE")
+                .unwrap_or_else(|_| crate::auth_routes::generate_setup_code());
             state.inner.write().await.setup_code = Some(secrecy::Secret::new(code.clone()));
             Some(code)
         } else {
@@ -2551,10 +2661,10 @@ pub async fn start_gateway(
     } else {
         addr
     };
-    // Use moltis.localhost for display URLs when bound to loopback with TLS.
+    // Use plain localhost for display URLs when bound to loopback with TLS.
     #[cfg(feature = "tls")]
     let display_host = if is_localhost && tls_active {
-        format!("{}:{}", crate::tls::LOCALHOST_DOMAIN, port)
+        format!("localhost:{port}")
     } else {
         display_ip.to_string()
     };
@@ -2630,7 +2740,7 @@ pub async fn start_gateway(
         if let Some(ref ca) = ca_cert_path {
             let http_port = config.tls.http_redirect_port.unwrap_or(port + 1);
             let ca_host = if is_localhost {
-                crate::tls::LOCALHOST_DOMAIN
+                "localhost"
             } else {
                 bind
             };
@@ -2684,18 +2794,64 @@ pub async fn start_gateway(
         }
     }
 
-    // Register tailscale shutdown hook (reset serve/funnel on exit).
-    #[cfg(feature = "tailscale")]
-    if tailscale_mode != TailscaleMode::Off && tailscale_reset_on_exit {
+    // Spawn periodic browser cleanup task (every 30s, removes idle instances).
+    {
+        let browser_for_cleanup = Arc::clone(&browser_for_lifecycle);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                browser_for_cleanup.cleanup_idle().await;
+            }
+        });
+    }
+
+    // Spawn shutdown handler:
+    // - reset tailscale state on exit (when configured)
+    // - give browser pool 5s to shut down gracefully
+    // - force process exit to avoid hanging after ctrl-c
+    {
+        let browser_for_shutdown = Arc::clone(&browser_for_lifecycle);
+        #[cfg(feature = "tailscale")]
+        let reset_tailscale_on_exit =
+            tailscale_mode != TailscaleMode::Off && tailscale_reset_on_exit;
+        #[cfg(feature = "tailscale")]
         let ts_mode = tailscale_mode;
         tokio::spawn(async move {
-            // Wait for ctrl-c or shutdown signal.
-            tokio::signal::ctrl_c().await.ok();
-            info!("shutting down tailscale {ts_mode}");
-            let manager = CliTailscaleManager::new();
-            if let Err(e) = manager.disable().await {
-                warn!("failed to reset tailscale on exit: {e}");
+            if tokio::signal::ctrl_c().await.is_err() {
+                return;
             }
+
+            #[cfg(feature = "tailscale")]
+            if reset_tailscale_on_exit {
+                info!("shutting down tailscale {ts_mode}");
+                let manager = CliTailscaleManager::new();
+                if let Err(e) = manager.disable().await {
+                    warn!("failed to reset tailscale on exit: {e}");
+                }
+            }
+
+            let shutdown_grace = std::time::Duration::from_secs(5);
+            info!(
+                grace_secs = shutdown_grace.as_secs(),
+                "shutting down browser pool"
+            );
+            if browser_for_shutdown
+                .shutdown_with_grace(shutdown_grace)
+                .await
+            {
+                info!(
+                    grace_secs = shutdown_grace.as_secs(),
+                    "browser pool shut down"
+                );
+            } else {
+                warn!(
+                    grace_secs = shutdown_grace.as_secs(),
+                    "browser pool shutdown exceeded grace period, forcing process exit"
+                );
+            }
+
             std::process::exit(0);
         });
     }
@@ -3380,28 +3536,10 @@ async fn websocket_header_authenticated(
         return false;
     };
 
-    if store.is_auth_disabled() {
-        return true;
-    }
-
-    // Three-tier model: local connection + no password = dev convenience.
-    if is_local && !store.has_password().await.unwrap_or(true) {
-        return true;
-    }
-
-    if let Some(token) = extract_ws_session_token(headers)
-        && store.validate_session(token).await.unwrap_or(false)
-    {
-        return true;
-    }
-
-    if let Some(api_key) = extract_ws_bearer_api_key(headers)
-        && store.verify_api_key(api_key).await.ok().flatten().is_some()
-    {
-        return true;
-    }
-
-    false
+    matches!(
+        crate::auth_middleware::check_auth(store, headers, is_local).await,
+        crate::auth_middleware::AuthResult::Allowed(_)
+    )
 }
 
 /// Resolve the machine's primary outbound IP address.
@@ -3419,20 +3557,6 @@ fn resolve_outbound_ip(ipv6: bool) -> Option<std::net::IpAddr> {
     let socket = UdpSocket::bind(bind).ok()?;
     socket.connect(target).ok()?;
     Some(socket.local_addr().ok()?.ip())
-}
-
-fn extract_ws_session_token(headers: &axum::http::HeaderMap) -> Option<&str> {
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?;
-    crate::auth_middleware::parse_cookie(cookie_header, crate::auth_middleware::SESSION_COOKIE)
-}
-
-fn extract_ws_bearer_api_key(headers: &axum::http::HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
 }
 
 /// Check whether a WebSocket `Origin` header matches the request `Host`.
@@ -3491,6 +3615,42 @@ fn is_same_origin(origin: &str, host: &str) -> bool {
 /// Injects a `<script>` tag with pre-fetched bootstrap data (channels,
 /// sessions, models, projects) so the UI can render synchronously without
 /// waiting for the WebSocket handshake — similar to the gon pattern in Rails.
+/// All SPA route paths, defined once in Rust and exposed to both
+/// askama templates (HTML `href` attributes) and JavaScript via gon.
+#[cfg(feature = "web-ui")]
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpaRoutes {
+    chats: &'static str,
+    settings: &'static str,
+    providers: &'static str,
+    security: &'static str,
+    identity: &'static str,
+    config: &'static str,
+    logs: &'static str,
+    onboarding: &'static str,
+    projects: &'static str,
+    skills: &'static str,
+    crons: &'static str,
+    monitoring: &'static str,
+}
+
+#[cfg(feature = "web-ui")]
+static SPA_ROUTES: SpaRoutes = SpaRoutes {
+    chats: "/chats",
+    settings: "/settings",
+    providers: "/settings/providers",
+    security: "/settings/security",
+    identity: "/settings/identity",
+    config: "/settings/config",
+    logs: "/settings/logs",
+    onboarding: "/onboarding",
+    projects: "/projects",
+    skills: "/skills",
+    crons: "/crons",
+    monitoring: "/monitoring",
+};
+
 /// Server-side data injected into every page as `window.__MOLTIS__`
 /// (gon pattern — see CLAUDE.md § Server-Injected Data).
 ///
@@ -3521,6 +3681,22 @@ struct GonData {
     /// Vault status: "uninitialized", "sealed", or "unsealed".
     #[cfg(feature = "vault")]
     vault_status: String,
+    /// Sandbox runtime info so the UI can render sandbox status without
+    /// waiting for the auth-protected `/api/bootstrap` endpoint.
+    sandbox: SandboxGonInfo,
+    /// Central SPA route definitions so JS can read paths from gon
+    /// instead of hardcoding them.
+    routes: SpaRoutes,
+}
+
+/// Sandbox runtime snapshot included in gon data so the settings page
+/// can show the correct backend status before bootstrap completes.
+#[cfg(feature = "web-ui")]
+#[derive(serde::Serialize)]
+struct SandboxGonInfo {
+    backend: String,
+    os: &'static str,
+    default_image: String,
 }
 
 /// Memory snapshot included in gon data and tick broadcasts.
@@ -3649,6 +3825,20 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         None => "uninitialized".to_string(),
     };
 
+    let sandbox = if let Some(ref router) = gw.sandbox_router {
+        SandboxGonInfo {
+            backend: router.backend_name().to_owned(),
+            os: std::env::consts::OS,
+            default_image: router.default_image().await,
+        }
+    } else {
+        SandboxGonInfo {
+            backend: "none".to_owned(),
+            os: std::env::consts::OS,
+            default_image: moltis_tools::sandbox::DEFAULT_SANDBOX_IMAGE.to_owned(),
+        }
+    };
+
     GonData {
         identity,
         port,
@@ -3664,6 +3854,8 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         update: gw.inner.read().await.update.clone(),
         #[cfg(feature = "vault")]
         vault_status,
+        sandbox,
+        routes: SPA_ROUTES.clone(),
     }
 }
 
@@ -3795,16 +3987,30 @@ async fn oauth_callback_handler(
         }))
         .await
     {
-        Ok(_) => Html(
-            "<h1>Authentication successful!</h1><p>You can close this window.</p><script>window.close();</script>"
-                .to_string(),
-        )
-        .into_response(),
+        Ok(_) => {
+            let nonce = uuid::Uuid::new_v4().to_string();
+            let html = format!(
+                "<h1>Authentication successful!</h1><p>You can close this window.</p>\
+                 <script nonce=\"{nonce}\">window.close();</script>"
+            );
+            let csp = format!(
+                "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'"
+            );
+            let mut resp = Html(html).into_response();
+            if let Ok(val) = csp.parse() {
+                resp.headers_mut()
+                    .insert(axum::http::header::CONTENT_SECURITY_POLICY, val);
+            }
+            resp
+        },
         Err(e) => {
             tracing::warn!(error = %e, "OAuth callback completion failed");
             (
                 StatusCode::BAD_REQUEST,
-                Html("<h1>Authentication failed</h1><p>Could not complete OAuth flow.</p>".to_string()),
+                Html(
+                    "<h1>Authentication failed</h1><p>Could not complete OAuth flow.</p>"
+                        .to_string(),
+                ),
             )
                 .into_response()
         },
@@ -3812,63 +4018,156 @@ async fn oauth_callback_handler(
 }
 
 #[cfg(feature = "web-ui")]
-async fn spa_fallback(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
-) -> impl IntoResponse {
+async fn spa_fallback(State(state): State<AppState>, uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path();
     if path.starts_with("/assets/") || path.contains('.') {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
+    // Auth redirects are handled by auth_gate middleware. Here we only
+    // check onboarding completion for the redirect-to-onboarding logic.
     let onboarded = onboarding_completed(&state.gateway).await;
-    let setup_required = auth_status_from_request(&state, &headers, addr)
-        .await
-        .map(|(setup_required, _authenticated)| setup_required)
-        .unwrap_or(false);
-    if should_redirect_to_onboarding(path, setup_required, onboarded) {
+    if should_redirect_to_onboarding(path, onboarded) {
         return Redirect::to("/onboarding").into_response();
     }
-    render_spa_template(&state.gateway, false).await
+    render_spa_template(&state.gateway, SpaTemplate::Index).await
 }
 
 #[cfg(feature = "web-ui")]
-async fn onboarding_handler(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
+async fn onboarding_handler(State(state): State<AppState>) -> impl IntoResponse {
     let onboarded = onboarding_completed(&state.gateway).await;
-    let setup_required = auth_status_from_request(&state, &headers, addr)
-        .await
-        .map(|(setup_required, _authenticated)| setup_required)
-        .unwrap_or(false);
 
-    if should_redirect_from_onboarding("/onboarding", setup_required, onboarded) {
+    if should_redirect_from_onboarding(onboarded) {
         return Redirect::to("/").into_response();
     }
 
-    render_spa_template(&state.gateway, true).await
+    render_spa_template(&state.gateway, SpaTemplate::Onboarding).await
+}
+
+#[cfg(feature = "web-ui")]
+async fn login_handler_page(State(state): State<AppState>) -> impl IntoResponse {
+    render_spa_template(&state.gateway, SpaTemplate::Login).await
+}
+
+#[cfg(feature = "web-ui")]
+const SHARE_IMAGE_URL: &str = "https://www.moltis.org/og-social.jpg?v=4";
+
+#[cfg(feature = "web-ui")]
+#[derive(Clone, Copy)]
+enum SpaTemplate {
+    Index,
+    Login,
+    Onboarding,
+}
+
+#[cfg(feature = "web-ui")]
+struct ShareMeta {
+    title: String,
+    description: String,
+    site_name: String,
+    image_alt: String,
+}
+
+#[cfg(feature = "web-ui")]
+#[derive(askama::Template)]
+#[template(path = "index.html", escape = "html")]
+struct IndexHtmlTemplate<'a> {
+    build_ts: &'a str,
+    asset_prefix: &'a str,
+    nonce: &'a str,
+    gon_json: &'a str,
+    share_title: &'a str,
+    share_description: &'a str,
+    share_site_name: &'a str,
+    share_image_url: &'a str,
+    share_image_alt: &'a str,
+    routes: &'a SpaRoutes,
+}
+
+#[cfg(feature = "web-ui")]
+#[derive(askama::Template)]
+#[template(path = "login.html", escape = "html")]
+struct LoginHtmlTemplate<'a> {
+    build_ts: &'a str,
+    asset_prefix: &'a str,
+    nonce: &'a str,
+    page_title: &'a str,
+    gon_json: &'a str,
+}
+
+#[cfg(feature = "web-ui")]
+#[derive(askama::Template)]
+#[template(path = "onboarding.html", escape = "html")]
+struct OnboardingHtmlTemplate<'a> {
+    build_ts: &'a str,
+    asset_prefix: &'a str,
+    nonce: &'a str,
+    page_title: &'a str,
+}
+
+#[cfg(feature = "web-ui")]
+fn script_safe_json<T: serde::Serialize>(value: &T) -> String {
+    let json = match serde_json::to_string(value) {
+        Ok(json) => json,
+        Err(e) => {
+            warn!(error = %e, "failed to serialize gon data for html template");
+            "{}".to_owned()
+        },
+    };
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
+#[cfg(feature = "web-ui")]
+fn build_share_meta(identity: &moltis_config::ResolvedIdentity) -> ShareMeta {
+    let agent_name = identity_name(identity);
+    let user_name = identity
+        .user_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+
+    let title = match user_name {
+        Some(user_name) => format!("{agent_name}: {user_name} AI assistant"),
+        None => format!("{agent_name}: AI assistant"),
+    };
+    let description = match user_name {
+        Some(user_name) => format!(
+            "{agent_name} is {user_name}'s personal AI assistant. Multi-provider models, tools, memory, sandboxed execution, and channel access in one Rust binary."
+        ),
+        None => format!(
+            "{agent_name} is a personal AI assistant. Multi-provider models, tools, memory, sandboxed execution, and channel access in one Rust binary."
+        ),
+    };
+    let image_alt = format!("{agent_name} - personal AI assistant");
+
+    ShareMeta {
+        title,
+        description,
+        site_name: agent_name.to_owned(),
+        image_alt,
+    }
+}
+
+#[cfg(feature = "web-ui")]
+fn identity_name(identity: &moltis_config::ResolvedIdentity) -> &str {
+    let name = identity.name.trim();
+    if name.is_empty() {
+        "moltis"
+    } else {
+        name
+    }
 }
 
 #[cfg(feature = "web-ui")]
 async fn render_spa_template(
     gateway: &GatewayState,
-    onboarding_shell: bool,
+    template: SpaTemplate,
 ) -> axum::response::Response {
-    let template_name = if onboarding_shell {
-        "onboarding.html"
-    } else {
-        "index.html"
-    };
-
-    let raw = read_asset(template_name)
-        .and_then(|b| String::from_utf8(b).ok())
-        .unwrap_or_default();
-
-    let mut body = if is_dev_assets() {
+    let (build_ts, asset_prefix) = if is_dev_assets() {
         // Dev: bust browser cache by routing through the versioned path with a
         // timestamp that changes every request.  Safari aggressively caches even
         // with no-cache headers, so a changing URL is the only reliable fix.
@@ -3876,68 +4175,123 @@ async fn render_spa_template(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let versioned = format!("/assets/v/{ts}/");
-        raw.replace("__BUILD_TS__", "dev")
-            .replace("/assets/", &versioned)
+        ("dev".to_owned(), format!("/assets/v/{ts}/"))
     } else {
         // Production: inject content-hash versioned URLs for immutable caching
         static HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(asset_content_hash);
-        let versioned = format!("/assets/v/{}/", *HASH);
-        raw.replace("__BUILD_TS__", &HASH)
-            .replace("/assets/", &versioned)
+        (HASH.to_string(), format!("/assets/v/{}/", *HASH))
     };
 
-    if !onboarding_shell {
-        // Build server-side data blob (gon pattern) injected into <head>.
-        let gon = build_gon_data(gateway).await;
-        let gon_script = format!(
-            "<script>window.__MOLTIS__={};</script>",
-            serde_json::to_string(&gon).unwrap_or_else(|_| "{}".into()),
-        );
-        // Inject gon data into <head> so it's available before any module scripts run.
-        // An inline <script> in the <body> (right after the title elements) reads
-        // window.__MOLTIS__.identity to set emoji/name before the first paint.
-        body = body.replace("</head>", &format!("{gon_script}\n</head>"));
+    // Generate a per-request nonce for CSP script-src.
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let body = match template {
+        SpaTemplate::Index => {
+            let gon = build_gon_data(gateway).await;
+            let share_meta = build_share_meta(&gon.identity);
+            let gon_json = script_safe_json(&gon);
+            let template = IndexHtmlTemplate {
+                build_ts: &build_ts,
+                asset_prefix: &asset_prefix,
+                nonce: &nonce,
+                gon_json: &gon_json,
+                share_title: &share_meta.title,
+                share_description: &share_meta.description,
+                share_site_name: &share_meta.site_name,
+                share_image_url: SHARE_IMAGE_URL,
+                share_image_alt: &share_meta.image_alt,
+                routes: &SPA_ROUTES,
+            };
+            match template.render() {
+                Ok(html) => html,
+                Err(e) => {
+                    warn!(error = %e, "failed to render index template");
+                    String::new()
+                },
+            }
+        },
+        SpaTemplate::Login => {
+            let gon = build_gon_data(gateway).await;
+            let gon_json = script_safe_json(&gon);
+            let page_title = identity_name(&gon.identity).to_owned();
+            let template = LoginHtmlTemplate {
+                build_ts: &build_ts,
+                asset_prefix: &asset_prefix,
+                nonce: &nonce,
+                page_title: &page_title,
+                gon_json: &gon_json,
+            };
+            match template.render() {
+                Ok(html) => html,
+                Err(e) => {
+                    warn!(error = %e, "failed to render login template");
+                    String::new()
+                },
+            }
+        },
+        SpaTemplate::Onboarding => {
+            let identity = gateway
+                .services
+                .onboarding
+                .identity_get()
+                .await
+                .ok()
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default();
+            let page_title = format!("{} onboarding", identity_name(&identity));
+            let template = OnboardingHtmlTemplate {
+                build_ts: &build_ts,
+                asset_prefix: &asset_prefix,
+                nonce: &nonce,
+                page_title: &page_title,
+            };
+            match template.render() {
+                Ok(html) => html,
+                Err(e) => {
+                    warn!(error = %e, "failed to render onboarding template");
+                    String::new()
+                },
+            }
+        },
+    };
+
+    let csp = format!(
+        "default-src 'self'; \
+         script-src 'self' 'nonce-{nonce}'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data: blob:; \
+         media-src 'self' blob:; \
+         font-src 'self'; \
+         connect-src 'self' ws: wss:; \
+         frame-ancestors 'none'; \
+         form-action 'self'; \
+         base-uri 'self'; \
+         object-src 'none'"
+    );
+
+    let mut response = Html(body).into_response();
+    let headers = response.headers_mut();
+    if let Ok(val) = "no-cache, no-store".parse() {
+        headers.insert(axum::http::header::CACHE_CONTROL, val);
     }
-
-    ([("cache-control", "no-cache, no-store")], Html(body)).into_response()
+    if let Ok(val) = csp.parse() {
+        headers.insert(axum::http::header::CONTENT_SECURITY_POLICY, val);
+    }
+    response
 }
 
+/// Redirect non-onboarding pages to `/onboarding` when the wizard isn't done.
+///
+/// Auth-level redirects (setup required) are handled by `auth_gate` middleware.
+/// This only covers the *onboarding wizard* completion check.
 #[cfg(feature = "web-ui")]
-async fn auth_status_from_request(
-    state: &AppState,
-    headers: &axum::http::HeaderMap,
-    remote_addr: std::net::SocketAddr,
-) -> Option<(bool, bool)> {
-    let store = state.gateway.credential_store.as_ref()?;
-
-    let auth_disabled = store.is_auth_disabled();
-    let has_password = store.has_password().await.unwrap_or(false);
-    let is_local = is_local_connection(headers, remote_addr, state.gateway.behind_proxy);
-    let auth_bypassed = auth_disabled || (is_local && !has_password);
-
-    let authenticated = if auth_bypassed {
-        true
-    } else if let Some(token) = extract_ws_session_token(headers) {
-        store.validate_session(token).await.unwrap_or(false)
-    } else if let Some(api_key) = extract_ws_bearer_api_key(headers) {
-        store.verify_api_key(api_key).await.ok().flatten().is_some()
-    } else {
-        false
-    };
-
-    let setup_required = !auth_bypassed && !store.is_setup_complete();
-    Some((setup_required, authenticated))
+fn should_redirect_to_onboarding(path: &str, onboarded: bool) -> bool {
+    !is_onboarding_path(path) && !onboarded
 }
 
+/// Redirect `/onboarding` back to `/` once the wizard is complete.
 #[cfg(feature = "web-ui")]
-fn should_redirect_to_onboarding(path: &str, setup_required: bool, onboarded: bool) -> bool {
-    !is_onboarding_path(path) && (setup_required || !onboarded)
-}
-
-#[cfg(feature = "web-ui")]
-fn should_redirect_from_onboarding(path: &str, setup_required: bool, onboarded: bool) -> bool {
-    is_onboarding_path(path) && !setup_required && onboarded
+fn should_redirect_from_onboarding(onboarded: bool) -> bool {
+    onboarded
 }
 
 #[cfg(feature = "web-ui")]
@@ -5329,25 +5683,19 @@ mod tests {
 
     #[test]
     fn onboarding_redirect_rules() {
-        // Setup/auth bootstrap still forces onboarding.
-        assert!(should_redirect_to_onboarding("/", true, false));
-        assert!(should_redirect_to_onboarding("/chats", true, false));
-        assert!(!should_redirect_to_onboarding("/onboarding", true, false));
+        // Onboarding incomplete forces redirect.
+        assert!(should_redirect_to_onboarding("/", false));
+        assert!(should_redirect_to_onboarding("/chats", false));
+        // /onboarding itself is never redirected.
+        assert!(!should_redirect_to_onboarding("/onboarding", false));
 
-        // Onboarding incomplete also forces onboarding server-side.
-        assert!(should_redirect_to_onboarding("/", false, false));
-
-        // Once onboarded and setup complete, no redirect is needed.
-        assert!(!should_redirect_to_onboarding("/", false, true));
+        // Once onboarded, no redirect is needed.
+        assert!(!should_redirect_to_onboarding("/", true));
 
         // Once onboarding is complete, /onboarding should bounce back to /.
-        assert!(should_redirect_from_onboarding("/onboarding", false, true));
-        assert!(!should_redirect_from_onboarding("/onboarding", true, true));
-        assert!(!should_redirect_from_onboarding(
-            "/onboarding",
-            false,
-            false
-        ));
+        assert!(should_redirect_from_onboarding(true));
+        // Not yet onboarded — stay on /onboarding.
+        assert!(!should_redirect_from_onboarding(false));
     }
 
     #[test]
@@ -5426,11 +5774,153 @@ mod tests {
     #[cfg(feature = "web-ui")]
     #[test]
     fn onboarding_template_uses_dedicated_entrypoint() {
-        let raw = read_asset("onboarding.html").expect("onboarding template should exist");
-        let html = String::from_utf8(raw).expect("onboarding template should be valid utf-8");
-        assert!(html.contains("/assets/js/onboarding-app.js"));
-        assert!(!html.contains("/assets/js/app.js"));
+        let template = OnboardingHtmlTemplate {
+            build_ts: "dev",
+            asset_prefix: "/assets/v/test/",
+            nonce: "nonce-123",
+            page_title: "sparky onboarding",
+        };
+        let html = match template.render() {
+            Ok(html) => html,
+            Err(e) => panic!("failed to render onboarding template: {e}"),
+        };
+        assert!(html.contains("<title>sparky onboarding</title>"));
+        assert!(html.contains(
+            "<link rel=\"icon\" type=\"image/png\" sizes=\"96x96\" href=\"/assets/v/test/icons/icon-96.png\">"
+        ));
+        assert!(html.contains(
+            "<link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"/assets/v/test/icons/icon-72.png\">"
+        ));
+        assert!(html.contains("/assets/v/test/js/onboarding-app.js"));
+        assert!(!html.contains("/assets/v/test/js/app.js"));
         assert!(!html.contains("/manifest.json"));
+        assert!(html.contains("<script nonce=\"nonce-123\">"));
+        assert!(html.contains("<script nonce=\"nonce-123\" type=\"importmap\">"));
+        assert!(html.contains(
+            "<script nonce=\"nonce-123\" type=\"module\" src=\"/assets/v/test/js/onboarding-app.js\">"
+        ));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn share_meta_uses_agent_and_user_name() {
+        let identity = moltis_config::ResolvedIdentity {
+            name: "sparky".to_owned(),
+            user_name: Some("penso".to_owned()),
+            ..Default::default()
+        };
+
+        let meta = build_share_meta(&identity);
+        assert_eq!(meta.title, "sparky: penso AI assistant");
+        assert!(
+            meta.description
+                .contains("sparky is penso's personal AI assistant.")
+        );
+        assert_eq!(meta.site_name, "sparky");
+        assert_eq!(meta.image_alt, "sparky - personal AI assistant");
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn share_meta_falls_back_when_user_name_missing() {
+        let identity = moltis_config::ResolvedIdentity {
+            name: "moltis".to_owned(),
+            user_name: Some("   ".to_owned()),
+            ..Default::default()
+        };
+
+        let meta = build_share_meta(&identity);
+        assert_eq!(meta.title, "moltis: AI assistant");
+        assert!(
+            meta.description
+                .starts_with("moltis is a personal AI assistant.")
+        );
+        assert_eq!(meta.site_name, "moltis");
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn share_meta_omits_emoji_in_title() {
+        let identity = moltis_config::ResolvedIdentity {
+            name: "sparky".to_owned(),
+            emoji: Some("\u{1f525}".to_owned()),
+            user_name: Some("penso".to_owned()),
+            ..Default::default()
+        };
+
+        let meta = build_share_meta(&identity);
+        assert_eq!(meta.title, "sparky: penso AI assistant");
+        assert_eq!(meta.site_name, "sparky");
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn askama_template_escapes_share_meta_values() {
+        let template = IndexHtmlTemplate {
+            build_ts: "dev",
+            asset_prefix: "/assets/v/test/",
+            nonce: "nonce-123",
+            gon_json: "{}",
+            share_title: "A&B <tag>",
+            share_description: "desc <b>safe</b>",
+            share_site_name: "moltis",
+            share_image_url: SHARE_IMAGE_URL,
+            share_image_alt: "preview <image>",
+            routes: &SPA_ROUTES,
+        };
+        let html = match template.render() {
+            Ok(html) => html,
+            Err(e) => panic!("failed to render askama template: {e}"),
+        };
+        assert!(html.contains("A&amp;B") || html.contains("A&#38;B"));
+        assert!(!html.contains("A&B <tag>"));
+        assert!(
+            html.contains("desc &#60;b&#62;safe&#60;/b&#62;")
+                || html.contains("desc &lt;b&gt;safe&lt;/b&gt;")
+        );
+        assert!(!html.contains("desc <b>safe</b>"));
+        assert!(html.contains("preview &#60;image&#62;") || html.contains("preview &lt;image&gt;"));
+        assert!(!html.contains("preview <image>"));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn login_template_includes_gon_script_with_nonce() {
+        let template = LoginHtmlTemplate {
+            build_ts: "dev",
+            asset_prefix: "/assets/v/test/",
+            nonce: "nonce-abc",
+            page_title: "sparky",
+            gon_json: "{\"identity\":{\"name\":\"moltis\"}}",
+        };
+        let html = match template.render() {
+            Ok(html) => html,
+            Err(e) => panic!("failed to render login template: {e}"),
+        };
+        assert!(html.contains("<title>sparky</title>"));
+        assert!(html.contains(
+            "<link rel=\"icon\" type=\"image/png\" sizes=\"96x96\" href=\"/assets/v/test/icons/icon-96.png\">"
+        ));
+        assert!(html.contains(
+            "<link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"/assets/v/test/icons/icon-72.png\">"
+        ));
+        assert!(html.contains("<script nonce=\"nonce-abc\">window.__MOLTIS__={\"identity\":{\"name\":\"moltis\"}};</script>"));
+        assert!(html.contains(
+            "<script nonce=\"nonce-abc\" type=\"module\" src=\"/assets/v/test/js/login-app.js\"></script>"
+        ));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn script_safe_json_escapes_html_sensitive_chars() {
+        let input = serde_json::json!({
+            "value": "</script><b>&\u{2028}\u{2029}",
+        });
+        let json = script_safe_json(&input);
+        assert!(json.contains("\\u003c/script\\u003e\\u003cb\\u003e\\u0026\\u2028\\u2029"));
+        assert!(!json.contains("</script>"));
+        assert!(!json.contains("<b>"));
+        assert!(!json.contains("&"));
     }
 
     #[test]
@@ -5629,6 +6119,27 @@ mod tests {
     }
 
     #[test]
+    fn not_local_when_xff_spoofs_loopback_value() {
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::HOST, "localhost:18789".parse().unwrap());
+        // Header presence alone marks the request as proxied, even when value
+        // is spoofed to look loopback.
+        headers.insert("x-forwarded-for", "127.0.0.1".parse().unwrap());
+        assert!(!is_local_connection(&headers, addr, false));
+    }
+
+    #[test]
+    fn not_local_when_forwarded_spoofs_loopback_value() {
+        let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::HOST, "localhost:18789".parse().unwrap());
+        // RFC 7239 Forwarded header should never allow localhost bypass.
+        headers.insert("forwarded", "for=127.0.0.1;proto=https".parse().unwrap());
+        assert!(!is_local_connection(&headers, addr, false));
+    }
+
+    #[test]
     fn not_local_when_host_is_external() {
         let addr: SocketAddr = "127.0.0.1:12345".parse().unwrap();
         let mut headers = axum::http::HeaderMap::new();
@@ -5686,5 +6197,73 @@ mod tests {
             "moltis.example.com".parse().unwrap(),
         );
         assert!(!is_local_connection(&headers, addr, false));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn askama_templates_emit_nonce_on_scripts() {
+        let nonce = "test-nonce-abc";
+        let index_template = IndexHtmlTemplate {
+            build_ts: "dev",
+            asset_prefix: "/assets/v/test/",
+            nonce,
+            gon_json: "{}",
+            share_title: "moltis: AI assistant",
+            share_description: "desc",
+            share_site_name: "moltis",
+            share_image_url: SHARE_IMAGE_URL,
+            share_image_alt: "preview",
+            routes: &SPA_ROUTES,
+        };
+        let index_html = match index_template.render() {
+            Ok(html) => html,
+            Err(e) => panic!("failed to render index template: {e}"),
+        };
+        assert!(index_html.contains(&format!("<script nonce=\"{nonce}\">!function()")));
+        assert!(index_html.contains(&format!(
+            "<script nonce=\"{nonce}\">window.__MOLTIS__={{}};</script>"
+        )));
+        assert!(index_html.contains(&format!("<script nonce=\"{nonce}\" type=\"importmap\">")));
+        assert!(index_html.contains(&format!(
+            "<script nonce=\"{nonce}\" type=\"module\" src=\"/assets/v/test/js/app.js\"></script>"
+        )));
+
+        let onboarding_template = OnboardingHtmlTemplate {
+            build_ts: "dev",
+            asset_prefix: "/assets/v/test/",
+            nonce,
+            page_title: "moltis onboarding",
+        };
+        let onboarding_html = match onboarding_template.render() {
+            Ok(html) => html,
+            Err(e) => panic!("failed to render onboarding template: {e}"),
+        };
+        assert!(onboarding_html.contains(&format!(
+            "<script nonce=\"{nonce}\" type=\"module\" src=\"/assets/v/test/js/onboarding-app.js\"></script>"
+        )));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn csp_header_contains_nonce() {
+        let nonce = "abc-123";
+        let csp = format!(
+            "default-src 'self'; \
+             script-src 'self' 'nonce-{nonce}'; \
+             style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data: blob:; \
+             media-src 'self' blob:; \
+             font-src 'self'; \
+             connect-src 'self' ws: wss:; \
+             frame-ancestors 'none'; \
+             form-action 'self'; \
+             base-uri 'self'; \
+             object-src 'none'"
+        );
+
+        assert!(csp.contains("'nonce-abc-123'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+        assert!(csp.contains("object-src 'none'"));
+        assert!(csp.contains("connect-src 'self' ws: wss:"));
     }
 }

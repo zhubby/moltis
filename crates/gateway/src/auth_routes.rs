@@ -12,7 +12,7 @@ use axum::{
 
 use crate::{
     auth::CredentialStore,
-    auth_middleware::{AuthSession, SESSION_COOKIE},
+    auth_middleware::{AuthResult, AuthSession, SESSION_COOKIE, check_auth},
     auth_webauthn::WebAuthnState,
     server::is_local_connection,
     state::GatewayState,
@@ -98,25 +98,10 @@ async fn status_handler(
     let has_password = state.credential_store.has_password().await.unwrap_or(false);
     let has_passkeys = state.credential_store.has_passkeys().await.unwrap_or(false);
 
-    // Three-tier model: local connection + no password = dev convenience.
     let is_local = is_local_connection(&headers, addr, state.gateway_state.behind_proxy);
-    let auth_bypassed = auth_disabled || (is_local && !has_password);
-
-    let authenticated = if auth_bypassed {
-        true
-    } else {
-        let token = extract_session_token(&headers);
-        match token {
-            Some(t) => state
-                .credential_store
-                .validate_session(t)
-                .await
-                .unwrap_or(false),
-            None => false,
-        }
-    };
-
-    let setup_required = !auth_bypassed && !state.credential_store.is_setup_complete();
+    let auth_result = check_auth(&state.credential_store, &headers, is_local).await;
+    let authenticated = matches!(auth_result, AuthResult::Allowed(_));
+    let setup_required = matches!(auth_result, AuthResult::SetupRequired);
 
     let setup_code_required = state.gateway_state.inner.read().await.setup_code.is_some();
 
@@ -128,8 +113,11 @@ async fn status_handler(
         .map(|wa| wa.get_allowed_origins())
         .unwrap_or_default();
 
+    let setup_complete = state.credential_store.is_setup_complete();
+
     Json(serde_json::json!({
         "setup_required": setup_required,
+        "setup_complete": setup_complete,
         "has_passkeys": has_passkeys,
         "authenticated": authenticated,
         "auth_disabled": auth_disabled,
@@ -235,7 +223,7 @@ async fn setup_handler(
     // Clear setup code and create session.
     state.gateway_state.inner.write().await.setup_code = None;
     match state.credential_store.create_session().await {
-        Ok(token) => session_response(token),
+        Ok(token) => session_response(token, &headers),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to create session: {e}"),
@@ -253,6 +241,7 @@ struct LoginRequest {
 
 async fn login_handler(
     State(state): State<AuthState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
     match state.credential_store.verify_password(&body.password).await {
@@ -268,7 +257,7 @@ async fn login_handler(
             }
 
             match state.credential_store.create_session().await {
-                Ok(token) => session_response(token),
+                Ok(token) => session_response(token, &headers),
                 Err(e) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("session error: {e}"),
@@ -294,7 +283,7 @@ async fn logout_handler(
     if let Some(token) = extract_session_token(&headers) {
         let _ = state.credential_store.delete_session(token).await;
     }
-    clear_session_response()
+    clear_session_response(&headers)
 }
 
 // ── Reset all auth (requires session) ─────────────────────────────────────────
@@ -302,6 +291,7 @@ async fn logout_handler(
 async fn reset_auth_handler(
     _session: AuthSession,
     State(state): State<AuthState>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     match state.credential_store.reset_all().await {
         Ok(()) => {
@@ -309,7 +299,7 @@ async fn reset_auth_handler(
             let code = generate_setup_code();
             tracing::info!("setup code: {code} (enter this in the browser to set your password)");
             state.gateway_state.inner.write().await.setup_code = Some(secrecy::Secret::new(code));
-            clear_session_response()
+            clear_session_response(&headers)
         },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -491,9 +481,14 @@ pub fn generate_setup_code() -> String {
     rand::rng().random_range(100_000..1_000_000).to_string()
 }
 
-fn session_response(token: String) -> axum::response::Response {
-    let cookie =
-        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000");
+/// Build a session cookie string, adding `Domain=localhost` when the request
+/// arrived on a `.localhost` subdomain (e.g. `moltis.localhost`) so the cookie
+/// is shared across all loopback names per RFC 6761.
+fn session_response(token: String, headers: &axum::http::HeaderMap) -> axum::response::Response {
+    let domain_attr = localhost_cookie_domain(headers);
+    let cookie = format!(
+        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000{domain_attr}"
+    );
     (
         StatusCode::OK,
         [(axum::http::header::SET_COOKIE, cookie)],
@@ -502,14 +497,39 @@ fn session_response(token: String) -> axum::response::Response {
         .into_response()
 }
 
-fn clear_session_response() -> axum::response::Response {
-    let cookie = format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
+fn clear_session_response(headers: &axum::http::HeaderMap) -> axum::response::Response {
+    let domain_attr = localhost_cookie_domain(headers);
+    let cookie =
+        format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{domain_attr}");
     (
         StatusCode::OK,
         [(axum::http::header::SET_COOKIE, cookie)],
         Json(serde_json::json!({ "ok": true })),
     )
         .into_response()
+}
+
+/// Return `; Domain=localhost` when the request's `Host` header is a
+/// `.localhost` subdomain (e.g. `moltis.localhost:8080`), otherwise `""`.
+///
+/// Without this, a session cookie set on `localhost` isn't sent by the browser
+/// to `moltis.localhost` and vice versa because `Set-Cookie` without a `Domain`
+/// attribute is a host-only cookie.  Adding `Domain=localhost` makes the
+/// cookie available to `localhost` **and** all its subdomains (RFC 6265 §5.2.3).
+fn localhost_cookie_domain(headers: &axum::http::HeaderMap) -> &'static str {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Strip port.
+    let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
+
+    if name == "localhost" || name.ends_with(".localhost") {
+        "; Domain=localhost"
+    } else {
+        ""
+    }
 }
 
 // ── Passkey registration (requires session) ──────────────────────────────────
@@ -609,6 +629,7 @@ struct PasskeyAuthFinishRequest {
 
 async fn passkey_auth_finish_handler(
     State(state): State<AuthState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<PasskeyAuthFinishRequest>,
 ) -> impl IntoResponse {
     let Some(ref wa) = state.webauthn_state else {
@@ -617,7 +638,7 @@ async fn passkey_auth_finish_handler(
 
     match wa.finish_authentication(&body.challenge_id, &body.credential) {
         Ok(_result) => match state.credential_store.create_session().await {
-            Ok(token) => session_response(token),
+            Ok(token) => session_response(token, &headers),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
         Err(e) => (StatusCode::UNAUTHORIZED, e.to_string()).into_response(),
@@ -677,6 +698,7 @@ struct SetupPasskeyFinishRequest {
 
 async fn setup_passkey_register_finish_handler(
     State(state): State<AuthState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<SetupPasskeyFinishRequest>,
 ) -> impl IntoResponse {
     if state.credential_store.is_setup_complete() {
@@ -733,7 +755,7 @@ async fn setup_passkey_register_finish_handler(
     // Clear setup code and create session.
     state.gateway_state.inner.write().await.setup_code = None;
     match state.credential_store.create_session().await {
-        Ok(token) => session_response(token),
+        Ok(token) => session_response(token, &headers),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to create session: {e}"),
@@ -838,5 +860,112 @@ async fn vault_recovery_handler(
             (StatusCode::UNAUTHORIZED, "incorrect recovery key").into_response()
         },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    fn headers_with_host(host: &str) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            axum::http::header::HOST,
+            host.parse().expect("valid host header"),
+        );
+        h
+    }
+
+    #[test]
+    fn localhost_cookie_domain_plain_localhost() {
+        let h = headers_with_host("localhost:8080");
+        assert_eq!(localhost_cookie_domain(&h), "; Domain=localhost");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_moltis_subdomain() {
+        let h = headers_with_host("moltis.localhost:59263");
+        assert_eq!(localhost_cookie_domain(&h), "; Domain=localhost");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_bare_localhost_no_port() {
+        let h = headers_with_host("localhost");
+        assert_eq!(localhost_cookie_domain(&h), "; Domain=localhost");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_external_host_omits_domain() {
+        let h = headers_with_host("example.com:443");
+        assert_eq!(localhost_cookie_domain(&h), "");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_tailscale_host_omits_domain() {
+        let h = headers_with_host("mybox.tail12345.ts.net:8080");
+        assert_eq!(localhost_cookie_domain(&h), "");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_ip_address_omits_domain() {
+        let h = headers_with_host("192.168.1.100:8080");
+        assert_eq!(localhost_cookie_domain(&h), "");
+    }
+
+    #[test]
+    fn localhost_cookie_domain_no_host_header_omits_domain() {
+        let h = axum::http::HeaderMap::new();
+        assert_eq!(localhost_cookie_domain(&h), "");
+    }
+
+    #[test]
+    fn session_response_includes_domain_for_localhost() {
+        let h = headers_with_host("moltis.localhost:8080");
+        let resp = session_response("test-token".into(), &h);
+        let cookie = resp
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("login response must set a session cookie")
+            .to_str()
+            .expect("cookie header must be valid UTF-8");
+        assert!(
+            cookie.contains("; Domain=localhost"),
+            "cookie should include Domain=localhost for .localhost host, got: {cookie}"
+        );
+        assert!(cookie.contains("moltis_session=test-token"));
+    }
+
+    #[test]
+    fn session_response_omits_domain_for_external_host() {
+        let h = headers_with_host("example.com:443");
+        let resp = session_response("test-token".into(), &h);
+        let cookie = resp
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("login response must set a session cookie")
+            .to_str()
+            .expect("cookie header must be valid UTF-8");
+        assert!(
+            !cookie.contains("Domain="),
+            "cookie should NOT include Domain for external host, got: {cookie}"
+        );
+    }
+
+    #[test]
+    fn clear_session_response_includes_domain_for_localhost() {
+        let h = headers_with_host("localhost:18080");
+        let resp = clear_session_response(&h);
+        let cookie = resp
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .expect("clear response must set a session cookie")
+            .to_str()
+            .expect("cookie header must be valid UTF-8");
+        assert!(
+            cookie.contains("; Domain=localhost"),
+            "clear cookie should include Domain=localhost, got: {cookie}"
+        );
+        assert!(cookie.contains("Max-Age=0"));
     }
 }

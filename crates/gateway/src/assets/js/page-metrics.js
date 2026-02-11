@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import uPlot from "uplot";
 import { onEvent } from "./events.js";
 import { registerPrefix } from "./router.js";
+import { routes } from "./routes.js";
 
 var metricsData = signal(null);
 var historyPoints = signal([]);
@@ -16,6 +17,9 @@ var loading = signal(true);
 var error = signal(null);
 var isLive = signal(false);
 var unsubscribe = null;
+var _monitoringContainer = null;
+var monitoringPathBase = routes.monitoring;
+var monitoringSyncPath = true;
 
 // Time range options (in seconds)
 var TIME_RANGES = {
@@ -113,18 +117,10 @@ function EmptyState({ icon, title, description }) {
 }
 
 // Chart icon for empty state
-var chartIcon = html`
-	<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor" class="w-full h-full">
-		<path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"/>
-	</svg>
-`;
+var chartIcon = html`<span class="icon icon-chart-bar w-full h-full"></span>`;
 
 // Activity icon for empty metrics
-var activityIcon = html`
-	<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1" stroke="currentColor" class="w-full h-full">
-		<path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0 .5 1.5m-.5-1.5h-9.5m0 0-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6"/>
-	</svg>
-`;
+var activityIcon = html`<span class="icon icon-activity w-full h-full"></span>`;
 
 // Live indicator with green dot
 function LiveIndicator({ live }) {
@@ -618,9 +614,11 @@ function MonitoringPage({ initialTab }) {
 	// Update URL when tab changes
 	function handleTabChange(tab) {
 		setActiveTab(tab);
-		var newPath = tab === "charts" ? "/monitoring/charts" : "/monitoring";
-		if (window.location.pathname !== newPath) {
-			history.pushState(null, "", newPath);
+		if (monitoringSyncPath) {
+			var newPath = tab === "charts" ? `${monitoringPathBase}/charts` : monitoringPathBase;
+			if (window.location.pathname !== newPath) {
+				history.pushState(null, "", newPath);
+			}
 		}
 	}
 
@@ -716,13 +714,16 @@ function MonitoringPage({ initialTab }) {
 	`;
 }
 
-function init(container, param) {
+export function initMonitoring(container, param, options) {
 	// param is "charts" for /monitoring/charts, null for /monitoring
+	_monitoringContainer = container;
+	monitoringPathBase = options?.pathBase || routes.monitoring;
+	monitoringSyncPath = options?.syncPath !== false;
 	var initialTab = param === "charts" ? "charts" : "overview";
 	render(html`<${MonitoringPage} initialTab=${initialTab} />`, container);
 }
 
-function teardown() {
+export function teardownMonitoring() {
 	if (unsubscribe) {
 		unsubscribe();
 		unsubscribe = null;
@@ -732,7 +733,11 @@ function teardown() {
 	loading.value = true;
 	error.value = null;
 	isLive.value = false;
+	monitoringPathBase = routes.monitoring;
+	monitoringSyncPath = true;
+	if (_monitoringContainer) render(null, _monitoringContainer);
+	_monitoringContainer = null;
 }
 
 // Register as prefix route: /monitoring and /monitoring/charts
-registerPrefix("/monitoring", init, teardown);
+registerPrefix(routes.monitoring, initMonitoring, teardownMonitoring);

@@ -7,8 +7,6 @@ import { useEffect, useRef } from "preact/hooks";
 import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
 import { updateNavCount } from "./nav-counts.js";
-import { registerPage } from "./router.js";
-import * as S from "./state.js";
 
 // ── Signals ─────────────────────────────────────────────────
 var hooks = signal([]);
@@ -163,10 +161,7 @@ function HookCard({ hook }) {
           `
 							: null
 					}
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="16" height="16"
-               class="transition-transform ${expanded.value ? "rotate-180" : ""}">
-            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-          </svg>
+          <span class="icon icon-chevron-down transition-transform ${expanded.value ? "rotate-180" : ""}"></span>
         </div>
       </div>
 
@@ -358,15 +353,16 @@ function HooksPage() {
   `;
 }
 
-// ── Router integration ──────────────────────────────────────
-registerPage(
-	"/hooks",
-	function initHooks(container) {
-		container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
-		render(html`<${HooksPage} />`, container);
-	},
-	function teardownHooks() {
-		var container = S.$("pageContent");
-		if (container) render(null, container);
-	},
-);
+// ── Exported init/teardown for settings integration ─────────
+var _hooksContainer = null;
+
+export function initHooks(container) {
+	_hooksContainer = container;
+	container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
+	render(html`<${HooksPage} />`, container);
+}
+
+export function teardownHooks() {
+	if (_hooksContainer) render(null, _hooksContainer);
+	_hooksContainer = null;
+}

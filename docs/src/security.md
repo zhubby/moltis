@@ -167,28 +167,26 @@ The gateway API uses role-based access control with scopes:
 
 ### API Keys
 
-API keys authenticate external tools and scripts connecting to Moltis. Keys can
-have **full access** (all scopes) or be restricted to specific scopes for
-defense-in-depth.
+API keys authenticate external tools and scripts connecting to Moltis. Keys
+**must specify at least one scope** — keys without scopes are denied access
+(least-privilege by default).
 
 #### Creating API Keys
 
 **Web UI**: Settings > Security > API Keys
 
 1. Enter a label describing the key's purpose
-2. Choose "Full access" or select specific scopes
+2. Select the required scopes
 3. Click "Generate key"
 4. **Copy the key immediately** — it's only shown once
 
 **CLI**:
 
 ```bash
-# Full access key
-moltis auth create-api-key --label "CI pipeline"
-
 # Scoped key (comma-separated scopes)
 moltis auth create-api-key --label "Monitor" --scopes "operator.read"
 moltis auth create-api-key --label "Automation" --scopes "operator.read,operator.write"
+moltis auth create-api-key --label "CI pipeline" --scopes "operator.admin"
 ```
 
 #### Using API Keys
@@ -218,15 +216,15 @@ Authorization: Bearer mk_abc123...
 | Read-only monitoring | `operator.read` |
 | Automated workflows | `operator.read`, `operator.write` |
 | Approval handling | `operator.read`, `operator.approvals` |
-| Full automation | Full access (no scope restrictions) |
+| Full automation | `operator.admin` |
 
 **Best practice**: Use the minimum necessary scopes. If a key only needs to
 read status and logs, don't grant `operator.write`.
 
 #### Backward Compatibility
 
-Existing API keys (created before scopes were added) have full access. Newly
-created keys without explicit scopes also have full access.
+Existing API keys created without scopes will be **denied access** until
+scopes are added. Re-create keys with explicit scopes to restore access.
 
 ## Network Security
 
@@ -254,40 +252,60 @@ The `web_fetch` tool resolves DNS and blocks requests to private IP ranges
 (loopback, RFC 1918, link-local, CGNAT). This prevents server-side request
 forgery attacks.
 
-## Three-Tier Authentication Model
+## Authentication
 
-Moltis uses a per-request three-tier authentication model that balances
-local development convenience with production security:
+Moltis uses a unified auth gate that applies a single `check_auth()`
+function to every request. This prevents split-brain bugs where different
+code paths disagree on auth status.
+
+For full details — including the decision matrix, credential types, API
+key scopes, session management endpoints, and WebSocket auth — see the
+dedicated [Authentication](authentication.md) page.
+
+### Three-Tier Model (summary)
 
 | Tier | Condition | Behaviour |
 |------|-----------|-----------|
-| **1** | Password/passkey is set | Auth **always** required (any IP) |
-| **2** | No password + direct local connection | Full access (dev convenience) |
-| **3** | No password + remote/proxied connection | Onboarding only (setup code required) |
+| **1** | Password/passkey is configured | Auth **always** required (any IP) |
+| **2** | No credentials + direct local connection | Full access (dev convenience) |
+| **3** | No credentials + remote/proxied connection | Onboarding only (setup code required) |
 
-### How "local" is determined
+## HTTP Endpoint Throttling
 
-Each incoming request is classified as **local** or **remote** using
-four checks that must **all** pass:
+Moltis includes built-in per-IP endpoint throttling to reduce brute force
+attempts and traffic spikes, but only when auth is required for the current
+request.
 
-1. `MOLTIS_BEHIND_PROXY` env var is **not** set (hard override)
-2. No proxy headers present (`X-Forwarded-For`, `X-Real-IP`,
-   `CF-Connecting-IP`, `Forwarded`)
-3. The `Host` header resolves to a loopback address (or is absent)
-4. The TCP source IP is loopback (`127.0.0.1`, `::1`)
+Throttling is bypassed when a request is already authenticated, when auth is
+explicitly disabled, or when setup is incomplete and local Tier-2 access is
+allowed.
 
-If **any** check fails, the connection is treated as remote.
+### Default Limits
 
-### Practical implications
+| Scope | Default |
+|------|---------|
+| `POST /api/auth/login` | 5 requests per 60 seconds |
+| Other `/api/auth/*` | 120 requests per 60 seconds |
+| Other `/api/*` | 180 requests per 60 seconds |
+| `/ws` upgrade | 30 requests per 60 seconds |
 
-| Scenario | No password | Password set |
-|----------|-------------|-------------|
-| Local browser → `localhost:18789` | Full access | Auth required |
-| Local CLI/wscat → `localhost:18789` | Full access | Auth required |
-| Internet → Caddy (with XFF) → `127.0.0.1:18789` | Onboarding only | Auth required |
-| Internet → nginx (with `proxy_set_header`) → `127.0.0.1:18789` | Onboarding only | Auth required |
-| Internet → bare nginx (`proxy_pass` only) → `127.0.0.1:18789` | **See below** | Auth required |
-| Server bound to `0.0.0.0`, remote client | Onboarding only | Auth required |
+### When Limits Are Hit
+
+- API endpoints return `429 Too Many Requests`
+- Responses include `Retry-After`
+- JSON responses include `retry_after_seconds`
+
+### Reverse Proxy Behavior
+
+When `MOLTIS_BEHIND_PROXY=true`, throttling is keyed by forwarded client IP
+headers (`X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`) instead of the
+direct socket address.
+
+### Production Guidance
+
+Built-in throttling is the first layer. For internet-facing deployments, add
+edge rate limits at your reverse proxy or WAF as a second layer (IP reputation,
+burst controls, geo rules, bot filtering).
 
 ## Reverse Proxy Deployments
 

@@ -19,11 +19,13 @@ import {
 	sendRpc,
 	toolCallSummary,
 } from "./helpers.js";
-import { makeBranchIcon, makeChatIcon, makeCronIcon, makeForkIcon, makeTelegramIcon } from "./icons.js";
 import { updateSessionProjectSelect } from "./project-combo.js";
 import { currentPrefix, navigate, sessionPath } from "./router.js";
 import { updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
 import * as S from "./state.js";
+import { modelStore } from "./stores/model-store.js";
+import { projectStore } from "./stores/project-store.js";
+import { sessionStore } from "./stores/session-store.js";
 import { confirmDialog } from "./ui.js";
 
 // ── Fetch & render ──────────────────────────────────────────
@@ -31,7 +33,29 @@ import { confirmDialog } from "./ui.js";
 export function fetchSessions() {
 	sendRpc("sessions.list", {}).then((res) => {
 		if (!res?.ok) return;
-		S.setSessions(res.payload || []);
+		var incoming = res.payload || [];
+		// Preserve client-side flags (localUnread, replying) across fetches.
+		var oldByKey = {};
+		for (var old of S.sessions) {
+			if (old._localUnread || old._replying) {
+				oldByKey[old.key] = {
+					localUnread: old._localUnread,
+					replying: old._replying,
+				};
+			}
+		}
+		for (var s of incoming) {
+			var prev = oldByKey[s.key];
+			if (prev) {
+				if (prev.localUnread) s._localUnread = true;
+				if (prev.replying) s._replying = true;
+			}
+		}
+		// Update session store (source of truth) — version guard
+		// inside Session.update() prevents stale data from overwriting.
+		sessionStore.setAll(incoming);
+		// Dual-write to state.js for backward compat
+		S.setSessions(incoming);
 		renderSessionList();
 		updateChatSessionHeader();
 	});
@@ -47,204 +71,114 @@ export function refreshActiveSession() {
 	});
 }
 
-function isTelegramSession(s) {
-	if (s.key.startsWith("telegram:")) return true;
-	if (!s.channelBinding) return false;
-	try {
-		return JSON.parse(s.channelBinding).channel_type === "telegram";
-	} catch (_e) {
-		return false;
-	}
-}
-
-function pickSessionIcon(s, isBranch) {
-	if (isBranch) return makeBranchIcon();
-	if (s.key.startsWith("cron:")) return makeCronIcon();
-	if (isTelegramSession(s)) return makeTelegramIcon();
-	return makeChatIcon();
-}
-
-function createSessionIcon(s, isBranch) {
-	var iconWrap = document.createElement("span");
-	iconWrap.className = "session-icon";
-	iconWrap.appendChild(pickSessionIcon(s, isBranch));
-	var telegram = isTelegramSession(s);
-	if (telegram) {
-		iconWrap.style.color = s.activeChannel ? "var(--accent)" : "var(--muted)";
-		iconWrap.style.opacity = s.activeChannel ? "1" : "0.5";
-		iconWrap.title = s.activeChannel ? "Active Telegram session" : "Telegram session (inactive)";
-	} else {
-		iconWrap.style.color = "var(--muted)";
-	}
-	var spinner = document.createElement("span");
-	spinner.className = "session-spinner";
-	iconWrap.appendChild(spinner);
-	return iconWrap;
-}
-
-function createSessionMeta(s) {
-	var meta = document.createElement("div");
-	meta.className = "session-meta";
-	meta.setAttribute("data-session-key", s.key);
-	var count = s.messageCount || 0;
-	var metaText = `${count} msg${count !== 1 ? "s" : ""}`;
-	if (s.forkPoint != null) {
-		metaText += ` \u00b7 fork@${s.forkPoint}`;
-	}
-	if (s.worktree_branch) {
-		metaText += ` \u00b7 \u2387 ${s.worktree_branch}`;
-	}
-	meta.textContent = metaText;
-	if (s.updatedAt) {
-		var sep = document.createTextNode(" \u00b7 ");
-		var t = document.createElement("time");
-		t.setAttribute("data-epoch-ms", String(s.updatedAt));
-		t.textContent = new Date(s.updatedAt).toISOString();
-		meta.appendChild(sep);
-		meta.appendChild(t);
-	}
-	return meta;
-}
-
-function createSessionActions(s) {
-	var actions = document.createElement("div");
-	actions.className = "session-actions";
-	// Fork button — not available for cron sessions
-	if (!s.key.startsWith("cron:")) {
-		var forkBtn = document.createElement("button");
-		forkBtn.className = "session-fork-btn";
-		forkBtn.title = "Fork session";
-		forkBtn.appendChild(makeForkIcon());
-		forkBtn.addEventListener("click", (e) => {
-			e.stopPropagation();
-			sendRpc("sessions.fork", { key: s.key }).then((res) => {
-				if (res?.ok && res.payload?.sessionKey) {
-					fetchSessions();
-					switchSession(res.payload.sessionKey);
-				}
-			});
-		});
-		actions.appendChild(forkBtn);
-	}
-	return actions;
-}
+// ── Session list ─────────────────────────────────────────────
+// The Preact SessionList component is mounted once from app.js and
+// auto-rerenders from signals.  This function handles the imperative
+// Clear button visibility that lives outside the component.
 
 export function renderSessionList() {
-	var sessionList = S.$("sessionList");
-	sessionList.textContent = "";
-	var filtered = S.sessions;
-	if (S.projectFilterId) {
-		filtered = S.sessions.filter((s) => s.projectId === S.projectFilterId);
-	}
-
-	// Build parent→children map for tree rendering.
-	var childrenMap = {};
-	var keyMap = {};
-	filtered.forEach((s) => {
-		keyMap[s.key] = s;
-		if (s.parentSessionKey) {
-			if (!childrenMap[s.parentSessionKey]) childrenMap[s.parentSessionKey] = [];
-			childrenMap[s.parentSessionKey].push(s);
-		}
-	});
-	// Root sessions: no parent, or parent not in filtered set.
-	var roots = filtered.filter((s) => !(s.parentSessionKey && keyMap[s.parentSessionKey]));
-
-	var tpl = document.getElementById("tpl-session-item");
-
-	function renderSession(s, depth) {
-		var isBranch = depth > 0;
-		var frag = tpl.content.cloneNode(true);
-		var item = frag.firstElementChild;
-		item.className = `session-item${s.key === S.activeSessionKey ? " active" : ""}`;
-		item.setAttribute("data-session-key", s.key);
-		if (isBranch) {
-			item.style.paddingLeft = `${12 + depth * 16}px`;
-		}
-
-		var iconWrap = item.querySelector(".session-icon");
-		iconWrap.replaceWith(createSessionIcon(s, isBranch));
-
-		item.querySelector("[data-label-text]").textContent = s.label || s.key;
-
-		var meta = item.querySelector(".session-meta");
-		var newMeta = createSessionMeta(s);
-		meta.replaceWith(newMeta);
-
-		var actionsSlot = item.querySelector(".session-actions");
-		actionsSlot.replaceWith(createSessionActions(s));
-
-		item.addEventListener("click", () => {
-			if (currentPrefix !== "/chats") {
-				navigate(sessionPath(s.key));
-			} else {
-				switchSession(s.key);
-			}
-		});
-
-		sessionList.appendChild(item);
-
-		// Render children recursively.
-		var children = childrenMap[s.key] || [];
-		children.forEach((child) => {
-			renderSession(child, depth + 1);
-		});
-	}
-
-	roots.forEach((s) => {
-		renderSession(s, 0);
-	});
+	updateClearAllVisibility();
 }
-
-// ── Braille spinner for active sessions ─────────────────────
-var spinnerFrames = [
-	"\u280B",
-	"\u2819",
-	"\u2839",
-	"\u2838",
-	"\u283C",
-	"\u2834",
-	"\u2826",
-	"\u2827",
-	"\u2807",
-	"\u280F",
-];
-var spinnerIndex = 0;
-setInterval(() => {
-	spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
-	var els = document.querySelectorAll(".session-item.replying .session-spinner");
-	for (var el of els) el.textContent = spinnerFrames[spinnerIndex];
-}, 80);
 
 // ── Status helpers ──────────────────────────────────────────
 
 export function setSessionReplying(key, replying) {
-	var sessionList = S.$("sessionList");
-	var el = sessionList.querySelector(`.session-item[data-session-key="${key}"]`);
-	if (el) el.classList.toggle("replying", replying);
+	// Update store signal — Preact SessionList re-renders automatically.
+	var session = sessionStore.getByKey(key);
+	if (session) session.replying.value = replying;
+	// Dual-write: update plain S.sessions object
+	var entry = S.sessions.find((s) => s.key === key);
+	if (entry) entry._replying = replying;
 }
 
 export function setSessionUnread(key, unread) {
-	var sessionList = S.$("sessionList");
-	var el = sessionList.querySelector(`.session-item[data-session-key="${key}"]`);
-	if (el) el.classList.toggle("unread", unread);
+	// Update store signal — Preact SessionList re-renders automatically.
+	var session = sessionStore.getByKey(key);
+	if (session) session.localUnread.value = unread;
+	// Dual-write: update plain S.sessions object
+	var entry = S.sessions.find((s) => s.key === key);
+	if (entry) entry._localUnread = unread;
 }
 
 export function bumpSessionCount(key, increment) {
-	var sessionList = S.$("sessionList");
-	var el = sessionList.querySelector(`.session-meta[data-session-key="${key}"]`);
-	if (!el) return;
-	var current = parseInt(el.textContent, 10) || 0;
-	var next = current + increment;
-	el.textContent = `${next} msg${next !== 1 ? "s" : ""}`;
+	// Update store — bumpCount bumps dataVersion for automatic re-render.
+	var session = sessionStore.getByKey(key);
+	if (session) {
+		session.bumpCount(increment);
+	}
+
+	// Dual-write: update the underlying S.sessions data.
+	var entry = S.sessions.find((s) => s.key === key);
+	if (entry) {
+		entry.messageCount = (entry.messageCount || 0) + increment;
+		if (key === S.activeSessionKey) {
+			entry.lastSeenMessageCount = entry.messageCount;
+		}
+	}
 }
 
 // ── New session button ──────────────────────────────────────
 var newSessionBtn = S.$("newSessionBtn");
 newSessionBtn.addEventListener("click", () => {
 	var key = `session:${crypto.randomUUID()}`;
-	navigate(sessionPath(key));
+	var filterId = projectStore.projectFilterId.value;
+	if (currentPrefix === "/chats") {
+		switchSession(key, null, filterId || undefined);
+	} else {
+		navigate(sessionPath(key));
+	}
 });
+
+// ── Clear all sessions button ───────────────────────────────
+var clearAllBtn = S.$("clearAllSessionsBtn");
+
+/** Show the Clear button only when there are deletable (session:*) sessions. */
+function updateClearAllVisibility() {
+	if (!clearAllBtn) return;
+	var allSessions = sessionStore.sessions.value;
+	var hasClearable = allSessions.some(
+		(s) => s.key !== "main" && !s.key.startsWith("cron:") && !s.key.startsWith("telegram:") && !s.channelBinding,
+	);
+	clearAllBtn.classList.toggle("hidden", !hasClearable);
+}
+
+if (clearAllBtn) {
+	clearAllBtn.addEventListener("click", () => {
+		var allSessions = sessionStore.sessions.value;
+		var count = allSessions.filter(
+			(s) => s.key !== "main" && !s.key.startsWith("cron:") && !s.key.startsWith("telegram:") && !s.channelBinding,
+		).length;
+		if (count === 0) return;
+		confirmDialog(
+			`Delete ${count} session${count !== 1 ? "s" : ""}? Main, Telegram and cron sessions will be kept.`,
+		).then((yes) => {
+			if (!yes) return;
+			clearAllBtn.disabled = true;
+			clearAllBtn.textContent = "Clearing\u2026";
+			sendRpc("sessions.clear_all", {}).then((res) => {
+				clearAllBtn.disabled = false;
+				clearAllBtn.textContent = "Clear";
+				if (res?.ok) {
+					// If the active session was deleted, switch to main.
+					var active = sessionStore.getByKey(sessionStore.activeSessionKey.value);
+					var wasKept =
+						!active ||
+						active.key === "main" ||
+						active.key.startsWith("cron:") ||
+						active.key.startsWith("telegram:") ||
+						active.channelBinding;
+					if (!wasKept) {
+						switchSession("main");
+					}
+					fetchSessions();
+				}
+			});
+		});
+	});
+}
+
+// ── Re-render session list on project filter change ─────────
+document.addEventListener("moltis:render-session-list", renderSessionList);
 
 // ── MCP toggle restore ──────────────────────────────────────
 function restoreMcpToggle(mcpEnabled) {
@@ -261,13 +195,17 @@ function restoreMcpToggle(mcpEnabled) {
 
 function restoreSessionState(entry, projectId) {
 	var effectiveProjectId = entry.projectId || projectId || "";
+	projectStore.setActiveProjectId(effectiveProjectId);
+	// Dual-write to state.js for backward compat
 	S.setActiveProjectId(effectiveProjectId);
-	localStorage.setItem("moltis-project", S.activeProjectId);
-	updateSessionProjectSelect(S.activeProjectId);
+	localStorage.setItem("moltis-project", effectiveProjectId);
+	updateSessionProjectSelect(effectiveProjectId);
 	if (entry.model) {
+		modelStore.select(entry.model);
+		// Dual-write to state.js for backward compat
 		S.setSelectedModelId(entry.model);
 		localStorage.setItem("moltis-model", entry.model);
-		var found = S.models.find((m) => m.id === entry.model);
+		var found = modelStore.getById(entry.model);
 		if (S.modelComboLabel) S.modelComboLabel.textContent = found ? found.displayName || found.id : entry.model;
 	}
 	updateSandboxUI(entry.sandbox_enabled !== false);
@@ -437,7 +375,7 @@ function makeThinkingDots() {
 	return tpl.content.cloneNode(true).firstElementChild;
 }
 
-function postHistoryLoadActions(key, searchContext, msgEls, sessionList) {
+function postHistoryLoadActions(key, searchContext, msgEls) {
 	sendRpc("chat.context", {}).then((ctxRes) => {
 		if (ctxRes?.ok && ctxRes.payload) {
 			if (ctxRes.payload.tokenUsage) {
@@ -455,8 +393,8 @@ function postHistoryLoadActions(key, searchContext, msgEls, sessionList) {
 		scrollChatToBottom();
 	}
 
-	var item = sessionList.querySelector(`.session-item[data-session-key="${key}"]`);
-	if (item?.classList.contains("replying") && S.chatMsgBox) {
+	var session = sessionStore.getByKey(key);
+	if (session?.replying.value && S.chatMsgBox) {
 		removeThinking();
 		var thinkEl = document.createElement("div");
 		thinkEl.className = "msg assistant thinking";
@@ -465,125 +403,17 @@ function postHistoryLoadActions(key, searchContext, msgEls, sessionList) {
 		S.chatMsgBox.appendChild(thinkEl);
 		scrollChatToBottom();
 	}
-	if (!sessionList.querySelector(`.session-meta[data-session-key="${key}"]`)) {
-		fetchSessions();
-	}
 }
 
-function nextSessionKey(currentKey) {
-	var s = S.sessions.find((x) => x.key === currentKey);
-	if (s?.parentSessionKey) return s.parentSessionKey;
-	var idx = S.sessions.findIndex((x) => x.key === currentKey);
-	if (idx >= 0 && idx + 1 < S.sessions.length) return S.sessions[idx + 1].key;
-	if (idx > 0) return S.sessions[idx - 1].key;
-	return "main";
-}
-
+/** No-op — the Preact SessionHeader component auto-updates from signals. */
 export function updateChatSessionHeader() {
-	var nameEl = S.$("chatSessionName");
-	var inputEl = S.$("chatSessionRenameInput");
-	var deleteBtn = S.$("chatSessionDelete");
-	if (!nameEl) return;
-
-	var s = S.sessions.find((x) => x.key === S.activeSessionKey);
-	var fullName = s ? s.label || s.key : S.activeSessionKey;
-	nameEl.textContent = fullName.length > 20 ? `${fullName.slice(0, 20)}\u2026` : fullName;
-	nameEl.dataset.fullName = fullName;
-
-	var isMain = S.activeSessionKey === "main";
-	var isChannel = s?.channelBinding || S.activeSessionKey.startsWith("telegram:");
-	var isCron = S.activeSessionKey.startsWith("cron:");
-	var canRename = !(isMain || isChannel || isCron);
-
-	nameEl.style.cursor = canRename ? "pointer" : "default";
-	nameEl.title = canRename ? "Click to rename" : "";
-	nameEl.onclick = canRename
-		? () => {
-				inputEl.style.width = `${nameEl.offsetWidth + 16}px`;
-				nameEl.classList.add("hidden");
-				inputEl.classList.remove("hidden");
-				inputEl.value = nameEl.dataset.fullName || nameEl.textContent;
-				inputEl.focus();
-				inputEl.select();
-			}
-		: null;
-
-	if (inputEl) {
-		var commitRename = () => {
-			var val = inputEl.value.trim();
-			inputEl.classList.add("hidden");
-			nameEl.classList.remove("hidden");
-			if (val && val !== (nameEl.dataset.fullName || nameEl.textContent)) {
-				sendRpc("sessions.patch", { key: S.activeSessionKey, label: val }).then((res) => {
-					if (res?.ok) {
-						nameEl.textContent = val;
-						fetchSessions();
-					}
-				});
-			}
-		};
-		inputEl.onblur = commitRename;
-		inputEl.onkeydown = (e) => {
-			if (e.key === "Enter") {
-				e.preventDefault();
-				inputEl.blur();
-			}
-			if (e.key === "Escape") {
-				inputEl.value = nameEl.dataset.fullName || nameEl.textContent;
-				inputEl.blur();
-			}
-		};
-	}
-
-	var forkBtn = S.$("chatSessionFork");
-	if (forkBtn) {
-		forkBtn.classList.toggle("hidden", isCron);
-		forkBtn.onclick = () => {
-			sendRpc("sessions.fork", { key: S.activeSessionKey }).then((res) => {
-				if (res?.ok && res.payload?.sessionKey) {
-					fetchSessions();
-					switchSession(res.payload.sessionKey);
-				}
-			});
-		};
-	}
-
-	if (deleteBtn) {
-		deleteBtn.classList.toggle("hidden", isMain || isCron);
-		deleteBtn.onclick = () => {
-			var msgCount = s ? s.messageCount || 0 : 0;
-			var nextKey = nextSessionKey(S.activeSessionKey);
-			var doDelete = () => {
-				sendRpc("sessions.delete", { key: S.activeSessionKey }).then((res) => {
-					if (res && !res.ok && res.error && res.error.indexOf("uncommitted changes") !== -1) {
-						confirmDialog("Worktree has uncommitted changes. Force delete?").then((yes) => {
-							if (!yes) return;
-							sendRpc("sessions.delete", { key: S.activeSessionKey, force: true }).then(() => {
-								switchSession(nextKey);
-								fetchSessions();
-							});
-						});
-						return;
-					}
-					switchSession(nextKey);
-					fetchSessions();
-				});
-			};
-			if (msgCount > 0) {
-				confirmDialog("Delete this session?").then((yes) => {
-					if (yes) doDelete();
-				});
-			} else {
-				doDelete();
-			}
-		};
-	}
+	// Retained for backward compat call sites; Preact handles rendering.
 }
 
 function showWelcomeCard() {
 	if (!S.chatMsgBox) return;
 
-	if (S.models.length === 0) {
+	if (modelStore.models.value.length === 0) {
 		var noProvTpl = document.getElementById("tpl-no-providers-card");
 		if (!noProvTpl) return;
 		var noProvCard = noProvTpl.content.cloneNode(true).firstElementChild;
@@ -613,7 +443,7 @@ export function refreshWelcomeCardIfNeeded() {
 	if (!S.chatMsgBox) return;
 	var welcomeCard = S.chatMsgBox.querySelector("#welcomeCard");
 	var noProvCard = S.chatMsgBox.querySelector("#noProvidersCard");
-	var hasModels = S.models.length > 0;
+	var hasModels = modelStore.models.value.length > 0;
 
 	// Wrong variant showing — swap it
 	if (hasModels && noProvCard) {
@@ -625,8 +455,25 @@ export function refreshWelcomeCardIfNeeded() {
 	}
 }
 
+function ensureSessionInClientStore(key, entry, projectId) {
+	var existing = sessionStore.getByKey(key);
+	if (existing) return existing;
+
+	var created = { ...entry, key: key };
+	if (projectId && !created.projectId) created.projectId = projectId;
+	var createdSession = sessionStore.upsert(created);
+
+	// Keep state.js mirror in sync for legacy call sites.
+	var inLegacy = S.sessions.some((s) => s.key === key);
+	if (!inLegacy) {
+		S.setSessions([...S.sessions, created]);
+	}
+	return createdSession;
+}
+
 export function switchSession(key, searchContext, projectId) {
-	var sessionList = S.$("sessionList");
+	sessionStore.setActive(key);
+	// Dual-write to state.js for backward compat
 	S.setActiveSessionKey(key);
 	localStorage.setItem("moltis-session", key);
 	history.replaceState(null, "", sessionPath(key));
@@ -642,14 +489,9 @@ export function switchSession(key, searchContext, projectId) {
 	S.setSessionTokens({ input: 0, output: 0 });
 	S.setSessionContextWindow(0);
 	updateTokenBar();
+	// Preact SessionList auto-rerenders active/unread from signals.
 
-	var items = sessionList.querySelectorAll(".session-item");
-	items.forEach((el) => {
-		var isTarget = el.getAttribute("data-session-key") === key;
-		el.classList.toggle("active", isTarget);
-		if (isTarget) el.classList.remove("unread");
-	});
-
+	sessionStore.switchInProgress.value = true;
 	S.setSessionSwitchInProgress(true);
 	var switchParams = { key: key };
 	if (projectId) switchParams.project_id = projectId;
@@ -657,6 +499,7 @@ export function switchSession(key, searchContext, projectId) {
 	sendRpc("sessions.switch", switchParams).then((res) => {
 		if (res?.ok && res.payload) {
 			var entry = res.payload.entry || {};
+			ensureSessionInClientStore(key, entry, projectId);
 			restoreSessionState(entry, projectId);
 			var history = res.payload.history || [];
 			var msgEls = [];
@@ -692,10 +535,28 @@ export function switchSession(key, searchContext, projectId) {
 				var ts = lastMsg.created_at;
 				if (ts) appendLastMessageTimestamp(ts);
 			}
+			// Sync the store entry — syncCounts calls updateBadge() for re-render.
+			var sessionEntry = sessionStore.getByKey(key);
+			if (sessionEntry) {
+				sessionEntry.syncCounts(history.length, history.length);
+				sessionEntry.localUnread.value = false;
+				sessionEntry.lastHistoryIndex.value = history.length > 0 ? history.length - 1 : -1;
+			}
+			// Also sync the plain S.sessions entry for backward compat
+			var sEntry = S.sessions.find((s) => s.key === key);
+			if (sEntry) {
+				sEntry.messageCount = history.length;
+				sEntry.lastSeenMessageCount = history.length;
+				sEntry._localUnread = false;
+			}
+			sessionStore.switchInProgress.value = false;
 			S.setSessionSwitchInProgress(false);
-			postHistoryLoadActions(key, searchContext, msgEls, sessionList);
+			postHistoryLoadActions(key, searchContext, msgEls);
+			if (S.chatInput) S.chatInput.focus();
 		} else {
+			sessionStore.switchInProgress.value = false;
 			S.setSessionSwitchInProgress(false);
+			if (S.chatInput) S.chatInput.focus();
 		}
 	});
 }

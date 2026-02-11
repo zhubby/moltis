@@ -15,11 +15,12 @@ import { startProviderOAuth } from "./provider-oauth.js";
 import { testModel, validateProviderKey } from "./provider-validation.js";
 import * as S from "./state.js";
 import { fetchPhrase } from "./tts-phrases.js";
+import { forceReconnect } from "./ws-connect.js";
 
 // ── Step indicator ──────────────────────────────────────────
 
-var BASE_STEP_LABELS = ["Security", "Identity", "Provider", "Channel", "Summary"];
-var VOICE_STEP_LABELS = ["Security", "Identity", "Provider", "Voice", "Channel", "Summary"];
+var BASE_STEP_LABELS = ["Security", "Identity", "LLM", "Channel", "Summary"];
+var VOICE_STEP_LABELS = ["Security", "Identity", "LLM", "Voice", "Channel", "Summary"];
 
 function preferredChatPath() {
 	var key = localStorage.getItem("moltis-session") || "main";
@@ -46,7 +47,7 @@ function StepIndicator({ steps, current }) {
 function StepDot({ index, label, state }) {
 	return html`<div class="onboarding-step ${state}">
 		<div class="onboarding-step-dot ${state}">
-			${state === "completed" ? html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7" /></svg>` : index + 1}
+			${state === "completed" ? html`<span class="icon icon-md icon-checkmark"></span>` : index + 1}
 		</div>
 		<div class="onboarding-step-label">${label}</div>
 	</div>`;
@@ -136,6 +137,7 @@ function AuthStep({ onNext, skippable }) {
 		})
 			.then((r) => {
 				if (r.ok) {
+					forceReconnect();
 					onNext();
 				} else {
 					return r.text().then((t) => {
@@ -203,6 +205,7 @@ function AuthStep({ onNext, skippable }) {
 			})
 			.then((r) => {
 				if (r.ok) {
+					forceReconnect();
 					setSaving(false);
 					setPasskeyDone(true);
 				} else {
@@ -241,6 +244,7 @@ function AuthStep({ onNext, skippable }) {
 		})
 			.then((r) => {
 				if (r.ok) {
+					forceReconnect();
 					onNext();
 				} else {
 					return r.text().then((t) => {
@@ -276,7 +280,7 @@ function AuthStep({ onNext, skippable }) {
 			<h2 class="text-lg font-medium text-[var(--text-strong)]">Secure your instance</h2>
 
 			<div class="flex items-center gap-2 text-sm text-[var(--accent)]">
-				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7" /></svg>
+				<span class="icon icon-checkmark"></span>
 				Passkey registered successfully!
 			</div>
 
@@ -302,7 +306,10 @@ function AuthStep({ onNext, skippable }) {
 					<button type="submit" class="provider-btn" disabled=${optPwSaving}>
 						${optPwSaving ? "Setting\u2026" : "Set password & continue"}
 					</button>
-					<button type="button" class="text-xs text-[var(--muted)] cursor-pointer bg-transparent border-none underline" onClick=${onNext}>Skip</button>
+					<button type="button" class="text-xs text-[var(--muted)] cursor-pointer bg-transparent border-none underline" onClick=${() => {
+						forceReconnect();
+						onNext();
+					}}>Skip</button>
 				</div>
 			</form>
 		</div>`;
@@ -568,9 +575,7 @@ function OnboardingProviderRow({
 					${provider.configured ? html`<span class="provider-item-badge configured">configured</span>` : null}
 					${
 						validationResult?.ok === true
-							? html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.5" class="inline-block">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-							</svg>`
+							? html`<span class="icon icon-md icon-check-circle inline-block" style="color:var(--ok)"></span>`
 							: null
 					}
 					<span class="provider-item-badge ${provider.authType}">
@@ -1168,18 +1173,18 @@ function ProviderStep({ onNext, onBack }) {
 	// ── Render ────────────────────────────────────────────────
 
 	if (loading) {
-		return html`<div class="text-sm text-[var(--muted)]">Loading providers\u2026</div>`;
+		return html`<div class="text-sm text-[var(--muted)]">Loading LLMs\u2026</div>`;
 	}
 
 	var configuredProviders = providers.filter((p) => p.configured);
 
 	return html`<div class="flex flex-col gap-4">
-		<h2 class="text-lg font-medium text-[var(--text-strong)]">Add providers</h2>
+		<h2 class="text-lg font-medium text-[var(--text-strong)]">Add LLMs</h2>
 		<p class="text-xs text-[var(--muted)] leading-relaxed">Configure one or more LLM providers to power your agent. You can add more later in Settings.</p>
 		${
 			configuredProviders.length > 0
 				? html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 flex flex-col gap-2">
-				<div class="text-xs text-[var(--muted)]">Detected providers</div>
+				<div class="text-xs text-[var(--muted)]">Detected LLM providers</div>
 				<div class="flex flex-wrap gap-2">
 					${configuredProviders.map((p) => html`<span key=${p.name} class="provider-item-badge configured">${p.displayName}</span>`)}
 				</div>
@@ -1342,14 +1347,19 @@ function OnboardingVoiceRow({
 		${
 			voiceTestResult?.success === true
 				? html`<div class="voice-success-result mt-2">
-				<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="14" height="14">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-				</svg>
+				<span class="icon icon-md icon-check-circle"></span>
 				<span>Audio played successfully</span>
 			</div>`
 				: null
 		}
-		${voiceTestResult?.error ? html`<span class="text-xs text-[var(--error)] mt-1 block">${voiceTestResult.error}</span>` : null}
+		${
+			voiceTestResult?.error
+				? html`<div class="voice-error-result">
+			<span class="icon icon-md icon-x-circle"></span>
+			<span>${voiceTestResult.error}</span>
+		</div>`
+				: null
+		}
 		${
 			isConfiguring
 				? html`<form onSubmit=${onSaveKey} class="flex flex-col gap-2 mt-3 border-t border-[var(--border)] pt-3">
@@ -1585,11 +1595,22 @@ function VoiceStep({ onNext, onBack }) {
 				});
 				if (res?.ok && res.payload?.audio) {
 					var bytes = decodeBase64Safe(res.payload.audio);
-					var blob = new Blob([bytes], { type: res.payload.content_type || "audio/mpeg" });
+					var audioMime = res.payload.mimeType || res.payload.content_type || "audio/mpeg";
+					console.log(
+						"[TTS] audio received: %d bytes, mime=%s, format=%s",
+						bytes.length,
+						audioMime,
+						res.payload.format,
+					);
+					var blob = new Blob([bytes], { type: audioMime });
 					var url = URL.createObjectURL(blob);
 					var audio = new Audio(url);
+					audio.onerror = (e) => {
+						console.error("[TTS] audio element error:", audio.error?.message || e);
+						URL.revokeObjectURL(url);
+					};
 					audio.onended = () => URL.revokeObjectURL(url);
-					audio.play().catch(() => undefined);
+					audio.play().catch((e) => console.error("[TTS] play() failed:", e));
 					setVoiceTestResults((prev) => ({ ...prev, [providerId]: { success: true, error: null } }));
 				} else {
 					setVoiceTestResults((prev) => ({
@@ -1638,20 +1659,36 @@ function VoiceStep({ onNext, onBack }) {
 								body: audioBlob,
 							},
 						);
-						var sttRes = await resp.json();
+						console.log("[STT] upload response: status=%d ok=%s", resp.status, resp.ok);
+						if (resp.ok) {
+							var sttRes = await resp.json();
 
-						if (sttRes.ok && sttRes.transcription?.text) {
-							setVoiceTestResults((prev) => ({
-								...prev,
-								[providerId]: { text: sttRes.transcription.text, error: null },
-							}));
+							if (sttRes.ok && sttRes.transcription?.text) {
+								setVoiceTestResults((prev) => ({
+									...prev,
+									[providerId]: { text: sttRes.transcription.text, error: null },
+								}));
+							} else {
+								setVoiceTestResults((prev) => ({
+									...prev,
+									[providerId]: {
+										text: null,
+										error: sttRes.transcriptionError || sttRes.error || "STT test failed",
+									},
+								}));
+							}
 						} else {
+							var errBody = await resp.text();
+							console.error("[STT] upload failed: status=%d body=%s", resp.status, errBody);
+							var errMsg = "STT test failed";
+							try {
+								errMsg = JSON.parse(errBody)?.error || errMsg;
+							} catch (_e) {
+								// not JSON
+							}
 							setVoiceTestResults((prev) => ({
 								...prev,
-								[providerId]: {
-									text: null,
-									error: sttRes.transcriptionError || sttRes.error || "STT test failed",
-								},
+								[providerId]: { text: null, error: `${errMsg} (HTTP ${resp.status})` },
 							}));
 						}
 					} catch (fetchErr) {
@@ -1822,9 +1859,7 @@ function ChannelStep({ onNext, onBack }) {
 		${
 			connected
 				? html`<div class="rounded-md border border-[var(--ok)] bg-[var(--surface)] p-4 flex gap-3 items-center">
-				<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.5" class="shrink-0">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-				</svg>
+				<span class="icon icon-lg icon-check-circle shrink-0" style="color:var(--ok)"></span>
 				<div>
 					<div class="text-sm font-medium text-[var(--text-strong)]">Bot connected</div>
 					<div class="text-xs text-[var(--muted)] mt-0.5">@${connectedName} is now linked to your agent.</div>
@@ -1841,13 +1876,24 @@ function ChannelStep({ onNext, onBack }) {
 					<label class="text-xs text-[var(--muted)] mb-1 block">Bot username</label>
 					<input type="text" class="provider-key-input w-full"
 						value=${accountId} onInput=${(e) => setAccountId(e.target.value)}
-						placeholder="e.g. my_assistant_bot" autofocus />
+						placeholder="e.g. my_assistant_bot"
+						autocomplete="off"
+						autocapitalize="none"
+						autocorrect="off"
+						spellcheck="false"
+						name="telegram_bot_username"
+						autofocus />
 				</div>
 				<div>
 					<label class="text-xs text-[var(--muted)] mb-1 block">Bot token (from @BotFather)</label>
-					<input type="password" class="provider-key-input w-full"
+					<input type="text" class="provider-key-input w-full"
 						value=${token} onInput=${(e) => setToken(e.target.value)}
-						placeholder="123456:ABC-DEF..." />
+						placeholder="123456:ABC-DEF..."
+						autocomplete="off"
+						autocapitalize="none"
+						autocorrect="off"
+						spellcheck="false"
+						name="telegram_bot_token" />
 				</div>
 				<div>
 					<label class="text-xs text-[var(--muted)] mb-1 block">DM Policy</label>
@@ -1890,27 +1936,19 @@ function formatMemBytes(bytes) {
 }
 
 function CheckIcon() {
-	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.5" class="shrink-0">
-		<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-	</svg>`;
+	return html`<span class="icon icon-check-circle shrink-0" style="color:var(--ok)"></span>`;
 }
 
 function WarnIcon() {
-	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="2.5" class="shrink-0">
-		<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-	</svg>`;
+	return html`<span class="icon icon-warn-triangle shrink-0" style="color:var(--warn)"></span>`;
 }
 
 function ErrorIcon() {
-	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2.5" class="shrink-0">
-		<path stroke-linecap="round" stroke-linejoin="round" d="m9.75 9.75 4.5 4.5m0-4.5-4.5 4.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-	</svg>`;
+	return html`<span class="icon icon-x-circle shrink-0" style="color:var(--error)"></span>`;
 }
 
 function InfoIcon() {
-	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2.5" class="shrink-0">
-		<path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
-	</svg>`;
+	return html`<span class="icon icon-info-circle shrink-0" style="color:var(--muted)"></span>`;
 }
 
 function SummaryRow({ icon, label, children }) {
@@ -1993,15 +2031,15 @@ function SummaryStep({ onBack, onFinish }) {
 				${
 					data.identity?.user_name && data.identity?.name
 						? html`You: <span class="font-medium text-[var(--text)]">${data.identity.user_name}</span>
-						${" "}Agent: <span class="font-medium text-[var(--text)]">${data.identity.emoji || ""} ${data.identity.name}</span>`
+						Agent: <span class="font-medium text-[var(--text)]">${data.identity.emoji || ""} ${data.identity.name}</span>`
 						: html`<span class="text-[var(--warn)]">Identity not fully configured</span>`
 				}
 			<//>
 
-			<!-- Providers -->
+			<!-- LLMs -->
 			<${SummaryRow}
 				icon=${configuredProviders.length > 0 ? html`<${CheckIcon} />` : html`<${ErrorIcon} />`}
-				label="Providers">
+				label="LLMs">
 				${
 					configuredProviders.length > 0
 						? html`<div class="flex flex-col gap-1">
@@ -2010,7 +2048,7 @@ function SummaryStep({ onBack, onFinish }) {
 						</div>
 						${activeModel ? html`<div>Active model: <span class="font-mono font-medium text-[var(--text)]">${activeModel}</span></div>` : null}
 					</div>`
-						: html`<span class="text-[var(--error)]">No providers configured</span>`
+						: html`<span class="text-[var(--error)]">No LLM providers configured</span>`
 				}
 			<//>
 
@@ -2050,8 +2088,8 @@ function SummaryStep({ onBack, onFinish }) {
 				${
 					data.mem
 						? html`Total: <span class="font-medium text-[var(--text)]">${formatMemBytes(data.mem.total)}</span>
-						${" "}Available: <span class="font-medium text-[var(--text)]">${formatMemBytes(data.mem.available)}</span>
-						${data.mem.total && data.mem.total < LOW_MEMORY_THRESHOLD ? html`<div class="text-[var(--warn)] mt-1">Low memory detected. Consider cloud deployment for better performance.</div>` : null}`
+						Available: <span class="font-medium text-[var(--text)]">${formatMemBytes(data.mem.available)}</span>
+						${data.mem.total && data.mem.total < LOW_MEMORY_THRESHOLD ? html`<div class="text-[var(--warn)] mt-1">Low memory detected. Consider upgrading to an instance with more RAM.</div>` : null}`
 						: html`Memory info unavailable`
 				}
 			<//>

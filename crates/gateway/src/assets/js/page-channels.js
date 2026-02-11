@@ -7,9 +7,9 @@ import { useEffect } from "preact/hooks";
 import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
 import { updateNavCount } from "./nav-counts.js";
-import { registerPage } from "./router.js";
-import { connected, models as modelsSig } from "./signals.js";
+import { connected } from "./signals.js";
 import * as S from "./state.js";
+import { models as modelsSig } from "./stores/model-store.js";
 import { ConfirmDialog, Modal, ModelSelect, requestConfirm, showToast } from "./ui.js";
 
 var channels = signal([]);
@@ -51,12 +51,9 @@ function loadSenders() {
 	});
 }
 
-// ── Telegram icon (inline SVG via htm) ──────────────────────
+// ── Telegram icon (CSS mask-image) ──────────────────────────
 function TelegramIcon() {
-	return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" stroke-width="1.5">
-    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-  </svg>`;
+	return html`<span class="icon icon-telegram"></span>`;
 }
 
 // ── Channel card ─────────────────────────────────────────────
@@ -499,24 +496,25 @@ function ChannelsPage() {
   `;
 }
 
-registerPage(
-	"/channels",
-	function initChannels(container) {
-		container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
-		activeTab.value = "channels";
-		showAddModal.value = false;
-		editingChannel.value = null;
-		sendersAccount.value = "";
-		senders.value = [];
-		render(html`<${ChannelsPage} />`, container);
-	},
-	function teardownChannels() {
-		S.setRefreshChannelsPage(null);
-		if (S.channelEventUnsub) {
-			S.channelEventUnsub();
-			S.setChannelEventUnsub(null);
-		}
-		var container = S.$("pageContent");
-		if (container) render(null, container);
-	},
-);
+var _channelsContainer = null;
+
+export function initChannels(container) {
+	_channelsContainer = container;
+	container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
+	activeTab.value = "channels";
+	showAddModal.value = false;
+	editingChannel.value = null;
+	sendersAccount.value = "";
+	senders.value = [];
+	render(html`<${ChannelsPage} />`, container);
+}
+
+export function teardownChannels() {
+	S.setRefreshChannelsPage(null);
+	if (S.channelEventUnsub) {
+		S.channelEventUnsub();
+		S.setChannelEventUnsub(null);
+	}
+	if (_channelsContainer) render(null, _channelsContainer);
+	_channelsContainer = null;
+}
