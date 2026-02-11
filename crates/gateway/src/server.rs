@@ -126,11 +126,14 @@ impl moltis_tools::location::LocationRequester for GatewayLocationRequester {
         {
             let mut inner_w = self.state.inner.write().await;
             let invokes = &mut inner_w.pending_invokes;
-            invokes.insert(request_id.clone(), crate::state::PendingInvoke {
-                request_id: request_id.clone(),
-                sender: tx,
-                created_at: std::time::Instant::now(),
-            });
+            invokes.insert(
+                request_id.clone(),
+                crate::state::PendingInvoke {
+                    request_id: request_id.clone(),
+                    sender: tx,
+                    created_at: std::time::Instant::now(),
+                },
+            );
         }
 
         // Wait up to 30 seconds for the user to grant/deny permission.
@@ -244,13 +247,14 @@ impl moltis_tools::location::LocationRequester for GatewayLocationRequester {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut inner = self.state.inner.write().await;
-            inner
-                .pending_invokes
-                .insert(pending_key.clone(), crate::state::PendingInvoke {
+            inner.pending_invokes.insert(
+                pending_key.clone(),
+                crate::state::PendingInvoke {
                     request_id: pending_key.clone(),
                     sender: tx,
                     created_at: std::time::Instant::now(),
-                });
+                },
+            );
         }
 
         // Wait up to 60 seconds — user needs to navigate Telegram's UI.
@@ -401,15 +405,19 @@ fn approval_manager_from_config(config: &moltis_config::MoltisConfig) -> Approva
 pub struct AppState {
     pub gateway: Arc<GatewayState>,
     pub methods: Arc<MethodRegistry>,
+    pub request_throttle: Arc<crate::request_throttle::RequestThrottle>,
     #[cfg(feature = "push-notifications")]
     pub push_service: Option<Arc<crate::push::PushService>>,
 }
 
 // ── Server startup ───────────────────────────────────────────────────────────
 
-/// Build the protected API routes (shared between both build_gateway_app versions).
+/// Build the API routes (shared between both build_gateway_app versions).
+///
+/// Auth is enforced by `auth_gate` middleware on the whole router — these
+/// routes no longer carry their own auth layer.
 #[cfg(feature = "web-ui")]
-fn build_protected_api_routes() -> Router<AppState> {
+fn build_api_routes() -> Router<AppState> {
     let protected = Router::new()
         .route("/api/bootstrap", get(api_bootstrap_handler))
         .route("/api/gon", get(api_gon_handler))
@@ -494,26 +502,21 @@ fn build_protected_api_routes() -> Router<AppState> {
     protected
 }
 
-/// Apply auth middleware and feature-specific routes to protected API routes.
+/// Add feature-specific routes to API routes.
 #[cfg(feature = "web-ui")]
-fn finalize_protected_routes(protected: Router<AppState>, app_state: AppState) -> Router<AppState> {
-    let protected = protected.layer(axum::middleware::from_fn_with_state(
-        app_state,
-        crate::auth_middleware::require_auth,
-    ));
-
-    // Mount tailscale routes (protected) when the feature is enabled.
+fn add_feature_routes(routes: Router<AppState>) -> Router<AppState> {
+    // Mount tailscale routes when the feature is enabled.
     #[cfg(feature = "tailscale")]
-    let protected = protected.nest(
+    let routes = routes.nest(
         "/api/tailscale",
         crate::tailscale_routes::tailscale_router(),
     );
 
     // Mount push notification routes when the feature is enabled.
     #[cfg(feature = "push-notifications")]
-    let protected = protected.nest("/api/push", crate::push_routes::push_router());
+    let routes = routes.nest("/api/push", crate::push_routes::push_router());
 
-    protected
+    routes
 }
 
 /// Build the CORS layer with dynamic host-based origin validation.
@@ -672,25 +675,35 @@ pub fn build_gateway_app(
     let app_state = AppState {
         gateway: state,
         methods,
+        request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
         push_service,
     };
 
     #[cfg(feature = "web-ui")]
     let router = {
-        let protected = build_protected_api_routes();
-        let protected = finalize_protected_routes(protected, app_state.clone());
+        let api = build_api_routes();
+        let api = add_feature_routes(api);
 
-        // Public routes (assets, PWA files, SPA fallback).
         router
             .route("/auth/callback", get(oauth_callback_handler))
             .route("/onboarding", get(onboarding_handler))
+            .route("/login", get(login_handler_page))
             .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
             .route("/assets/{*path}", get(asset_handler))
             .route("/manifest.json", get(manifest_handler))
             .route("/sw.js", get(service_worker_handler))
-            .merge(protected)
+            .merge(api)
             .fallback(spa_fallback)
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::auth_middleware::auth_gate,
+            ))
     };
+
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::request_throttle::throttle_gate,
+    ));
 
     let router = apply_middleware_stack(router, cors, http_request_logs);
 
@@ -733,24 +746,34 @@ pub fn build_gateway_app(
     let app_state = AppState {
         gateway: state,
         methods,
+        request_throttle: Arc::new(crate::request_throttle::RequestThrottle::new()),
     };
 
     #[cfg(feature = "web-ui")]
     let router = {
-        let protected = build_protected_api_routes();
-        let protected = finalize_protected_routes(protected, app_state.clone());
+        let api = build_api_routes();
+        let api = add_feature_routes(api);
 
-        // Public routes (assets, PWA files, SPA fallback).
         router
             .route("/auth/callback", get(oauth_callback_handler))
             .route("/onboarding", get(onboarding_handler))
+            .route("/login", get(login_handler_page))
             .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
             .route("/assets/{*path}", get(asset_handler))
             .route("/manifest.json", get(manifest_handler))
             .route("/sw.js", get(service_worker_handler))
-            .merge(protected)
+            .merge(api)
             .fallback(spa_fallback)
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::auth_middleware::auth_gate,
+            ))
     };
+
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        app_state.clone(),
+        crate::request_throttle::throttle_gate,
+    ));
 
     let router = apply_middleware_stack(router, cors, http_request_logs);
 
@@ -953,16 +976,17 @@ pub async fn start_gateway(
                     "sse" => moltis_mcp::registry::TransportType::Sse,
                     _ => moltis_mcp::registry::TransportType::Stdio,
                 };
-                merged
-                    .servers
-                    .insert(name.clone(), moltis_mcp::McpServerConfig {
+                merged.servers.insert(
+                    name.clone(),
+                    moltis_mcp::McpServerConfig {
                         command: entry.command.clone(),
                         args: entry.args.clone(),
                         env: entry.env.clone(),
                         enabled: entry.enabled,
                         transport,
                         url: entry.url.clone(),
-                    });
+                    },
+                );
             }
         }
         mcp_configured_count = merged.servers.values().filter(|s| s.enabled).count();
@@ -1761,13 +1785,14 @@ pub async fn start_gateway(
     let (hook_registry, discovered_hooks_info) =
         discover_and_build_hooks(&persisted_disabled, Some(&session_store)).await;
 
-    // Wire live session service with sandbox router, project store, and hooks.
+    // Wire live session service with sandbox router, project store, hooks, and browser.
     {
         let mut session_svc =
             LiveSessionService::new(Arc::clone(&session_store), Arc::clone(&session_metadata))
                 .with_sandbox_router(Arc::clone(&sandbox_router))
                 .with_project_store(Arc::clone(&project_store))
-                .with_state_store(Arc::clone(&session_state_store));
+                .with_state_store(Arc::clone(&session_state_store))
+                .with_browser_service(Arc::clone(&services.browser));
         if let Some(ref hooks) = hook_registry {
             session_svc = session_svc.with_hooks(Arc::clone(hooks));
         }
@@ -2132,6 +2157,9 @@ pub async fn start_gateway(
     let behind_proxy = std::env::var("MOLTIS_BEHIND_PROXY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
+
+    // Keep a reference to the browser service for periodic cleanup and shutdown.
+    let browser_for_lifecycle = Arc::clone(&services.browser);
 
     let state = GatewayState::with_options(
         resolved_auth,
@@ -2709,6 +2737,30 @@ pub async fn start_gateway(
         });
     }
 
+    // Spawn periodic browser cleanup task (every 30s, removes idle instances).
+    {
+        let browser_for_cleanup = Arc::clone(&browser_for_lifecycle);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                browser_for_cleanup.cleanup_idle().await;
+            }
+        });
+    }
+
+    // Spawn browser shutdown handler (stop all containers on ctrl-c).
+    {
+        let browser_for_shutdown = Arc::clone(&browser_for_lifecycle);
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                info!("shutting down browser pool");
+                browser_for_shutdown.shutdown().await;
+            }
+        });
+    }
+
     // Spawn tick timer.
     let tick_state = Arc::clone(&state);
     tokio::spawn(async move {
@@ -2788,10 +2840,15 @@ pub async fn start_gateway(
                         }
                     };
                     if changed && let Ok(payload) = serde_json::to_value(&next) {
-                        broadcast(&update_state, "update.available", payload, BroadcastOpts {
-                            drop_if_slow: true,
-                            ..Default::default()
-                        })
+                        broadcast(
+                            &update_state,
+                            "update.available",
+                            payload,
+                            BroadcastOpts {
+                                drop_if_slow: true,
+                                ..Default::default()
+                            },
+                        )
                         .await;
                     }
                 },
@@ -2854,12 +2911,15 @@ pub async fn start_gateway(
                         .by_provider
                         .iter()
                         .map(|(name, metrics)| {
-                            (name.clone(), moltis_metrics::ProviderTokens {
-                                input_tokens: metrics.input_tokens,
-                                output_tokens: metrics.output_tokens,
-                                completions: metrics.completions,
-                                errors: metrics.errors,
-                            })
+                            (
+                                name.clone(),
+                                moltis_metrics::ProviderTokens {
+                                    input_tokens: metrics.input_tokens,
+                                    output_tokens: metrics.output_tokens,
+                                    completions: metrics.completions,
+                                    errors: metrics.errors,
+                                },
+                            )
                         })
                         .collect();
 
@@ -3389,28 +3449,10 @@ async fn websocket_header_authenticated(
         return false;
     };
 
-    if store.is_auth_disabled() {
-        return true;
-    }
-
-    // Three-tier model: local connection + no password = dev convenience.
-    if is_local && !store.has_password().await.unwrap_or(true) {
-        return true;
-    }
-
-    if let Some(token) = extract_ws_session_token(headers)
-        && store.validate_session(token).await.unwrap_or(false)
-    {
-        return true;
-    }
-
-    if let Some(api_key) = extract_ws_bearer_api_key(headers)
-        && store.verify_api_key(api_key).await.ok().flatten().is_some()
-    {
-        return true;
-    }
-
-    false
+    matches!(
+        crate::auth_middleware::check_auth(store, headers, is_local).await,
+        crate::auth_middleware::AuthResult::Allowed(_)
+    )
 }
 
 /// Resolve the machine's primary outbound IP address.
@@ -3428,20 +3470,6 @@ fn resolve_outbound_ip(ipv6: bool) -> Option<std::net::IpAddr> {
     let socket = UdpSocket::bind(bind).ok()?;
     socket.connect(target).ok()?;
     Some(socket.local_addr().ok()?.ip())
-}
-
-fn extract_ws_session_token(headers: &axum::http::HeaderMap) -> Option<&str> {
-    let cookie_header = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?;
-    crate::auth_middleware::parse_cookie(cookie_header, crate::auth_middleware::SESSION_COOKIE)
-}
-
-fn extract_ws_bearer_api_key(headers: &axum::http::HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
 }
 
 /// Check whether a WebSocket `Origin` header matches the request `Host`.
@@ -3846,58 +3874,42 @@ async fn oauth_callback_handler(
 }
 
 #[cfg(feature = "web-ui")]
-async fn spa_fallback(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
-    uri: axum::http::Uri,
-) -> impl IntoResponse {
+async fn spa_fallback(State(state): State<AppState>, uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path();
     if path.starts_with("/assets/") || path.contains('.') {
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
 
+    // Auth redirects are handled by auth_gate middleware. Here we only
+    // check onboarding completion for the redirect-to-onboarding logic.
     let onboarded = onboarding_completed(&state.gateway).await;
-    let setup_required = auth_status_from_request(&state, &headers, addr)
-        .await
-        .map(|(setup_required, _authenticated)| setup_required)
-        .unwrap_or(false);
-    if should_redirect_to_onboarding(path, setup_required, onboarded) {
+    if should_redirect_to_onboarding(path, onboarded) {
         return Redirect::to("/onboarding").into_response();
     }
-    render_spa_template(&state.gateway, false).await
+    render_spa_template(&state.gateway, "index.html").await
 }
 
 #[cfg(feature = "web-ui")]
-async fn onboarding_handler(
-    State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
-) -> impl IntoResponse {
+async fn onboarding_handler(State(state): State<AppState>) -> impl IntoResponse {
     let onboarded = onboarding_completed(&state.gateway).await;
-    let setup_required = auth_status_from_request(&state, &headers, addr)
-        .await
-        .map(|(setup_required, _authenticated)| setup_required)
-        .unwrap_or(false);
 
-    if should_redirect_from_onboarding("/onboarding", setup_required, onboarded) {
+    if should_redirect_from_onboarding(onboarded) {
         return Redirect::to("/").into_response();
     }
 
-    render_spa_template(&state.gateway, true).await
+    render_spa_template(&state.gateway, "onboarding.html").await
+}
+
+#[cfg(feature = "web-ui")]
+async fn login_handler_page(State(state): State<AppState>) -> impl IntoResponse {
+    render_spa_template(&state.gateway, "login.html").await
 }
 
 #[cfg(feature = "web-ui")]
 async fn render_spa_template(
     gateway: &GatewayState,
-    onboarding_shell: bool,
+    template_name: &str,
 ) -> axum::response::Response {
-    let template_name = if onboarding_shell {
-        "onboarding.html"
-    } else {
-        "index.html"
-    };
-
     let raw = read_asset(template_name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
@@ -3924,7 +3936,7 @@ async fn render_spa_template(
     // Generate a per-request nonce for CSP script-src.
     let nonce = uuid::Uuid::new_v4().to_string();
 
-    if !onboarding_shell {
+    if template_name != "onboarding.html" {
         // Build server-side data blob (gon pattern) injected into <head>.
         let gon = build_gon_data(gateway).await;
         let gon_script = format!(
@@ -3974,41 +3986,19 @@ async fn render_spa_template(
     response
 }
 
+/// Redirect non-onboarding pages to `/onboarding` when the wizard isn't done.
+///
+/// Auth-level redirects (setup required) are handled by `auth_gate` middleware.
+/// This only covers the *onboarding wizard* completion check.
 #[cfg(feature = "web-ui")]
-async fn auth_status_from_request(
-    state: &AppState,
-    headers: &axum::http::HeaderMap,
-    remote_addr: std::net::SocketAddr,
-) -> Option<(bool, bool)> {
-    let store = state.gateway.credential_store.as_ref()?;
-
-    let auth_disabled = store.is_auth_disabled();
-    let has_password = store.has_password().await.unwrap_or(false);
-    let is_local = is_local_connection(headers, remote_addr, state.gateway.behind_proxy);
-    let auth_bypassed = auth_disabled || (is_local && !has_password);
-
-    let authenticated = if auth_bypassed {
-        true
-    } else if let Some(token) = extract_ws_session_token(headers) {
-        store.validate_session(token).await.unwrap_or(false)
-    } else if let Some(api_key) = extract_ws_bearer_api_key(headers) {
-        store.verify_api_key(api_key).await.ok().flatten().is_some()
-    } else {
-        false
-    };
-
-    let setup_required = !auth_bypassed && !store.is_setup_complete();
-    Some((setup_required, authenticated))
+fn should_redirect_to_onboarding(path: &str, onboarded: bool) -> bool {
+    !is_onboarding_path(path) && !onboarded
 }
 
+/// Redirect `/onboarding` back to `/` once the wizard is complete.
 #[cfg(feature = "web-ui")]
-fn should_redirect_to_onboarding(path: &str, setup_required: bool, onboarded: bool) -> bool {
-    !is_onboarding_path(path) && (setup_required || !onboarded)
-}
-
-#[cfg(feature = "web-ui")]
-fn should_redirect_from_onboarding(path: &str, setup_required: bool, onboarded: bool) -> bool {
-    is_onboarding_path(path) && !setup_required && onboarded
+fn should_redirect_from_onboarding(onboarded: bool) -> bool {
+    onboarded
 }
 
 #[cfg(feature = "web-ui")]
@@ -5400,25 +5390,19 @@ mod tests {
 
     #[test]
     fn onboarding_redirect_rules() {
-        // Setup/auth bootstrap still forces onboarding.
-        assert!(should_redirect_to_onboarding("/", true, false));
-        assert!(should_redirect_to_onboarding("/chats", true, false));
-        assert!(!should_redirect_to_onboarding("/onboarding", true, false));
+        // Onboarding incomplete forces redirect.
+        assert!(should_redirect_to_onboarding("/", false));
+        assert!(should_redirect_to_onboarding("/chats", false));
+        // /onboarding itself is never redirected.
+        assert!(!should_redirect_to_onboarding("/onboarding", false));
 
-        // Onboarding incomplete also forces onboarding server-side.
-        assert!(should_redirect_to_onboarding("/", false, false));
-
-        // Once onboarded and setup complete, no redirect is needed.
-        assert!(!should_redirect_to_onboarding("/", false, true));
+        // Once onboarded, no redirect is needed.
+        assert!(!should_redirect_to_onboarding("/", true));
 
         // Once onboarding is complete, /onboarding should bounce back to /.
-        assert!(should_redirect_from_onboarding("/onboarding", false, true));
-        assert!(!should_redirect_from_onboarding("/onboarding", true, true));
-        assert!(!should_redirect_from_onboarding(
-            "/onboarding",
-            false,
-            false
-        ));
+        assert!(should_redirect_from_onboarding(true));
+        // Not yet onboarded — stay on /onboarding.
+        assert!(!should_redirect_from_onboarding(false));
     }
 
     #[test]

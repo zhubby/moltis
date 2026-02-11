@@ -42,7 +42,7 @@ unwrap_used = "deny"
 edition    = "2024"
 license    = "MIT"
 repository = "https://github.com/moltis-org/moltis"
-version    = "0.5.0"
+version    = "0.6.1"
 
 [workspace.dependencies]
 # Async runtime

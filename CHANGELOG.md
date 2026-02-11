@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HTTP endpoint throttling**: Added gateway-level per-IP rate limits for
+  login (`/api/auth/login`), auth API routes, general API routes, and WebSocket
+  upgrades, with `429` responses, `Retry-After` headers, and JSON
+  `retry_after_seconds`.
+- **Login retry UX**: The login page now disables the password Sign In button
+  while throttled and shows a live `Retry in Xs` countdown.
 - **WhatsApp channel support**: Add WhatsApp as a second messaging channel via
   the `whatsapp-rust` crate. Supports QR code pairing through WhatsApp Linked
   Devices, inbound text/slash-command handling, outbound text replies, typing
@@ -47,6 +53,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WhatsApp documentation**: Added `docs/src/whatsapp.md` covering setup (CLI
   and Web UI), configuration reference, access control, session persistence,
   self-chat, media handling, and troubleshooting.
+
+### Changed
+
+- **Auth-aware throttling policy**: IP throttling is now bypassed when auth is
+  not required for the current request (authenticated requests, auth-disabled
+  mode, and local Tier-2 setup mode). This keeps brute-force protection for
+  unauthenticated/auth-required traffic while avoiding localhost friction.
+- **Login error copy**: During throttled login retries, the error message stays
+  static while the retry countdown is shown only on the button.
+
+### Documentation
+
+- Added throttling/security notes to `README.md`, `docs/src/index.md`,
+  `docs/src/authentication.md`, and `docs/src/security.md`.
+
+## [0.6.1] - 2026-02-10
+
+### Fixed
+
+- **Release clippy**: Aligned release workflow clippy command with nightly
+  flags (`-Z unstable-options`, `--timings`).
+- **Test lint attributes**: Fixed useless outer `#[allow]` on test module
+  `use` statement; replaced `.unwrap()` with `.expect()` in auth route tests.
+
+## [0.6.0] - 2026-02-10
+
+### Added
 - **`BeforeLLMCall` / `AfterLLMCall` hooks**: New modifying hook events that fire
   before sending prompts to the LLM provider and after receiving responses
   (before tool execution). Enables prompt injection filtering, PII redaction,
@@ -55,9 +88,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hook events with correct PascalCase names and one-line descriptions.
 - **Hook event validation**: `moltis config check` now warns on unknown hook
   event names in the config file.
+- **Authentication docs**: Comprehensive `docs/src/authentication.md` with
+  decision matrix, credential types, API key scopes, session endpoints,
+  and WebSocket auth documentation.
+
+### Fixed
+
+- **Browser container lifecycle**: Browser containers (browserless/chrome)
+  now have proper lifecycle management — periodic cleanup removes idle
+  instances every 30 seconds, graceful shutdown stops all containers on
+  Ctrl+C, and `sessions.clear_all` immediately closes all browser sessions.
+  A `Drop` safety net ensures containers are stopped even on unexpected exits.
 
 ### Changed
 
+- **Unified auth gate**: All auth decision logic is now in a single
+  `check_auth()` function called by one `auth_gate` middleware. This fixes
+  the split-brain bug where passkey-only setups (no password) were treated
+  differently by 4 out of 5 auth code paths — the middleware used
+  `is_setup_complete()` (correct) while the others used `has_password()`
+  (incorrect for passkey-only setups).
 - **Hooks documentation**: Rewritten `docs/src/hooks.md` with complete event
   reference, corrected `ToolResultPersist` classification (modifying, not
   read-only), and new "Prompt Injection Filtering" section with examples.
@@ -75,6 +125,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header (`script-src 'self' 'nonce-<UUID>'`), preventing inline script
   injection (XSS defense-in-depth). The OAuth callback page also gets a
   restrictive CSP.
+- **Passkey-only auth fix**: Fixed authentication bypass where passkey-only
+  setups (without a password) would incorrectly allow unauthenticated access
+  on local connections, because the `has_password()` check returned false
+  even though `is_setup_complete()` was true.
 ## [0.5.0] - 2026-02-09
 
 ### Added
