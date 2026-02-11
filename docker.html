@@ -194,7 +194,7 @@ Registry on every release.</p>
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/penso/moltis:latest
+  ghcr.io/moltis-org/moltis:latest
 </code></pre>
 <p>Open http://localhost:13131 in your browser and configure your LLM provider to start chatting.</p>
 <div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
@@ -226,7 +226,7 @@ for easier access to configuration files:</p>
   -v ./config:/home/moltis/.config/moltis \
   -v ./data:/home/moltis/.moltis \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/penso/moltis:latest
+  ghcr.io/moltis-org/moltis:latest
 </code></pre>
 <p>With bind mounts, you can edit <code>config/moltis.toml</code> directly on the host.</p>
 <h2 id="docker-socket-sandbox-execution"><a class="header" href="#docker-socket-sandbox-execution">Docker Socket (Sandbox Execution)</a></h2>
@@ -243,7 +243,7 @@ will fail.</p>
 <p>Mounting the Docker socket gives the container full access to the Docker
 daemon. This is equivalent to root access on the host for practical purposes.
 Only run Moltis containers from trusted sources (official images from
-<code>ghcr.io/penso/moltis</code>).</p>
+<code>ghcr.io/moltis-org/moltis</code>).</p>
 <p>If you cannot mount the Docker socket, Moltis will run in “no sandbox” mode —
 commands execute directly inside the Moltis container itself, which provides
 no isolation.</p>
@@ -252,7 +252,7 @@ no isolation.</p>
 complete example:</p>
 <pre><code class="language-yaml">services:
   moltis:
-    image: ghcr.io/penso/moltis:latest
+    image: ghcr.io/moltis-org/moltis:latest
     container_name: moltis
     restart: unless-stopped
     ports:
@@ -276,7 +276,7 @@ podman run -d \
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock \
-  ghcr.io/penso/moltis:latest
+  ghcr.io/moltis-org/moltis:latest
 
 # Podman rootful
 podman run -d \
@@ -285,7 +285,7 @@ podman run -d \
   -v moltis-config:/home/moltis/.config/moltis \
   -v moltis-data:/home/moltis/.moltis \
   -v /run/podman/podman.sock:/var/run/docker.sock \
-  ghcr.io/penso/moltis:latest
+  ghcr.io/moltis-org/moltis:latest
 </code></pre>
 <p>You may need to enable the Podman socket service first:</p>
 <pre><code class="language-bash"># Rootless
@@ -309,7 +309,7 @@ sudo systemctl enable --now podman.socket
   -v ./config:/config \
   -v ./data:/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  ghcr.io/penso/moltis:latest
+  ghcr.io/moltis-org/moltis:latest
 </code></pre>
 <h2 id="building-locally"><a class="header" href="#building-locally">Building Locally</a></h2>
 <p>To build the Docker image from source:</p>
