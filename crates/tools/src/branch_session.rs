@@ -125,7 +125,20 @@ impl AgentTool for BranchSessionTool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        moltis_sessions::{MessageContent, PersistedMessage},
+    };
+
+    fn user_message(text: impl Into<String>) -> PersistedMessage {
+        PersistedMessage::User {
+            content: MessageContent::Text(text.into()),
+            created_at: None,
+            channel: None,
+            seq: None,
+            run_id: None,
+        }
+    }
 
     async fn setup() -> (
         Arc<SessionStore>,
@@ -168,10 +181,7 @@ mod tests {
             .unwrap();
         for i in 0..4 {
             store
-                .append(
-                    parent_key,
-                    &json!({"role": "user", "content": format!("msg {i}")}),
-                )
+                .append(parent_key, &user_message(format!("msg {i}")))
                 .await
                 .unwrap();
         }
@@ -211,10 +221,7 @@ mod tests {
 
         let parent_key = "session:parent2";
         metadata.upsert(parent_key, None).await.unwrap();
-        store
-            .append(parent_key, &json!({"role": "user", "content": "hi"}))
-            .await
-            .unwrap();
+        store.append(parent_key, &user_message("hi")).await.unwrap();
 
         let result = tool
             .execute(json!({
@@ -235,10 +242,7 @@ mod tests {
         metadata.upsert(parent_key, None).await.unwrap();
         for i in 0..3 {
             store
-                .append(
-                    parent_key,
-                    &json!({"role": "user", "content": format!("msg {i}")}),
-                )
+                .append(parent_key, &user_message(format!("msg {i}")))
                 .await
                 .unwrap();
         }

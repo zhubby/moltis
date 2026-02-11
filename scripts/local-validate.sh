@@ -123,19 +123,21 @@ if ! cargo fetch --locked 2>/dev/null; then
   fi
 fi
 
-# Reject dirty working trees in all modes. Validating with uncommitted changes
-# gives misleading results (local-only) or publishes statuses for the wrong
-# content (PR mode).
-if ! git diff --quiet --ignore-submodules -- || \
-   ! git diff --cached --quiet --ignore-submodules -- || \
-   [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
-  cat >&2 <<EOF
+# Reject dirty working trees in PR mode. Validating with uncommitted changes
+# publishes statuses for the wrong content. In local-only mode (no PR) we
+# allow a dirty tree so developers can lint/test without committing first.
+if [[ "$LOCAL_ONLY" -eq 0 ]]; then
+  if ! git diff --quiet --ignore-submodules -- || \
+     ! git diff --cached --quiet --ignore-submodules -- || \
+     [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    cat >&2 <<EOF
 Working tree is not clean.
 
 Commit or stash all local changes (including untracked files) before running
-local validation.
+local validation with a PR number.
 EOF
-  exit 1
+    exit 1
+  fi
 fi
 
 nightly_toolchain="${LOCAL_VALIDATE_NIGHTLY_TOOLCHAIN:-nightly-2025-11-30}"
@@ -148,14 +150,17 @@ e2e_cmd="${LOCAL_VALIDATE_E2E_CMD:-cd crates/gateway/ui && if [ ! -d node_module
 coverage_cmd="${LOCAL_VALIDATE_COVERAGE_CMD:-cargo llvm-cov --workspace --all-features --html}"
 
 if [[ "$(uname -s)" == "Darwin" ]] && ! command -v nvcc >/dev/null 2>&1; then
+  if [[ -z "${LOCAL_VALIDATE_LINT_CMD:-}" ]]; then
+    lint_cmd="cargo +${nightly_toolchain} clippy -Z unstable-options --workspace --all-targets --timings -- -D warnings"
+  fi
   if [[ -z "${LOCAL_VALIDATE_TEST_CMD:-}" ]]; then
     test_cmd="cargo test"
   fi
   if [[ -z "${LOCAL_VALIDATE_COVERAGE_CMD:-}" ]]; then
     coverage_cmd="cargo llvm-cov --workspace --html"
   fi
-  echo "Detected macOS without nvcc; using non-CUDA local test/coverage defaults." >&2
-  echo "Override with LOCAL_VALIDATE_TEST_CMD / LOCAL_VALIDATE_COVERAGE_CMD if needed." >&2
+  echo "Detected macOS without nvcc; using non-CUDA local defaults (no --all-features)." >&2
+  echo "Override with LOCAL_VALIDATE_LINT_CMD / LOCAL_VALIDATE_TEST_CMD / LOCAL_VALIDATE_COVERAGE_CMD if needed." >&2
 fi
 
 ensure_zizmor() {

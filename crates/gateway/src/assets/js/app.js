@@ -13,6 +13,7 @@ import { renderProjectSelect } from "./projects.js";
 import { initPWA } from "./pwa.js";
 import { initInstallBanner } from "./pwa-install.js";
 import { mount, navigate, registerPage, sessionPath } from "./router.js";
+import { routes } from "./routes.js";
 import { updateSandboxImageUI, updateSandboxUI } from "./sandbox.js";
 import { fetchSessions, refreshActiveSession, refreshWelcomeCardIfNeeded, renderSessionList } from "./sessions.js";
 import * as S from "./state.js";
@@ -118,9 +119,45 @@ if (logoutBtn) {
 }
 if (settingsBtn) {
 	settingsBtn.addEventListener("click", () => {
-		navigate("/settings/identity");
+		navigate(routes.identity);
 	});
 }
+
+function updateAuthChrome(auth) {
+	if (logoutBtn) {
+		var showLogout = !!(auth && auth.authenticated && !auth.auth_disabled && (auth.has_password || auth.has_passkeys));
+		logoutBtn.style.display = showLogout ? "" : "none";
+	}
+
+	var banner = document.getElementById("authDisabledBanner");
+	if (banner) {
+		var showAuthDisabled = !!(auth && auth.auth_disabled && !auth.localhost_only);
+		banner.style.display = showAuthDisabled ? "" : "none";
+	}
+}
+
+function refreshAuthChrome() {
+	return fetch("/api/auth/status")
+		.then((r) => (r.ok ? r.json() : null))
+		.then((auth) => {
+			updateAuthChrome(auth);
+			return auth;
+		})
+		.catch(() => null);
+}
+
+window.addEventListener("moltis:auth-status-changed", () => {
+	refreshAuthChrome().then((auth) => {
+		if (!auth) return;
+		if (auth.setup_required) {
+			window.location.assign("/onboarding");
+			return;
+		}
+		if (!auth.authenticated) {
+			window.location.assign("/login");
+		}
+	});
+});
 
 // Seed sandbox info from gon so the settings page can render immediately
 // without waiting for the auth-protected /api/bootstrap fetch.
@@ -150,14 +187,7 @@ fetch("/api/auth/status")
 			window.location.assign("/login");
 			return;
 		}
-		// Show logout button when user authenticated via real credentials
-		// (not bypassed via auth_disabled or localhost-no-password).
-		if (!auth.auth_disabled && (auth.has_password || auth.has_passkeys) && logoutBtn) {
-			logoutBtn.style.display = "";
-		}
-		if (auth.auth_disabled && !auth.localhost_only) {
-			showAuthDisabledBanner();
-		}
+		updateAuthChrome(auth);
 		startApp();
 	})
 	.catch(() => {
@@ -165,16 +195,13 @@ fetch("/api/auth/status")
 		startApp();
 	});
 
-function showAuthDisabledBanner() {
-	var el = document.getElementById("authDisabledBanner");
-	if (el) el.style.display = "";
-}
-
 function formatShareTitle(identity) {
+	var emoji = identity?.emoji || "";
 	var name = identity?.name || "moltis";
+	var prefix = emoji ? `${emoji} ${name}` : name;
 	var userName = identity?.user_name ? String(identity.user_name).trim() : "";
-	if (userName) return `${name}: ${userName} AI assistant`;
-	return `${name}: AI assistant`;
+	if (userName) return `${prefix}: ${userName} AI assistant`;
+	return `${prefix}: AI assistant`;
 }
 
 function showUpdateBanner(update) {

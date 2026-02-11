@@ -5,7 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.7] - 2026-02-11
+
+### Added
+
+- **Model allowlist probe output support**: Model allowlist matching now handles
+  provider probe output more robustly and applies stricter matching semantics.
+- **Ship helper command**: Added a `just ship` task and `scripts/ship-pr.sh`
+  helper to streamline commit, push, PR update, and local validation workflows.
+
+### Changed
+
+- **Gateway titles and labels**: Login/onboarding page titles now consistently
+  use configured values and identity emoji; UI copy now labels providers as
+  `LLM` where appropriate.
+- **Release binary profile**: Enabled ThinLTO and binary stripping in the
+  release profile to reduce artifact size.
+- **SPA route handling**: Centralized SPA route definitions and preserved TOML
+  comments during config updates.
+
+### Fixed
+
+- **Auth setup hardening**: Enforced authentication immediately after password
+  or passkey setup to prevent unintended post-setup unauthenticated access.
+- **Streaming event ordering**: Preserved gateway chat stream event ordering to
+  avoid out-of-order UI updates during streaming responses.
+- **Sandbox fallback pathing**: Exec fallback now uses the host data directory
+  when no container runtime is available.
+
+## [0.8.6] - 2026-02-11
+
+### Changed
+
+- **Release workflow gates E2E tests**: Build Packages workflow now runs E2E
+  tests and blocks all package builds (deb, rpm, arch, AppImage, snap,
+  Homebrew, Docker) if they fail.
 
 ### Added
 
@@ -21,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker TLS setup**: All Docker examples now expose port 13132 for CA
   certificate download with instructions to trust the self-signed cert,
   fixing HTTPS access in Safari and other strict browsers.
+- **E2E onboarding-auth test**: The `auth` Playwright project's `testMatch`
+  regex `/auth\.spec/` also matched `onboarding-auth.spec.js`, causing it to
+  run against the default gateway (wrong server) instead of the onboarding-auth
+  gateway. Tightened regex to `/\/auth\.spec/`.
 
 ## [0.8.5] - 2026-02-11
 

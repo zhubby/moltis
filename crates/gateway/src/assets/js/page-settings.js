@@ -23,6 +23,7 @@ import { detectPasskeyName } from "./passkey-detect.js";
 import * as push from "./push.js";
 import { isStandalone } from "./pwa.js";
 import { navigate, registerPrefix } from "./router.js";
+import { routes, settingsPath } from "./routes.js";
 import { connected } from "./signals.js";
 import * as S from "./state.js";
 import { fetchPhrase } from "./tts-phrases.js";
@@ -173,7 +174,7 @@ function SettingsSidebar() {
 				<button
 					class="settings-back-slot"
 					onClick=${() => {
-						navigate("/chats");
+						navigate(routes.chats);
 					}}
 					title="Back to chat sessions"
 			>
@@ -191,7 +192,7 @@ function SettingsSidebar() {
 							key=${s.id}
 							class="settings-nav-item ${activeSection.value === s.id ? "active" : ""}"
 							onClick=${() => {
-								navigate(`/settings/${s.id}`);
+								navigate(settingsPath(s.id));
 							}}
 						>
 							${s.icon}
@@ -583,6 +584,7 @@ function SecuritySection() {
 	var [authDisabled, setAuthDisabled] = useState(false);
 	var [localhostOnly, setLocalhostOnly] = useState(false);
 	var [hasPassword, setHasPassword] = useState(true);
+	var [hasPasskeys, setHasPasskeys] = useState(false);
 	var [setupComplete, setSetupComplete] = useState(false);
 	var [authLoading, setAuthLoading] = useState(true);
 
@@ -613,6 +615,10 @@ function SecuritySection() {
 		"operator.pairing": false,
 	});
 
+	function notifyAuthStatusChanged() {
+		window.dispatchEvent(new CustomEvent("moltis:auth-status-changed"));
+	}
+
 	useEffect(() => {
 		fetch("/api/auth/status")
 			.then((r) => (r.ok ? r.json() : null))
@@ -620,6 +626,7 @@ function SecuritySection() {
 				if (d?.auth_disabled) setAuthDisabled(true);
 				if (d?.localhost_only) setLocalhostOnly(true);
 				if (d?.has_password === false) setHasPassword(false);
+				if (d?.has_passkeys === true) setHasPasskeys(true);
 				if (d?.setup_complete) setSetupComplete(true);
 				if (d?.passkey_origins) setPasskeyOrigins(d.passkey_origins);
 				setAuthLoading(false);
@@ -633,6 +640,7 @@ function SecuritySection() {
 			.then((r) => (r.ok ? r.json() : { passkeys: [] }))
 			.then((d) => {
 				setPasskeys(d.passkeys || []);
+				setHasPasskeys((d.passkeys || []).length > 0);
 				setPkLoading(false);
 				rerender();
 			})
@@ -674,6 +682,7 @@ function SecuritySection() {
 					setNewPw("");
 					setConfirmPw("");
 					setHasPassword(true);
+					notifyAuthStatusChanged();
 				} else return r.text().then((t) => setPwErr(t));
 				setPwSaving(false);
 				rerender();
@@ -732,7 +741,9 @@ function SecuritySection() {
 						.then((r2) => r2.json())
 						.then((d) => {
 							setPasskeys(d.passkeys || []);
+							setHasPasskeys((d.passkeys || []).length > 0);
 							setPkMsg("Passkey added.");
+							notifyAuthStatusChanged();
 							rerender();
 						});
 				} else
@@ -781,6 +792,8 @@ function SecuritySection() {
 			.then(() => fetch("/api/auth/passkeys").then((r) => r.json()))
 			.then((d) => {
 				setPasskeys(d.passkeys || []);
+				setHasPasskeys((d.passkeys || []).length > 0);
+				notifyAuthStatusChanged();
 				rerender();
 			});
 	}
@@ -902,11 +915,11 @@ function SecuritySection() {
 		<h2 class="text-lg font-medium text-[var(--text-strong)]">Security</h2>
 
 		${
-			localhostOnly && !hasPassword
+			localhostOnly && !hasPassword && !hasPasskeys
 				? html`<div class="alert-info-text max-w-form">
 					<span class="alert-label-info">Note: </span>
-					Moltis is running on localhost, so you have full access without a password.
-					Set a password before exposing moltis to the network.
+					Localhost bypass is active. Until you add a password or passkey, this browser has full access and Sign out has no effect.
+					Add credentials to require login on localhost and before exposing Moltis to your network.
 				</div>`
 				: null
 		}
@@ -1408,7 +1421,7 @@ function ConfigSection() {
 	return html`<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
 		<h2 class="text-lg font-medium text-[var(--text-strong)]">Configuration</h2>
 		<p class="text-xs text-[var(--muted)] leading-relaxed" style="max-width:700px;margin:0;">
-			Edit the full moltis configuration. This includes server, tools, providers, auth, and all other settings.
+			Edit the full moltis configuration. This includes server, tools, LLM providers, auth, and all other settings.
 			Test your changes before saving. Changes require a restart to take effect.
 			<a href="https://moltis.dev/docs/configuration" target="_blank" rel="noopener"
 				style="color:var(--accent);text-decoration:underline;">View documentation \u2197</a>
@@ -3136,7 +3149,7 @@ function SettingsPage() {
 var DEFAULT_SECTION = "identity";
 
 registerPrefix(
-	"/settings",
+	routes.settings,
 	(container, param) => {
 		mounted = true;
 		containerRef = container;
@@ -3145,7 +3158,7 @@ registerPrefix(
 		var section = isValidSection ? param : DEFAULT_SECTION;
 		activeSection.value = section;
 		if (!isValidSection) {
-			history.replaceState(null, "", `/settings/${section}`);
+			history.replaceState(null, "", settingsPath(section));
 		}
 		render(html`<${SettingsPage} />`, container);
 		fetchIdentity();

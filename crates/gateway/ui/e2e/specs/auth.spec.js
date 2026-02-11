@@ -63,6 +63,60 @@ test.describe("Authentication", () => {
 		await expect(banner).toBeHidden();
 	});
 
+	test("localhost bypass hides logout and explains sign-out behavior", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await page.addInitScript(() => {
+			const origFetch = window.fetch;
+			window.fetch = function (...args) {
+				var url = typeof args[0] === "string" ? args[0] : args[0].url;
+				if (url.endsWith("/api/auth/status")) {
+					return Promise.resolve(
+						new Response(
+							JSON.stringify({
+								authenticated: true,
+								setup_required: false,
+								auth_disabled: false,
+								localhost_only: true,
+								has_password: false,
+								has_passkeys: false,
+								setup_complete: false,
+							}),
+							{
+								status: 200,
+								headers: { "Content-Type": "application/json" },
+							},
+						),
+					);
+				}
+				if (url.endsWith("/api/auth/passkeys")) {
+					return Promise.resolve(
+						new Response(JSON.stringify({ passkeys: [] }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						}),
+					);
+				}
+				if (url.endsWith("/api/auth/api-keys")) {
+					return Promise.resolve(
+						new Response(JSON.stringify({ api_keys: [] }), {
+							status: 200,
+							headers: { "Content-Type": "application/json" },
+						}),
+					);
+				}
+				return origFetch.apply(this, args);
+			};
+		});
+
+		await page.goto("/settings/security");
+		await expectPageContentMounted(page);
+		await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
+		await expect(page.locator("#logoutBtn")).toBeHidden();
+		await expect(page.getByText("Localhost bypass is active.", { exact: false })).toBeVisible();
+		await expect(page.getByText("Sign out has no effect.", { exact: false })).toBeVisible();
+		expect(pageErrors).toEqual([]);
+	});
+
 	test("setup page is accessible", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await page.goto("/setup");
@@ -109,13 +163,62 @@ test.describe("Authentication", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test("page title uses configured identity name", async ({ page }) => {
+	test("logout button updates after runtime auth status change", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await page.addInitScript(() => {
+			const origFetch = window.fetch;
+			window.__e2eAuthStatus = { hasPasskeyCredential: false };
+
+			window.fetch = function (...args) {
+				var url = typeof args[0] === "string" ? args[0] : args[0].url;
+				if (url.endsWith("/api/auth/status")) {
+					return Promise.resolve(
+						new Response(
+							JSON.stringify({
+								authenticated: true,
+								setup_required: false,
+								auth_disabled: false,
+								localhost_only: true,
+								has_password: false,
+								has_passkeys: !!window.__e2eAuthStatus.hasPasskeyCredential,
+							}),
+							{
+								status: 200,
+								headers: { "Content-Type": "application/json" },
+							},
+						),
+					);
+				}
+				return origFetch.apply(this, args);
+			};
+		});
+
+		await page.goto("/");
+		await expectPageContentMounted(page);
+
+		const logoutBtn = page.locator("#logoutBtn");
+		await expect(logoutBtn).toBeHidden();
+
+		await page.evaluate(() => {
+			window.__e2eAuthStatus.hasPasskeyCredential = true;
+			window.dispatchEvent(new CustomEvent("moltis:auth-status-changed"));
+		});
+
+		await expect(logoutBtn).toBeVisible();
+		expect(pageErrors).toEqual([]);
+	});
+
+	test("page title uses configured identity emoji and name", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await page.goto("/");
 		await page.waitForLoadState("networkidle");
 
-		const expectedName = await page.evaluate(() => window.__MOLTIS__?.identity?.name || "moltis");
-		await expect.poll(() => page.title()).toContain(expectedName);
+		const expectedTitlePrefix = await page.evaluate(() => {
+			var id = window.__MOLTIS__?.identity;
+			var name = id?.name || "moltis";
+			return (id?.emoji ? `${id.emoji} ` : "") + name;
+		});
+		await expect.poll(() => page.title()).toContain(expectedTitlePrefix);
 		expect(pageErrors).toEqual([]);
 	});
 });
@@ -190,15 +293,20 @@ test.describe("Login page", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test("login page title uses identity name from gon data", async ({ page }) => {
+	test("login page title uses identity emoji and name from gon data", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await mockAuthStatus(page);
 
 		await page.goto("/login");
 		await expect(page.locator(".auth-card")).toBeVisible();
 
-		const expectedName = await page.evaluate(() => window.__MOLTIS__?.identity?.name || "moltis");
-		await expect(page.locator(".auth-title")).toContainText(expectedName);
+		const expectedTitle = await page.evaluate(() => {
+			var id = window.__MOLTIS__?.identity;
+			var name = id?.name || "moltis";
+			return (id?.emoji ? `${id.emoji} ` : "") + name;
+		});
+		await expect.poll(() => page.title()).toContain(expectedTitle);
+		await expect(page.locator(".auth-title")).toContainText(expectedTitle);
 
 		expect(pageErrors).toEqual([]);
 	});

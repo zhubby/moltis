@@ -72,8 +72,8 @@ impl SessionStore {
         .await?
     }
 
-    /// Append a message (JSON value) as a single line to the session file.
-    pub async fn append(&self, key: &str, message: &serde_json::Value) -> Result<()> {
+    /// Append a message as a single line to the session file.
+    pub async fn append<T: Serialize + ?Sized>(&self, key: &str, message: &T) -> Result<()> {
         let path = self.path_for(key);
         let line = serde_json::to_string(message)?;
 
@@ -345,7 +345,11 @@ impl SessionStore {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use {super::*, serde_json::json};
+    use {
+        super::*,
+        crate::{MessageContent, PersistedMessage},
+        serde_json::json,
+    };
 
     fn temp_store() -> (SessionStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -353,16 +357,69 @@ mod tests {
         (store, dir)
     }
 
+    fn user_message(text: impl Into<String>) -> PersistedMessage {
+        PersistedMessage::User {
+            content: MessageContent::Text(text.into()),
+            created_at: None,
+            channel: None,
+            seq: None,
+            run_id: None,
+        }
+    }
+
+    fn user_message_with_run_id(
+        text: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> PersistedMessage {
+        PersistedMessage::User {
+            content: MessageContent::Text(text.into()),
+            created_at: None,
+            channel: None,
+            seq: None,
+            run_id: Some(run_id.into()),
+        }
+    }
+
+    fn assistant_message(text: impl Into<String>) -> PersistedMessage {
+        PersistedMessage::Assistant {
+            content: text.into(),
+            created_at: None,
+            model: None,
+            provider: None,
+            input_tokens: None,
+            output_tokens: None,
+            tool_calls: None,
+            audio: None,
+            seq: None,
+            run_id: None,
+        }
+    }
+
+    fn assistant_message_with_run_id(
+        text: impl Into<String>,
+        run_id: impl Into<String>,
+    ) -> PersistedMessage {
+        PersistedMessage::Assistant {
+            content: text.into(),
+            created_at: None,
+            model: None,
+            provider: None,
+            input_tokens: None,
+            output_tokens: None,
+            tool_calls: None,
+            audio: None,
+            seq: None,
+            run_id: Some(run_id.into()),
+        }
+    }
+
     #[tokio::test]
     async fn test_append_and_read() {
         let (store, _dir) = temp_store();
 
+        store.append("main", &user_message("hello")).await.unwrap();
         store
-            .append("main", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
-        store
-            .append("main", &json!({"role": "assistant", "content": "hi"}))
+            .append("main", &assistant_message("hi"))
             .await
             .unwrap();
 
@@ -397,10 +454,7 @@ mod tests {
     async fn test_clear() {
         let (store, _dir) = temp_store();
 
-        store
-            .append("main", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
+        store.append("main", &user_message("hello")).await.unwrap();
         assert_eq!(store.read("main").await.unwrap().len(), 1);
 
         store.clear("main").await.unwrap();
@@ -412,14 +466,8 @@ mod tests {
         let (store, _dir) = temp_store();
 
         assert_eq!(store.count("main").await.unwrap(), 0);
-        store
-            .append("main", &json!({"role": "user"}))
-            .await
-            .unwrap();
-        store
-            .append("main", &json!({"role": "assistant"}))
-            .await
-            .unwrap();
+        store.append("main", &user_message("")).await.unwrap();
+        store.append("main", &assistant_message("")).await.unwrap();
         assert_eq!(store.count("main").await.unwrap(), 2);
     }
 
@@ -428,15 +476,15 @@ mod tests {
         let (store, _dir) = temp_store();
 
         store
-            .append("s1", &json!({"role": "user", "content": "hello world"}))
+            .append("s1", &user_message("hello world"))
             .await
             .unwrap();
         store
-            .append("s1", &json!({"role": "assistant", "content": "hi there"}))
+            .append("s1", &assistant_message("hi there"))
             .await
             .unwrap();
         store
-            .append("s2", &json!({"role": "user", "content": "goodbye world"}))
+            .append("s2", &user_message("goodbye world"))
             .await
             .unwrap();
 
@@ -452,7 +500,7 @@ mod tests {
         let (store, _dir) = temp_store();
 
         store
-            .append("s1", &json!({"role": "user", "content": "Hello World"}))
+            .append("s1", &user_message("Hello World"))
             .await
             .unwrap();
 
@@ -465,10 +513,7 @@ mod tests {
     async fn test_search_no_match() {
         let (store, _dir) = temp_store();
 
-        store
-            .append("s1", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
+        store.append("s1", &user_message("hello")).await.unwrap();
 
         let results = store.search("xyz", 10).await.unwrap();
         assert!(results.is_empty());
@@ -478,10 +523,7 @@ mod tests {
     async fn test_search_empty_query() {
         let (store, _dir) = temp_store();
 
-        store
-            .append("s1", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
+        store.append("s1", &user_message("hello")).await.unwrap();
 
         // Empty query should match nothing (caller should guard against this)
         let results = store.search("", 10).await.unwrap();
@@ -495,18 +537,15 @@ mod tests {
         let (store, _dir) = temp_store();
 
         store
-            .append("s1", &json!({"role": "user", "content": "rust is great"}))
+            .append("s1", &user_message("rust is great"))
             .await
             .unwrap();
         store
-            .append(
-                "s2",
-                &json!({"role": "assistant", "content": "rust is awesome"}),
-            )
+            .append("s2", &assistant_message("rust is awesome"))
             .await
             .unwrap();
         store
-            .append("s3", &json!({"role": "user", "content": "python is nice"}))
+            .append("s3", &user_message("python is nice"))
             .await
             .unwrap();
 
@@ -524,7 +563,7 @@ mod tests {
         for i in 0..10 {
             let key = format!("s{i}");
             store
-                .append(&key, &json!({"role": "user", "content": "common term"}))
+                .append(&key, &user_message("common term"))
                 .await
                 .unwrap();
         }
@@ -537,12 +576,9 @@ mod tests {
     async fn test_replace_history() {
         let (store, _dir) = temp_store();
 
+        store.append("main", &user_message("hello")).await.unwrap();
         store
-            .append("main", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
-        store
-            .append("main", &json!({"role": "assistant", "content": "hi"}))
+            .append("main", &assistant_message("hi"))
             .await
             .unwrap();
         assert_eq!(store.read("main").await.unwrap().len(), 2);
@@ -559,10 +595,7 @@ mod tests {
     async fn test_replace_history_empty() {
         let (store, _dir) = temp_store();
 
-        store
-            .append("main", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
+        store.append("main", &user_message("hello")).await.unwrap();
 
         store.replace_history("main", vec![]).await.unwrap();
         assert!(store.read("main").await.unwrap().is_empty());
@@ -573,7 +606,7 @@ mod tests {
         let (store, _dir) = temp_store();
 
         store
-            .append("session:abc-123", &json!({"role": "user"}))
+            .append("session:abc-123", &user_message(""))
             .await
             .unwrap();
         let msgs = store.read("session:abc-123").await.unwrap();
@@ -619,10 +652,7 @@ mod tests {
         let (store, dir) = temp_store();
 
         // Create a session and media.
-        store
-            .append("main", &json!({"role": "user", "content": "hello"}))
-            .await
-            .unwrap();
+        store.append("main", &user_message("hello")).await.unwrap();
         store
             .save_media("main", "shot.png", b"img data")
             .await
@@ -643,38 +673,26 @@ mod tests {
 
         // Simulate a session with two runs.
         store
-            .append(
-                "main",
-                &json!({"role": "user", "content": "hello", "run_id": "run-1"}),
-            )
+            .append("main", &user_message_with_run_id("hello", "run-1"))
             .await
             .unwrap();
         store
             .append(
                 "main",
-                &json!({"role": "tool_result", "tool_name": "exec", "success": true}),
+                &PersistedMessage::tool_result("call-1", "exec", None, true, None, None),
             )
             .await
             .unwrap();
         store
-            .append(
-                "main",
-                &json!({"role": "assistant", "content": "done", "run_id": "run-1"}),
-            )
+            .append("main", &assistant_message_with_run_id("done", "run-1"))
             .await
             .unwrap();
         store
-            .append(
-                "main",
-                &json!({"role": "user", "content": "another", "run_id": "run-2"}),
-            )
+            .append("main", &user_message_with_run_id("another", "run-2"))
             .await
             .unwrap();
         store
-            .append(
-                "main",
-                &json!({"role": "assistant", "content": "ok", "run_id": "run-2"}),
-            )
+            .append("main", &assistant_message_with_run_id("ok", "run-2"))
             .await
             .unwrap();
 
@@ -695,10 +713,7 @@ mod tests {
         let (store, _dir) = temp_store();
 
         store
-            .append(
-                "main",
-                &json!({"role": "user", "content": "hi", "run_id": "run-1"}),
-            )
+            .append("main", &user_message_with_run_id("hi", "run-1"))
             .await
             .unwrap();
 
