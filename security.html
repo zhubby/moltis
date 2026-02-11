@@ -378,6 +378,35 @@ dedicated <a href="authentication.html">Authentication</a> page.</p>
 <tr><td><strong>3</strong></td><td>No credentials + remote/proxied connection</td><td>Onboarding only (setup code required)</td></tr>
 </tbody></table>
 </div>
+<h2 id="http-endpoint-throttling"><a class="header" href="#http-endpoint-throttling">HTTP Endpoint Throttling</a></h2>
+<p>Moltis includes built-in per-IP endpoint throttling to reduce brute force
+attempts and traffic spikes, but only when auth is required for the current
+request.</p>
+<p>Throttling is bypassed when a request is already authenticated, when auth is
+explicitly disabled, or when setup is incomplete and local Tier-2 access is
+allowed.</p>
+<h3 id="default-limits"><a class="header" href="#default-limits">Default Limits</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Scope</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>POST /api/auth/login</code></td><td>5 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/auth/*</code></td><td>120 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/*</code></td><td>180 requests per 60 seconds</td></tr>
+<tr><td><code>/ws</code> upgrade</td><td>30 requests per 60 seconds</td></tr>
+</tbody></table>
+</div>
+<h3 id="when-limits-are-hit"><a class="header" href="#when-limits-are-hit">When Limits Are Hit</a></h3>
+<ul>
+<li>API endpoints return <code>429 Too Many Requests</code></li>
+<li>Responses include <code>Retry-After</code></li>
+<li>JSON responses include <code>retry_after_seconds</code></li>
+</ul>
+<h3 id="reverse-proxy-behavior"><a class="header" href="#reverse-proxy-behavior">Reverse Proxy Behavior</a></h3>
+<p>When <code>MOLTIS_BEHIND_PROXY=true</code>, throttling is keyed by forwarded client IP
+headers (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>, <code>CF-Connecting-IP</code>) instead of the
+direct socket address.</p>
+<h3 id="production-guidance"><a class="header" href="#production-guidance">Production Guidance</a></h3>
+<p>Built-in throttling is the first layer. For internet-facing deployments, add
+edge rate limits at your reverse proxy or WAF as a second layer (IP reputation,
+burst controls, geo rules, bot filtering).</p>
 <h2 id="reverse-proxy-deployments"><a class="header" href="#reverse-proxy-deployments">Reverse Proxy Deployments</a></h2>
 <p>Running Moltis behind a reverse proxy (Caddy, nginx, Traefik, etc.)
 requires understanding how authentication interacts with loopback

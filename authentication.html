@@ -330,6 +330,42 @@ are configured:</p>
 <tr><td><code>/sw.js</code></td><td>Service worker</td></tr>
 </tbody></table>
 </div>
+<h2 id="request-throttling"><a class="header" href="#request-throttling">Request Throttling</a></h2>
+<p>Moltis applies built-in endpoint throttling per client IP only when auth is
+required for the current request.</p>
+<p>Requests bypass IP throttling when:</p>
+<ul>
+<li>The request is already authenticated (session or API key)</li>
+<li>Auth is not currently enforced (<code>auth_disabled = true</code>)</li>
+<li>Setup is incomplete and the request is allowed by local Tier-2 access</li>
+</ul>
+<p>Default limits:</p>
+<div class="table-wrapper"><table><thead><tr><th>Scope</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>POST /api/auth/login</code></td><td>5 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/auth/*</code></td><td>120 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/*</code></td><td>180 requests per 60 seconds</td></tr>
+<tr><td><code>/ws</code> upgrade</td><td>30 requests per 60 seconds</td></tr>
+</tbody></table>
+</div>
+<p>When a limit is exceeded:</p>
+<ul>
+<li>API endpoints return <code>429 Too Many Requests</code></li>
+<li>Responses include <code>Retry-After</code> header</li>
+<li>JSON API responses also include <code>retry_after_seconds</code></li>
+</ul>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-note"></a>
+</div>
+<div>
+<p>When <code>MOLTIS_BEHIND_PROXY=true</code>, throttling is keyed by forwarded client IP
+headers (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>, <code>CF-Connecting-IP</code>) instead of the
+direct socket address.</p>
+</div>
+</div>
 <h2 id="setup-flow"><a class="header" href="#setup-flow">Setup Flow</a></h2>
 <p>On first run (no credentials configured):</p>
 <ol>

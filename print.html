@@ -216,6 +216,7 @@ curl -fsSL https://www.moltis.org/install.sh | sh
 <li><strong>Sandboxed Execution</strong> — Commands run in isolated containers (Docker or Apple Container)</li>
 <li><strong>MCP Support</strong> — Connect to Model Context Protocol servers for extended capabilities</li>
 <li><strong>Multi-Channel</strong> — Web UI, Telegram, API access with synchronized responses</li>
+<li><strong>Built-in Throttling</strong> — Per-IP endpoint limits with strict login protection</li>
 <li><strong>Long-Term Memory</strong> — Embeddings-powered knowledge base with hybrid search</li>
 <li><strong>Hook System</strong> — Observe, modify, or block actions at any lifecycle point</li>
 <li><strong>Compile-Time Safety</strong> — Misconfigurations caught by <code>cargo check</code>, not runtime crashes</li>
@@ -3487,6 +3488,42 @@ are configured:</p>
 <tr><td><code>/sw.js</code></td><td>Service worker</td></tr>
 </tbody></table>
 </div>
+<h2 id="request-throttling"><a class="header" href="#request-throttling">Request Throttling</a></h2>
+<p>Moltis applies built-in endpoint throttling per client IP only when auth is
+required for the current request.</p>
+<p>Requests bypass IP throttling when:</p>
+<ul>
+<li>The request is already authenticated (session or API key)</li>
+<li>Auth is not currently enforced (<code>auth_disabled = true</code>)</li>
+<li>Setup is incomplete and the request is allowed by local Tier-2 access</li>
+</ul>
+<p>Default limits:</p>
+<div class="table-wrapper"><table><thead><tr><th>Scope</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>POST /api/auth/login</code></td><td>5 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/auth/*</code></td><td>120 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/*</code></td><td>180 requests per 60 seconds</td></tr>
+<tr><td><code>/ws</code> upgrade</td><td>30 requests per 60 seconds</td></tr>
+</tbody></table>
+</div>
+<p>When a limit is exceeded:</p>
+<ul>
+<li>API endpoints return <code>429 Too Many Requests</code></li>
+<li>Responses include <code>Retry-After</code> header</li>
+<li>JSON API responses also include <code>retry_after_seconds</code></li>
+</ul>
+<div id="admonition-note" class="admonition admonish-note" role="note" aria-labelledby="admonition-note-title">
+<div class="admonition-title">
+<div id="admonition-note-title">
+<p>Note</p>
+</div>
+<a class="admonition-anchor-link" href="authentication.html#admonition-note"></a>
+</div>
+<div>
+<p>When <code>MOLTIS_BEHIND_PROXY=true</code>, throttling is keyed by forwarded client IP
+headers (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>, <code>CF-Connecting-IP</code>) instead of the
+direct socket address.</p>
+</div>
+</div>
 <h2 id="setup-flow"><a class="header" href="#setup-flow">Setup Flow</a></h2>
 <p>On first run (no credentials configured):</p>
 <ol>
@@ -3765,6 +3802,35 @@ dedicated <a href="authentication.html">Authentication</a> page.</p>
 <tr><td><strong>3</strong></td><td>No credentials + remote/proxied connection</td><td>Onboarding only (setup code required)</td></tr>
 </tbody></table>
 </div>
+<h2 id="http-endpoint-throttling"><a class="header" href="#http-endpoint-throttling">HTTP Endpoint Throttling</a></h2>
+<p>Moltis includes built-in per-IP endpoint throttling to reduce brute force
+attempts and traffic spikes, but only when auth is required for the current
+request.</p>
+<p>Throttling is bypassed when a request is already authenticated, when auth is
+explicitly disabled, or when setup is incomplete and local Tier-2 access is
+allowed.</p>
+<h3 id="default-limits"><a class="header" href="#default-limits">Default Limits</a></h3>
+<div class="table-wrapper"><table><thead><tr><th>Scope</th><th>Default</th></tr></thead><tbody>
+<tr><td><code>POST /api/auth/login</code></td><td>5 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/auth/*</code></td><td>120 requests per 60 seconds</td></tr>
+<tr><td>Other <code>/api/*</code></td><td>180 requests per 60 seconds</td></tr>
+<tr><td><code>/ws</code> upgrade</td><td>30 requests per 60 seconds</td></tr>
+</tbody></table>
+</div>
+<h3 id="when-limits-are-hit"><a class="header" href="#when-limits-are-hit">When Limits Are Hit</a></h3>
+<ul>
+<li>API endpoints return <code>429 Too Many Requests</code></li>
+<li>Responses include <code>Retry-After</code></li>
+<li>JSON responses include <code>retry_after_seconds</code></li>
+</ul>
+<h3 id="reverse-proxy-behavior"><a class="header" href="#reverse-proxy-behavior">Reverse Proxy Behavior</a></h3>
+<p>When <code>MOLTIS_BEHIND_PROXY=true</code>, throttling is keyed by forwarded client IP
+headers (<code>X-Forwarded-For</code>, <code>X-Real-IP</code>, <code>CF-Connecting-IP</code>) instead of the
+direct socket address.</p>
+<h3 id="production-guidance"><a class="header" href="#production-guidance">Production Guidance</a></h3>
+<p>Built-in throttling is the first layer. For internet-facing deployments, add
+edge rate limits at your reverse proxy or WAF as a second layer (IP reputation,
+burst controls, geo rules, bot filtering).</p>
 <h2 id="reverse-proxy-deployments"><a class="header" href="#reverse-proxy-deployments">Reverse Proxy Deployments</a></h2>
 <p>Running Moltis behind a reverse proxy (Caddy, nginx, Traefik, etc.)
 requires understanding how authentication interacts with loopback
@@ -5271,6 +5337,29 @@ tools grouped by origin.</p>
 <p>The format is based on <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a>,
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
+<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li><strong>HTTP endpoint throttling</strong>: Added gateway-level per-IP rate limits for
+login (<code>/api/auth/login</code>), auth API routes, general API routes, and WebSocket
+upgrades, with <code>429</code> responses, <code>Retry-After</code> headers, and JSON
+<code>retry_after_seconds</code>.</li>
+<li><strong>Login retry UX</strong>: The login page now disables the password Sign In button
+while throttled and shows a live <code>Retry in Xs</code> countdown.</li>
+</ul>
+<h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
+<ul>
+<li><strong>Auth-aware throttling policy</strong>: IP throttling is now bypassed when auth is
+not required for the current request (authenticated requests, auth-disabled
+mode, and local Tier-2 setup mode). This keeps brute-force protection for
+unauthenticated/auth-required traffic while avoiding localhost friction.</li>
+<li><strong>Login error copy</strong>: During throttled login retries, the error message stays
+static while the retry countdown is shown only on the button.</li>
+</ul>
+<h3 id="documentation-1"><a class="header" href="#documentation-1">Documentation</a></h3>
+<ul>
+<li>Added throttling/security notes to <code>README.md</code>, <code>docs/src/index.md</code>,
+<code>docs/src/authentication.md</code>, and <code>docs/src/security.md</code>.</li>
+</ul>
 <h2 id="061---2026-02-10"><a class="header" href="#061---2026-02-10">[0.6.1] - 2026-02-10</a></h2>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
@@ -5280,7 +5369,7 @@ flags (<code>-Z unstable-options</code>, <code>--timings</code>).</li>
 <code>use</code> statement; replaced <code>.unwrap()</code> with <code>.expect()</code> in auth route tests.</li>
 </ul>
 <h2 id="060---2026-02-10"><a class="header" href="#060---2026-02-10">[0.6.0] - 2026-02-10</a></h2>
-<h3 id="added"><a class="header" href="#added">Added</a></h3>
+<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
 <ul>
 <li><strong><code>BeforeLLMCall</code> / <code>AfterLLMCall</code> hooks</strong>: New modifying hook events that fire
 before sending prompts to the LLM provider and after receiving responses
@@ -5302,7 +5391,7 @@ instances every 30 seconds, graceful shutdown stops all containers on
 Ctrl+C, and <code>sessions.clear_all</code> immediately closes all browser sessions.
 A <code>Drop</code> safety net ensures containers are stopped even on unexpected exits.</li>
 </ul>
-<h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
+<h3 id="changed-1"><a class="header" href="#changed-1">Changed</a></h3>
 <ul>
 <li><strong>Unified auth gate</strong>: All auth decision logic is now in a single
 <code>check_auth()</code> function called by one <code>auth_gate</code> middleware. This fixes
@@ -5333,7 +5422,7 @@ on local connections, because the <code>has_password()</code> check returned fal
 even though <code>is_setup_complete()</code> was true.</li>
 </ul>
 <h2 id="050---2026-02-09"><a class="header" href="#050---2026-02-09">[0.5.0] - 2026-02-09</a></h2>
-<h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
+<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
 <ul>
 <li><strong><code>moltis doctor</code> command</strong>: Comprehensive health check that validates config,
 audits security (file permissions, API keys in config), checks directory and
@@ -5356,7 +5445,7 @@ at least one scope explicitly (least-privilege by default).</li>
 fix <code>clippy::unnecessary_unwrap</code> that broke the v0.4.0 release build.</li>
 </ul>
 <h2 id="040---2026-02-09"><a class="header" href="#040---2026-02-09">[0.4.0] - 2026-02-09</a></h2>
-<h3 id="added-2"><a class="header" href="#added-2">Added</a></h3>
+<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
 <ul>
 <li><strong>Auto-import external OAuth tokens</strong>: At startup, auto-detected provider
 tokens (e.g. Codex CLI <code>~/.codex/auth.json</code>) are imported into the central
@@ -5385,7 +5474,7 @@ Solves the “I can’t share links” problem in voice mode.</li>
 and directions, or <code>"coarse"</code> (city-level, faster) for flights, weather, and
 time zones. The LLM picks the appropriate mode based on the user’s query.</li>
 </ul>
-<h3 id="changed-1"><a class="header" href="#changed-1">Changed</a></h3>
+<h3 id="changed-2"><a class="header" href="#changed-2">Changed</a></h3>
 <ul>
 <li>Show “No LLM Providers Connected” card instead of welcome greeting when no
 providers are configured.</li>
@@ -5417,7 +5506,7 @@ skip when no usable container runtime is available (backend = “none”).</li>
 <code>warn!</code> to <code>debug!</code> since they indicate expected “not ready yet” states.</li>
 </ul>
 <h2 id="038---2026-02-09"><a class="header" href="#038---2026-02-09">[0.3.8] - 2026-02-09</a></h2>
-<h3 id="changed-2"><a class="header" href="#changed-2">Changed</a></h3>
+<h3 id="changed-3"><a class="header" href="#changed-3">Changed</a></h3>
 <ul>
 <li><strong>Release CI parallelization</strong>: Split clippy and test into separate parallel
 jobs in the release workflow for faster feedback on GitHub-hosted runners.</li>
@@ -5456,7 +5545,7 @@ blocking <code>write()</code> in <code>SessionStore::append()</code> and <code>r
 concurrent tool-result persists wait for the file lock instead of failing
 with <code>EAGAIN</code> (OS error 35).</li>
 </ul>
-<h3 id="changed-3"><a class="header" href="#changed-3">Changed</a></h3>
+<h3 id="changed-4"><a class="header" href="#changed-4">Changed</a></h3>
 <ul>
 <li><strong>Release CI quality gates</strong>: The Build Packages workflow now runs biome,
 format, clippy, and test checks before building any packages, ensuring code
@@ -5472,7 +5561,7 @@ binding, fixing <code>get_user_location</code> failures on first Telegram messag
 <li><strong>Cargo.lock sync</strong>: Lock file now matches workspace version.</li>
 </ul>
 <h2 id="030---2026-02-08"><a class="header" href="#030---2026-02-08">[0.3.0] - 2026-02-08</a></h2>
-<h3 id="added-3"><a class="header" href="#added-3">Added</a></h3>
+<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
 <ul>
 <li>
 <p><strong>Silent replies</strong>: The system prompt instructs the LLM to return an empty
@@ -5581,7 +5670,7 @@ client-side sequence number for ordering diagnostics.</p>
 cache-miss token counters in the metrics subsystem.</p>
 </li>
 </ul>
-<h3 id="changed-4"><a class="header" href="#changed-4">Changed</a></h3>
+<h3 id="changed-5"><a class="header" href="#changed-5">Changed</a></h3>
 <ul>
 <li><strong>Provider auto-detection observability</strong>: When no explicit provider settings are present in <code>moltis.toml</code>, startup now logs each auto-detected provider with its source (<code>env</code>, config file key, OAuth token file, provider key file, or Codex auth file). Added <code>server.http_request_logs</code> (Axum HTTP traces) and <code>server.ws_request_logs</code> (WebSocket RPC request/response traces) config options (both default <code>false</code>) for on-demand transport debugging without code changes.</li>
 <li><strong>Dynamic OpenAI Codex model catalog</strong>: OpenAI Codex providers now load model IDs from <code>https://chatgpt.com/backend-api/codex/models</code> at startup (with fallback defaults), and the gateway refreshes Codex models hourly so long-running sessions pick up newly available models (for example <code>gpt-5.3</code>) without restart.</li>
@@ -5656,18 +5745,18 @@ contention and simplify state management.</li>
 <li><strong>Typed chat broadcast payloads</strong>: Chat WebSocket broadcasts now use typed
 Rust structs instead of ad-hoc <code>serde_json::Value</code> maps.</li>
 </ul>
-<h3 id="documentation-1"><a class="header" href="#documentation-1">Documentation</a></h3>
+<h3 id="documentation-2"><a class="header" href="#documentation-2">Documentation</a></h3>
 <ul>
 <li>Expanded default <code>SOUL.md</code> with the full OpenClaw reference text for agent
 personality bootstrapping.</li>
 </ul>
 <h2 id="029---2026-02-08"><a class="header" href="#029---2026-02-08">[0.2.9] - 2026-02-08</a></h2>
-<h3 id="added-4"><a class="header" href="#added-4">Added</a></h3>
+<h3 id="added-5"><a class="header" href="#added-5">Added</a></h3>
 <ul>
 <li><strong>Voice provider policy controls</strong>: Added provider-list allowlists so config templates and runtime voice setup can explicitly limit shown/allowed TTS and STT providers.</li>
 <li><strong>Typed voice provider metadata</strong>: Expanded voice provider metadata and preference handling to use typed flows across gateway and UI paths.</li>
 </ul>
-<h3 id="changed-5"><a class="header" href="#changed-5">Changed</a></h3>
+<h3 id="changed-6"><a class="header" href="#changed-6">Changed</a></h3>
 <ul>
 <li><strong>Reply medium preference handling</strong>: Chat now prefers the same reply medium when possible and falls back to text when a medium cannot be preserved.</li>
 </ul>
@@ -5677,7 +5766,7 @@ personality bootstrapping.</li>
 <li><strong>Voice UX polish</strong>: Improved microphone timing behavior and preserved settings scroll state in voice configuration views.</li>
 </ul>
 <h2 id="028---2026-02-07"><a class="header" href="#028---2026-02-07">[0.2.8] - 2026-02-07</a></h2>
-<h3 id="changed-6"><a class="header" href="#changed-6">Changed</a></h3>
+<h3 id="changed-7"><a class="header" href="#changed-7">Changed</a></h3>
 <ul>
 <li><strong>Unified plugins and skills into a single system</strong>: Plugins and skills were separate
 systems with duplicate code, manifests, and UI pages. They are now merged into one
@@ -5709,7 +5798,7 @@ hide <code>create_skill</code>/<code>update_skill</code> and leave only a subset
 Chat runs now use configured tool policy for runtime filtering without globally
 restricting tools based on discovered skill metadata.</li>
 </ul>
-<h3 id="added-5"><a class="header" href="#added-5">Added</a></h3>
+<h3 id="added-6"><a class="header" href="#added-6">Added</a></h3>
 <ul>
 <li>
 <p><strong>Voice Provider Management UI</strong>: Configure TTS and STT providers from Settings &gt; Voice</p>
@@ -5836,7 +5925,7 @@ Empty lists keep current behavior and show all providers.</p>
 <p><strong>Update availability banner</strong>: The web UI now checks GitHub releases hourly and shows a top banner when a newer version of moltis is available, with a direct link to the release page.</p>
 </li>
 </ul>
-<h3 id="changed-7"><a class="header" href="#changed-7">Changed</a></h3>
+<h3 id="changed-8"><a class="header" href="#changed-8">Changed</a></h3>
 <ul>
 <li><strong>Documentation safety notice</strong>: Added an upfront alpha-software warning on the docs landing page, emphasizing careful deployment, isolation, and strong auth/network controls for self-hosted AI assistants.</li>
 <li><strong>Release packaging</strong>: Derive release artifact versions from the Git tag (<code>vX.Y.Z</code>) in CI, and sync package metadata during release jobs to prevent filename/version drift.</li>
@@ -5898,17 +5987,17 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>Memory indexing scope tightened</strong>: Memory sync now indexes only <code>MEMORY.md</code> / <code>memory.md</code> and <code>memory/</code> content by default (instead of scanning the entire data root), reducing irrelevant indexing noise from installed skills/plugins.</li>
 <li><strong>Ollama embedding bootstrap</strong>: When using Ollama for memory embeddings, gateway now auto-attempts to pull missing embedding models (default <code>nomic-embed-text</code>) via Ollama HTTP API.</li>
 </ul>
-<h3 id="documentation-2"><a class="header" href="#documentation-2">Documentation</a></h3>
+<h3 id="documentation-3"><a class="header" href="#documentation-3">Documentation</a></h3>
 <ul>
 <li>Added <code>docs/src/skills-security.md</code> with third-party skills/plugin hardening guidance (trust lifecycle, provenance pinning, source-drift re-trust, risky install guards, emergency disable, and security audit logging).</li>
 </ul>
 <h2 id="0110---2026-02-06"><a class="header" href="#0110---2026-02-06">[0.1.10] - 2026-02-06</a></h2>
-<h3 id="changed-8"><a class="header" href="#changed-8">Changed</a></h3>
+<h3 id="changed-9"><a class="header" href="#changed-9">Changed</a></h3>
 <ul>
 <li><strong>CI builds</strong>: Build Docker images natively per architecture instead of QEMU emulation, then merge into multi-arch manifest</li>
 </ul>
 <h2 id="019---2026-02-06"><a class="header" href="#019---2026-02-06">[0.1.9] - 2026-02-06</a></h2>
-<h3 id="changed-9"><a class="header" href="#changed-9">Changed</a></h3>
+<h3 id="changed-10"><a class="header" href="#changed-10">Changed</a></h3>
 <ul>
 <li><strong>CI builds</strong>: Migrate all release build jobs from self-hosted to GitHub-hosted runners for full parallelism (<code>ubuntu-latest</code>, <code>ubuntu-latest-arm</code>, <code>macos-latest</code>), remove all cross-compilation toolchain steps</li>
 </ul>
@@ -5935,7 +6024,7 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>CI security</strong>: Add <code>persist-credentials: false</code> to docs workflow checkout (fixes zizmor artipacked warning)</li>
 </ul>
 <h2 id="014---2026-02-06"><a class="header" href="#014---2026-02-06">[0.1.4] - 2026-02-06</a></h2>
-<h3 id="added-6"><a class="header" href="#added-6">Added</a></h3>
+<h3 id="added-7"><a class="header" href="#added-7">Added</a></h3>
 <ul>
 <li>
 <p><strong><code>--no-tls</code> CLI flag</strong>: <code>--no-tls</code> flag and <code>MOLTIS_NO_TLS</code> environment variable to disable
@@ -6070,7 +6159,7 @@ logic.</p>
 self-extension, and the tool registry architecture.</p>
 </li>
 </ul>
-<h3 id="changed-10"><a class="header" href="#changed-10">Changed</a></h3>
+<h3 id="changed-11"><a class="header" href="#changed-11">Changed</a></h3>
 <ul>
 <li>
 <p>Memory settings UI enhanced with backend comparison and feature explanations</p>
@@ -6159,7 +6248,7 @@ only returned manifest-based registry skills. Personal and project-local
 skills were never shown in the navigation or skills page. The endpoint now
 discovers and includes them alongside registry skills.</li>
 </ul>
-<h3 id="documentation-3"><a class="header" href="#documentation-3">Documentation</a></h3>
+<h3 id="documentation-4"><a class="header" href="#documentation-4">Documentation</a></h3>
 <ul>
 <li>Added voice.md with TTS/STT provider documentation and setup guides</li>
 <li>Added mobile-pwa.md with PWA installation and push notification documentation</li>
