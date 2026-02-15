@@ -700,6 +700,32 @@ mode = "serve"                  # "serve" (private) or "funnel" (public)
 enabled = true
 otlp_endpoint = "http://localhost:4317"  # OpenTelemetry collector
 </code></pre>
+<h2 id="process-environment-variables-env"><a class="header" href="#process-environment-variables-env">Process Environment Variables (<code>[env]</code>)</a></h2>
+<p>The <code>[env]</code> section injects variables into the Moltis process at startup.
+This is useful in Docker deployments where passing individual <code>-e</code> flags is
+inconvenient, or when you want API keys stored in the config file rather
+than the host environment.</p>
+<pre><code class="language-toml">[env]
+BRAVE_API_KEY = "your-brave-key"
+OPENROUTER_API_KEY = "sk-or-..."
+ELEVENLABS_API_KEY = "..."
+</code></pre>
+<p><strong>Precedence</strong>: existing process environment variables are never overwritten.
+If <code>BRAVE_API_KEY</code> is already set via <code>docker -e</code> or the host shell, the
+<code>[env]</code> value is skipped. This means <code>docker -e</code> always wins.</p>
+<div id="admonition-settings-ui-vs-env" class="admonition admonish-info" role="note" aria-labelledby="admonition-settings-ui-vs-env-title">
+<div class="admonition-title">
+<div id="admonition-settings-ui-vs-env-title">
+<p>Settings UI vs [env]</p>
+</div>
+<a class="admonition-anchor-link" href="configuration.html#admonition-settings-ui-vs-env"></a>
+</div>
+<div>
+<p>Environment variables configured through the Settings UI (Settings &gt;
+Environment) are also injected into the Moltis process at startup.
+Precedence: host/<code>docker -e</code> &gt; config <code>[env]</code> &gt; Settings UI.</p>
+</div>
+</div>
 <h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
 <p>All settings can be overridden via environment variables:</p>
 <div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
@@ -4301,6 +4327,47 @@ sudo systemctl enable --now podman.socket
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/moltis-org/moltis:latest
 </code></pre>
+<h3 id="api-keys-and-the-env-section"><a class="header" href="#api-keys-and-the-env-section">API Keys and the <code>[env]</code> Section</a></h3>
+<p>Features like web search (Brave), embeddings, and LLM provider API calls read
+keys from process environment variables (<code>std::env::var</code>). In Docker, there are
+two ways to provide these:</p>
+<p><strong>Option 1: <code>docker -e</code> flags</strong> (takes precedence)</p>
+<pre><code class="language-bash">docker run -d \
+  --name moltis \
+  -e BRAVE_API_KEY=your-key \
+  -e OPENROUTER_API_KEY=sk-or-... \
+  ...
+  ghcr.io/moltis-org/moltis:latest
+</code></pre>
+<p><strong>Option 2: <code>[env]</code> section in <code>moltis.toml</code></strong></p>
+<p>Add an <code>[env]</code> section to your config file. These variables are injected into
+the Moltis process at startup, making them available to all features:</p>
+<pre><code class="language-toml">[env]
+BRAVE_API_KEY = "your-brave-key"
+OPENROUTER_API_KEY = "sk-or-..."
+</code></pre>
+<p>If a variable is set both via <code>docker -e</code> and <code>[env]</code>, the Docker/host
+environment value wins — <code>[env]</code> never overwrites existing variables.</p>
+<div id="admonition-settings-ui-env-vars" class="admonition admonish-info" role="note" aria-labelledby="admonition-settings-ui-env-vars-title">
+<div class="admonition-title">
+<div id="admonition-settings-ui-env-vars-title">
+<p>Settings UI env vars</p>
+</div>
+<a class="admonition-anchor-link" href="docker.html#admonition-settings-ui-env-vars"></a>
+</div>
+<div>
+<p>Environment variables set through the Settings UI (Settings &gt; Environment)
+are stored in SQLite. At startup, Moltis injects them into the process
+environment so they are available to all features (search, embeddings,
+provider API calls), not just sandbox commands.</p>
+<p>Precedence order (highest wins):</p>
+<ol>
+<li>Host / <code>docker -e</code> environment variables</li>
+<li>Config file <code>[env]</code> section</li>
+<li>Settings UI environment variables</li>
+</ol>
+</div>
+</div>
 <h2 id="building-locally"><a class="header" href="#building-locally">Building Locally</a></h2>
 <p>To build the Docker image from source:</p>
 <pre><code class="language-bash"># Single architecture (current platform)
@@ -5536,16 +5603,99 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
-<li><strong>Browser auto-detection and install</strong>: automatically detect all installed
+<li>
+<p><strong>Sandbox toggle notification</strong>: when the sandbox is enabled or disabled
+mid-session, a system message is injected into the conversation history so
+the LLM knows the execution environment changed. A chat notice also appears
+in the UI immediately.</p>
+</li>
+<li>
+<p><strong>Config <code>[env]</code> section</strong>: environment variables defined in <code>[env]</code> in
+<code>moltis.toml</code> are injected into the Moltis process at startup. This makes
+API keys (Brave, OpenRouter, etc.) available to features that read from
+<code>std::env::var()</code>. Process env vars (<code>docker -e</code>, host env) take precedence.
+Closes #107.</p>
+</li>
+<li>
+<p><strong>Browser auto-detection and install</strong>: automatically detect all installed
 Chromium-family browsers (Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Arc)
 and auto-install via the system package manager when none is found. Requests
 can specify a preferred browser (<code>"browser": "brave"</code>) or let the system
-pick the first available one.</li>
+pick the first available one.</p>
+</li>
+<li>
+<p><strong>Z.AI provider</strong>: add Z.AI (Zhipu) as an OpenAI-compatible provider with
+static model catalog (GLM-5, GLM-4.7, GLM-4.6, GLM-4.5 series) and dynamic
+model discovery via <code>/models</code> endpoint. Supports tool calling, streaming,
+vision (GLM-4.6V/4.5V), and reasoning content.</p>
+</li>
+<li>
+<p><strong>Running Containers panel</strong>: the Settings &gt; Sandboxes page now shows a
+“Running Containers” section listing all moltis-managed containers with
+live state (running/stopped/exited), backend type (Apple Container/Docker),
+resource info, and Stop/Delete actions. Includes disk usage display
+(container/image counts, sizes, reclaimable space) and a “Clean All”
+button to stop and remove all stale containers at once.</p>
+</li>
+<li>
+<p><strong>Startup container GC</strong>: the gateway now automatically removes orphaned
+session containers on startup, preventing disk space accumulation from
+crashed or interrupted sessions.</p>
+</li>
+<li>
+<p><strong>Download full context as JSONL</strong>: the full context panel now has a
+“Download” button that exports the conversation (including raw LLM
+responses) as a timestamped <code>.jsonl</code> file.</p>
+</li>
+<li>
+<p><strong>Sandbox images in cached images list</strong>: the Settings &gt; Images page
+now merges sandbox-built images into the cached images list so all
+container images are visible in one place.</p>
+</li>
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
+<ul>
+<li><strong>Sandbox image identity</strong>: image tags now use SHA-256 instead of
+<code>DefaultHasher</code> for deterministic, cross-run hashing of base image +
+packages.</li>
+</ul>
 <h3 id="deprecated"><a class="header" href="#deprecated">Deprecated</a></h3>
 <h3 id="removed"><a class="header" href="#removed">Removed</a></h3>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
+<ul>
+<li><strong>Thinking indicator lost on reload</strong>: reloading the page while the model
+was generating no longer loses the “thinking” dots. The backend now includes
+<code>replying</code> state in <code>sessions.list</code> and <code>sessions.switch</code> RPC responses so
+the frontend can restore the indicator after a full page reload.</li>
+<li><strong>Thinking text restored after reload</strong>: reloading the page during extended
+thinking (reasoning) now restores the accumulated thinking text instead of
+showing only bouncing dots. The backend tracks thinking text per session and
+returns it in the <code>sessions.switch</code> response.</li>
+<li><strong>Apple Container recovery</strong>: simplify container recovery to a single flat
+retry loop (3 attempts max, down from up to 24). Name rotation now only
+triggers on <code>AlreadyExists</code> errors, preventing orphan containers. Added
+<code>notFound</code> error matching so exec readiness probes retry correctly.
+Diagnostic info (running container count, service health, container logs)
+is now included in failure messages. Detect stale Virtualization.framework
+state (<code>NSPOSIXErrorDomain EINVAL</code>) and automatically restart the daemon
+(<code>container system stop &amp;&amp; container system start</code>) before retrying; bail
+with a clear remediation message only if automatic restart fails.
+Exec-level recovery retries reduced from 3 to 1.</li>
+<li><strong>Ghost Apple Containers</strong>: failed container deletions are now tracked
+in a zombie set and filtered from list output, preventing stale entries
+from reappearing in the Running Containers panel.</li>
+<li><strong>Container action errors preserved</strong>: failed delete/clean/restart
+operations now surface the original error message to the UI instead of
+silently swallowing it.</li>
+<li><strong>Usage parsing across OpenAI-compatible providers</strong>: token counts now
+handle Anthropic-style (<code>input_tokens</code>/<code>output_tokens</code>), camelCase
+variants, cache token fields, and multiple response nesting structures
+across diverse providers.</li>
+<li><strong>Think tag whitespace</strong>: leading whitespace after <code>&lt;/think&gt;</code> close
+tags is now stripped, preventing extra blank lines in streamed output.</li>
+<li><strong>Token bar visible at zero</strong>: the token usage bar no longer disappears
+when all counts are zero; it stays visible as a baseline indicator.</li>
+</ul>
 <h3 id="security-2"><a class="header" href="#security-2">Security</a></h3>
 <h2 id="0830---2026-02-15"><a class="header" href="#0830---2026-02-15">[0.8.30] - 2026-02-15</a></h2>
 <h3 id="added-1"><a class="header" href="#added-1">Added</a></h3>
@@ -5707,6 +5857,13 @@ files no longer check <code>provider.name === "ollama"</code> for behavior.
 Instead, the backend exposes a <code>keyOptional</code> field on provider
 metadata, making the UI provider-agnostic.</li>
 </ul>
+<h3 id="fixed-8"><a class="header" href="#fixed-8">Fixed</a></h3>
+<ul>
+<li><strong>Settings UI env vars now available process-wide</strong>: environment variables
+set via Settings &gt; Environment were previously only injected into sandbox
+commands. They are now also injected into the Moltis process at startup,
+making them available to web search, embeddings, and provider API calls.</li>
+</ul>
 <h2 id="0814---2026-02-11"><a class="header" href="#0814---2026-02-11">[0.8.14] - 2026-02-11</a></h2>
 <h3 id="security-10"><a class="header" href="#security-10">Security</a></h3>
 <ul>
@@ -5717,7 +5874,7 @@ credential removed). An <code>auth.credentials_changed</code> event notifies bro
 to redirect to <code>/login</code>. Existing sessions are also invalidated on password
 change for defense-in-depth.</li>
 </ul>
-<h3 id="fixed-8"><a class="header" href="#fixed-8">Fixed</a></h3>
+<h3 id="fixed-9"><a class="header" href="#fixed-9">Fixed</a></h3>
 <ul>
 <li><strong>Onboarding test for SOUL.md clear behavior</strong>: Fixed <code>identity_update_partial</code>
 test to match the new empty-file behavior from v0.8.13.</li>
@@ -5729,7 +5886,7 @@ test to match the new empty-file behavior from v0.8.13.</li>
 default soul text when the file doesn’t exist, mirroring how <code>moltis.toml</code>
 is auto-created. If deleted, it re-seeds on next load.</li>
 </ul>
-<h3 id="fixed-9"><a class="header" href="#fixed-9">Fixed</a></h3>
+<h3 id="fixed-10"><a class="header" href="#fixed-10">Fixed</a></h3>
 <ul>
 <li><strong>SOUL.md clear via settings</strong>: Clearing the soul textarea in settings no
 longer re-creates the default on the next load. An explicit clear now writes
@@ -5744,7 +5901,7 @@ authentication method when a passkey is already registered.</li>
 <li><strong>Moonshot provider</strong>: Added Moonshot to the default offered providers list.</li>
 </ul>
 <h2 id="0812---2026-02-11"><a class="header" href="#0812---2026-02-11">[0.8.12] - 2026-02-11</a></h2>
-<h3 id="fixed-10"><a class="header" href="#fixed-10">Fixed</a></h3>
+<h3 id="fixed-11"><a class="header" href="#fixed-11">Fixed</a></h3>
 <ul>
 <li><strong>E2E test CI stability</strong>: <code>NoopChatService::clear()</code> now returns Ok instead
 of an error when no LLM providers are configured, fixing 5 e2e test failures
@@ -5782,7 +5939,7 @@ release profile to reduce artifact size.</li>
 <li><strong>SPA route handling</strong>: Centralized SPA route definitions and preserved TOML
 comments during config updates.</li>
 </ul>
-<h3 id="fixed-11"><a class="header" href="#fixed-11">Fixed</a></h3>
+<h3 id="fixed-12"><a class="header" href="#fixed-12">Fixed</a></h3>
 <ul>
 <li><strong>Auth setup hardening</strong>: Enforced authentication immediately after password
 or passkey setup to prevent unintended post-setup unauthenticated access.</li>
@@ -5798,7 +5955,7 @@ when no container runtime is available.</li>
 tests and blocks all package builds (deb, rpm, arch, AppImage, snap,
 Homebrew, Docker) if they fail.</li>
 </ul>
-<h3 id="fixed-12"><a class="header" href="#fixed-12">Fixed</a></h3>
+<h3 id="fixed-13"><a class="header" href="#fixed-13">Fixed</a></h3>
 <ul>
 <li><strong>Docker TLS setup</strong>: All Docker examples now expose port 13132 for CA
 certificate download with instructions to trust the self-signed cert,
@@ -5815,7 +5972,7 @@ gateway. Tightened regex to <code>/\/auth\.spec/</code>.</li>
 <li><strong>Askama HTML rendering</strong>: SPA index and social metadata templates use
 Askama instead of string replacement.</li>
 </ul>
-<h3 id="fixed-13"><a class="header" href="#fixed-13">Fixed</a></h3>
+<h3 id="fixed-14"><a class="header" href="#fixed-14">Fixed</a></h3>
 <ul>
 <li><strong>WebSocket reconnect after remote onboarding auth</strong>: Connection now
 reconnects immediately after auth setup instead of waiting for the backoff
@@ -5841,21 +5998,21 @@ user content could mimic role prefixes (similar to GHSA-g8p2-7wf7-98mq).</li>
 <li><strong>Session delete UX</strong>: Forked sessions with no new messages beyond the fork
 point are deleted immediately without a confirmation dialog.</li>
 </ul>
-<h3 id="fixed-14"><a class="header" href="#fixed-14">Fixed</a></h3>
+<h3 id="fixed-15"><a class="header" href="#fixed-15">Fixed</a></h3>
 <ul>
 <li><strong>Localhost passkey compatibility</strong>: Gateway startup URLs and TLS redirect
 hints now use <code>localhost</code> for loopback hosts, while WebAuthn also allows
 <code>moltis.localhost</code> as an additional origin when RP ID is <code>localhost</code>.</li>
 </ul>
 <h2 id="083---2026-02-11"><a class="header" href="#083---2026-02-11">[0.8.3] - 2026-02-11</a></h2>
-<h3 id="fixed-15"><a class="header" href="#fixed-15">Fixed</a></h3>
+<h3 id="fixed-16"><a class="header" href="#fixed-16">Fixed</a></h3>
 <ul>
 <li><strong>Linux clippy <code>unused_mut</code> failure</strong>: Fixed a target-specific <code>unused_mut</code>
 warning in browser stale-container cleanup that failed release clippy on
 Linux with <code>-D warnings</code>.</li>
 </ul>
 <h2 id="082---2026-02-11"><a class="header" href="#082---2026-02-11">[0.8.2] - 2026-02-11</a></h2>
-<h3 id="fixed-16"><a class="header" href="#fixed-16">Fixed</a></h3>
+<h3 id="fixed-17"><a class="header" href="#fixed-17">Fixed</a></h3>
 <ul>
 <li><strong>Release clippy environment parity</strong>: The release workflow clippy job now
 runs in the same CUDA-capable environment as main CI, includes the llama
@@ -5863,7 +6020,7 @@ source git bootstrap step, and installs <code>rustfmt</code> alongside <code>cli
 fixes release clippy failures caused by missing CUDA toolchain/runtime.</li>
 </ul>
 <h2 id="081---2026-02-11"><a class="header" href="#081---2026-02-11">[0.8.1] - 2026-02-11</a></h2>
-<h3 id="fixed-17"><a class="header" href="#fixed-17">Fixed</a></h3>
+<h3 id="fixed-18"><a class="header" href="#fixed-18">Fixed</a></h3>
 <ul>
 <li><strong>Clippy validation parity</strong>: Unified local validation, CI (main), and
 release workflows to use the same clippy command and flags
@@ -5886,7 +6043,7 @@ unrelated containers.</li>
 the modern Apple container CLI flow (<code>container image pull --help</code>) without
 legacy fallback behavior.</li>
 </ul>
-<h3 id="fixed-18"><a class="header" href="#fixed-18">Fixed</a></h3>
+<h3 id="fixed-19"><a class="header" href="#fixed-19">Fixed</a></h3>
 <ul>
 <li><strong>Release workflow artifacts</strong>: Disabled docker build record artifact uploads
 in release CI to avoid release workflow failures from missing artifact paths.</li>
@@ -5894,7 +6051,7 @@ in release CI to avoid release workflow failures from missing artifact paths.</l
 release preflight checks with CI formatting/lint gates.</li>
 </ul>
 <h2 id="071---2026-02-11"><a class="header" href="#071---2026-02-11">[0.7.1] - 2026-02-11</a></h2>
-<h3 id="fixed-19"><a class="header" href="#fixed-19">Fixed</a></h3>
+<h3 id="fixed-20"><a class="header" href="#fixed-20">Fixed</a></h3>
 <ul>
 <li><strong>Release format gate</strong>: Included missing Rust formatting updates in release
 history so the release workflow <code>cargo fmt --all -- --check</code> passes for
@@ -5925,7 +6082,7 @@ static while the retry countdown is shown only on the button.</li>
 <code>docs/src/authentication.md</code>, and <code>docs/src/security.md</code>.</li>
 </ul>
 <h2 id="061---2026-02-10"><a class="header" href="#061---2026-02-10">[0.6.1] - 2026-02-10</a></h2>
-<h3 id="fixed-20"><a class="header" href="#fixed-20">Fixed</a></h3>
+<h3 id="fixed-21"><a class="header" href="#fixed-21">Fixed</a></h3>
 <ul>
 <li><strong>Release clippy</strong>: Aligned release workflow clippy command with nightly
 flags (<code>-Z unstable-options</code>, <code>--timings</code>).</li>
@@ -5947,7 +6104,7 @@ event names in the config file.</li>
 decision matrix, credential types, API key scopes, session endpoints,
 and WebSocket auth documentation.</li>
 </ul>
-<h3 id="fixed-21"><a class="header" href="#fixed-21">Fixed</a></h3>
+<h3 id="fixed-22"><a class="header" href="#fixed-22">Fixed</a></h3>
 <ul>
 <li><strong>Browser container lifecycle</strong>: Browser containers (browserless/chrome)
 now have proper lifecycle management — periodic cleanup removes idle
@@ -6003,7 +6160,7 @@ access instead of silently receiving full admin privileges. Keys must specify
 at least one scope explicitly (least-privilege by default).</li>
 </ul>
 <h2 id="041---2026-02-09"><a class="header" href="#041---2026-02-09">[0.4.1] - 2026-02-09</a></h2>
-<h3 id="fixed-22"><a class="header" href="#fixed-22">Fixed</a></h3>
+<h3 id="fixed-23"><a class="header" href="#fixed-23">Fixed</a></h3>
 <ul>
 <li><strong>Clippy lint in map test</strong>: Replace <code>is_some()</code>/<code>unwrap()</code> with <code>if let Some</code> to
 fix <code>clippy::unnecessary_unwrap</code> that broke the v0.4.0 release build.</li>
@@ -6052,7 +6209,7 @@ same validate-first flow as onboarding. Credentials are validated before
 saving (bad keys are never persisted), a model selector appears after
 validation, and OAuth flows show model selection after authentication.</li>
 </ul>
-<h3 id="fixed-23"><a class="header" href="#fixed-23">Fixed</a></h3>
+<h3 id="fixed-24"><a class="header" href="#fixed-24">Fixed</a></h3>
 <ul>
 <li><strong>Docker RAM detection</strong>: Fall back to <code>/proc/meminfo</code> when <code>sysinfo</code> returns
 0 bytes for memory inside Docker/cgroup environments.</li>
@@ -6075,34 +6232,34 @@ skip when no usable container runtime is available (backend = “none”).</li>
 <li><strong>Release CI parallelization</strong>: Split clippy and test into separate parallel
 jobs in the release workflow for faster feedback on GitHub-hosted runners.</li>
 </ul>
-<h3 id="fixed-24"><a class="header" href="#fixed-24">Fixed</a></h3>
+<h3 id="fixed-25"><a class="header" href="#fixed-25">Fixed</a></h3>
 <ul>
 <li><strong>CodSpeed workflow zizmor audit</strong>: Pinned <code>CodSpeedHQ/action@v4</code> to commit
 SHA to satisfy zizmor’s <code>unpinned-uses</code> audit.</li>
 </ul>
 <h2 id="037---2026-02-09"><a class="header" href="#037---2026-02-09">[0.3.7] - 2026-02-09</a></h2>
-<h3 id="fixed-25"><a class="header" href="#fixed-25">Fixed</a></h3>
+<h3 id="fixed-26"><a class="header" href="#fixed-26">Fixed</a></h3>
 <ul>
 <li><strong>Clippy warnings</strong>: Fixed <code>MutexGuard</code> held across await in telegram
 test, <code>field assignment outside initializer</code> in provider setup test, and
 <code>items after test module</code> in gateway services.</li>
 </ul>
 <h2 id="036---2026-02-09"><a class="header" href="#036---2026-02-09">[0.3.6] - 2026-02-09</a></h2>
-<h3 id="fixed-26"><a class="header" href="#fixed-26">Fixed</a></h3>
+<h3 id="fixed-27"><a class="header" href="#fixed-27">Fixed</a></h3>
 <ul>
 <li><strong>Release CI zizmor audit</strong>: Removed <code>rust-cache</code> from the release workflow’s
 clippy-test job entirely instead of using <code>save-if: false</code>, which zizmor does
 not recognize as a cache-poisoning mitigation.</li>
 </ul>
 <h2 id="035---2026-02-09"><a class="header" href="#035---2026-02-09">[0.3.5] - 2026-02-09</a></h2>
-<h3 id="fixed-27"><a class="header" href="#fixed-27">Fixed</a></h3>
+<h3 id="fixed-28"><a class="header" href="#fixed-28">Fixed</a></h3>
 <ul>
 <li><strong>Release CI cache-poisoning</strong>: Set <code>save-if: false</code> on <code>rust-cache</code> in the
 release workflow to satisfy zizmor’s cache-poisoning audit for tag-triggered
 workflows that publish artifacts.</li>
 </ul>
 <h2 id="034---2026-02-09"><a class="header" href="#034---2026-02-09">[0.3.4] - 2026-02-09</a></h2>
-<h3 id="fixed-28"><a class="header" href="#fixed-28">Fixed</a></h3>
+<h3 id="fixed-29"><a class="header" href="#fixed-29">Fixed</a></h3>
 <ul>
 <li><strong>Session file lock contention</strong>: Replaced non-blocking <code>try_write()</code> with
 blocking <code>write()</code> in <code>SessionStore::append()</code> and <code>replace_history()</code> so
@@ -6116,7 +6273,7 @@ format, clippy, and test checks before building any packages, ensuring code
 correctness before artifacts are produced.</li>
 </ul>
 <h2 id="033---2026-02-09"><a class="header" href="#033---2026-02-09">[0.3.3] - 2026-02-09</a></h2>
-<h3 id="fixed-29"><a class="header" href="#fixed-29">Fixed</a></h3>
+<h3 id="fixed-30"><a class="header" href="#fixed-30">Fixed</a></h3>
 <ul>
 <li><strong>OpenAI Codex token refresh panic</strong>: Made <code>get_valid_token()</code> async to fix
 <code>block_on</code> inside async runtime panic when refreshing expired OAuth tokens.</li>
@@ -6243,7 +6400,7 @@ cache-miss token counters in the metrics subsystem.</p>
 <li><strong>Configurable model ordering</strong>: Added <code>chat.priority_models</code> in <code>moltis.toml</code> to pin preferred models at the top of model selectors without rebuilding. Runtime model selectors (<code>models.list</code>, chat model dropdown, Telegram <code>/model</code>) hide unsupported models, while Providers diagnostics continue to show full catalog entries (including unsupported flags).</li>
 <li><strong>Configurable provider offerings in UI</strong>: Added <code>[providers] offered = [...]</code> allowlist in <code>moltis.toml</code> to control which providers are shown in onboarding/provider-picker UI. New config templates default this to <code>["openai", "github-copilot"]</code>; setting <code>offered = []</code> shows all known providers. Configured providers remain visible for management.</li>
 </ul>
-<h3 id="fixed-30"><a class="header" href="#fixed-30">Fixed</a></h3>
+<h3 id="fixed-31"><a class="header" href="#fixed-31">Fixed</a></h3>
 <ul>
 <li>
 <p><strong>Web search DuckDuckGo fallback</strong>: When no search API key (Brave or
@@ -6324,7 +6481,7 @@ personality bootstrapping.</li>
 <ul>
 <li><strong>Reply medium preference handling</strong>: Chat now prefers the same reply medium when possible and falls back to text when a medium cannot be preserved.</li>
 </ul>
-<h3 id="fixed-31"><a class="header" href="#fixed-31">Fixed</a></h3>
+<h3 id="fixed-32"><a class="header" href="#fixed-32">Fixed</a></h3>
 <ul>
 <li><strong>Chat UI reply badge visibility</strong>: Assistant footer now reliably shows the selected reply medium badge.</li>
 <li><strong>Voice UX polish</strong>: Improved microphone timing behavior and preserved settings scroll state in voice configuration views.</li>
@@ -6343,7 +6500,7 @@ plugins manifest and directory into the new unified location.</li>
 <code>[voice]</code> section with provider-list allowlists limited to ElevenLabs for TTS and
 Mistral + ElevenLabs for STT.</li>
 </ul>
-<h3 id="fixed-32"><a class="header" href="#fixed-32">Fixed</a></h3>
+<h3 id="fixed-33"><a class="header" href="#fixed-33">Fixed</a></h3>
 <ul>
 <li><strong>Update checker repository configuration</strong>: The update checker now reads
 <code>server.update_repository_url</code> from <code>moltis.toml</code>, defaults new configs to
@@ -6511,7 +6668,7 @@ Empty lists keep current behavior and show all providers.</p>
 <li><strong>Skill trust lifecycle</strong>: Installed marketplace skills/plugins now track a <code>trusted</code> state and must be trusted before they can be enabled; the skills UI now surfaces untrusted status and supports trust-before-enable.</li>
 <li><strong>Git metadata via gitoxide</strong>: Gateway now resolves branch names, repo HEAD SHAs, and commit timestamps using <code>gix</code> (gitoxide) instead of shelling out to <code>git</code> for those read-only operations.</li>
 </ul>
-<h3 id="fixed-33"><a class="header" href="#fixed-33">Fixed</a></h3>
+<h3 id="fixed-34"><a class="header" href="#fixed-34">Fixed</a></h3>
 <ul>
 <li><strong>OAuth callback on hosted deployments</strong>: OpenAI Codex OAuth now uses the web app origin callback (<code>/auth/callback</code>) in the UI flow instead of hardcoded localhost loopback, allowing DigitalOcean/Fly/Render deployments to complete OAuth successfully.</li>
 <li><strong>Sandbox startup on hosted Docker environments</strong>: Skip sandbox image pre-build when sandbox mode is off, and require Docker daemon accessibility (not just Docker CLI presence) before selecting the Docker sandbox backend.</li>
@@ -6566,23 +6723,23 @@ with vertical scrolling instead of being scaled down to fit the viewport.</li>
 <li><strong>CI builds</strong>: Migrate all release build jobs from self-hosted to GitHub-hosted runners for full parallelism (<code>ubuntu-latest</code>, <code>ubuntu-latest-arm</code>, <code>macos-latest</code>), remove all cross-compilation toolchain steps</li>
 </ul>
 <h2 id="018---2026-02-06"><a class="header" href="#018---2026-02-06">[0.1.8] - 2026-02-06</a></h2>
-<h3 id="fixed-34"><a class="header" href="#fixed-34">Fixed</a></h3>
+<h3 id="fixed-35"><a class="header" href="#fixed-35">Fixed</a></h3>
 <ul>
 <li><strong>CI builds</strong>: Fix corrupted cargo config on all self-hosted runner jobs, fix macOS runner label, add llama-cpp build deps to Docker and Snap builds</li>
 </ul>
 <h2 id="017---2026-02-06"><a class="header" href="#017---2026-02-06">[0.1.7] - 2026-02-06</a></h2>
-<h3 id="fixed-35"><a class="header" href="#fixed-35">Fixed</a></h3>
+<h3 id="fixed-36"><a class="header" href="#fixed-36">Fixed</a></h3>
 <ul>
 <li><strong>CI builds</strong>: Use project-local <code>.cargo/config.toml</code> for cross-compilation instead of appending to global config (fixes duplicate key errors on self-hosted runners)</li>
 </ul>
 <h2 id="016---2026-02-06"><a class="header" href="#016---2026-02-06">[0.1.6] - 2026-02-06</a></h2>
-<h3 id="fixed-36"><a class="header" href="#fixed-36">Fixed</a></h3>
+<h3 id="fixed-37"><a class="header" href="#fixed-37">Fixed</a></h3>
 <ul>
 <li><strong>CI builds</strong>: Use macOS GitHub-hosted runners for apple-darwin binary builds instead of cross-compiling from Linux</li>
 <li><strong>CI performance</strong>: Run lightweight lint jobs (zizmor, biome, fmt) on GitHub-hosted runners to free up self-hosted runners</li>
 </ul>
 <h2 id="015---2026-02-06"><a class="header" href="#015---2026-02-06">[0.1.5] - 2026-02-06</a></h2>
-<h3 id="fixed-37"><a class="header" href="#fixed-37">Fixed</a></h3>
+<h3 id="fixed-38"><a class="header" href="#fixed-38">Fixed</a></h3>
 <ul>
 <li><strong>CI security</strong>: Use GitHub-hosted runners for PRs to prevent untrusted code from running on self-hosted infrastructure</li>
 <li><strong>CI security</strong>: Add <code>persist-credentials: false</code> to docs workflow checkout (fixes zizmor artipacked warning)</li>
@@ -6770,7 +6927,7 @@ registration.</p>
 <code>clone_without_prefix("mcp__")</code> in all three call sites.</p>
 </li>
 </ul>
-<h3 id="fixed-38"><a class="header" href="#fixed-38">Fixed</a></h3>
+<h3 id="fixed-39"><a class="header" href="#fixed-39">Fixed</a></h3>
 <ul>
 <li>Push notifications not sending when chat uses agent mode (run_with_tools)</li>
 <li>Missing space in Safari install instructions (“usingFile” → “using File”)</li>

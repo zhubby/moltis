@@ -334,6 +334,47 @@ sudo systemctl enable --now podman.socket
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/moltis-org/moltis:latest
 </code></pre>
+<h3 id="api-keys-and-the-env-section"><a class="header" href="#api-keys-and-the-env-section">API Keys and the <code>[env]</code> Section</a></h3>
+<p>Features like web search (Brave), embeddings, and LLM provider API calls read
+keys from process environment variables (<code>std::env::var</code>). In Docker, there are
+two ways to provide these:</p>
+<p><strong>Option 1: <code>docker -e</code> flags</strong> (takes precedence)</p>
+<pre><code class="language-bash">docker run -d \
+  --name moltis \
+  -e BRAVE_API_KEY=your-key \
+  -e OPENROUTER_API_KEY=sk-or-... \
+  ...
+  ghcr.io/moltis-org/moltis:latest
+</code></pre>
+<p><strong>Option 2: <code>[env]</code> section in <code>moltis.toml</code></strong></p>
+<p>Add an <code>[env]</code> section to your config file. These variables are injected into
+the Moltis process at startup, making them available to all features:</p>
+<pre><code class="language-toml">[env]
+BRAVE_API_KEY = "your-brave-key"
+OPENROUTER_API_KEY = "sk-or-..."
+</code></pre>
+<p>If a variable is set both via <code>docker -e</code> and <code>[env]</code>, the Docker/host
+environment value wins — <code>[env]</code> never overwrites existing variables.</p>
+<div id="admonition-settings-ui-env-vars" class="admonition admonish-info" role="note" aria-labelledby="admonition-settings-ui-env-vars-title">
+<div class="admonition-title">
+<div id="admonition-settings-ui-env-vars-title">
+<p>Settings UI env vars</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-settings-ui-env-vars"></a>
+</div>
+<div>
+<p>Environment variables set through the Settings UI (Settings &gt; Environment)
+are stored in SQLite. At startup, Moltis injects them into the process
+environment so they are available to all features (search, embeddings,
+provider API calls), not just sandbox commands.</p>
+<p>Precedence order (highest wins):</p>
+<ol>
+<li>Host / <code>docker -e</code> environment variables</li>
+<li>Config file <code>[env]</code> section</li>
+<li>Settings UI environment variables</li>
+</ol>
+</div>
+</div>
 <h2 id="building-locally"><a class="header" href="#building-locally">Building Locally</a></h2>
 <p>To build the Docker image from source:</p>
 <pre><code class="language-bash"># Single architecture (current platform)

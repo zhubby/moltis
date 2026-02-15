@@ -336,6 +336,32 @@ mode = "serve"                  # "serve" (private) or "funnel" (public)
 enabled = true
 otlp_endpoint = "http://localhost:4317"  # OpenTelemetry collector
 </code></pre>
+<h2 id="process-environment-variables-env"><a class="header" href="#process-environment-variables-env">Process Environment Variables (<code>[env]</code>)</a></h2>
+<p>The <code>[env]</code> section injects variables into the Moltis process at startup.
+This is useful in Docker deployments where passing individual <code>-e</code> flags is
+inconvenient, or when you want API keys stored in the config file rather
+than the host environment.</p>
+<pre><code class="language-toml">[env]
+BRAVE_API_KEY = "your-brave-key"
+OPENROUTER_API_KEY = "sk-or-..."
+ELEVENLABS_API_KEY = "..."
+</code></pre>
+<p><strong>Precedence</strong>: existing process environment variables are never overwritten.
+If <code>BRAVE_API_KEY</code> is already set via <code>docker -e</code> or the host shell, the
+<code>[env]</code> value is skipped. This means <code>docker -e</code> always wins.</p>
+<div id="admonition-settings-ui-vs-env" class="admonition admonish-info" role="note" aria-labelledby="admonition-settings-ui-vs-env-title">
+<div class="admonition-title">
+<div id="admonition-settings-ui-vs-env-title">
+<p>Settings UI vs [env]</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-settings-ui-vs-env"></a>
+</div>
+<div>
+<p>Environment variables configured through the Settings UI (Settings &gt;
+Environment) are also injected into the Moltis process at startup.
+Precedence: host/<code>docker -e</code> &gt; config <code>[env]</code> &gt; Settings UI.</p>
+</div>
+</div>
 <h2 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h2>
 <p>All settings can be overridden via environment variables:</p>
 <div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
