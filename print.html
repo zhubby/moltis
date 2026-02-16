@@ -992,7 +992,7 @@ model = "qwen2.5-coder-7b-q4_k_m"
 <h2 id="supported-transports"><a class="header" href="#supported-transports">Supported Transports</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Transport</th><th>Description</th><th>Use Case</th></tr></thead><tbody>
 <tr><td><strong>stdio</strong></td><td>Local process via stdin/stdout</td><td>npm packages, local scripts</td></tr>
-<tr><td><strong>HTTP/SSE</strong></td><td>Remote server via HTTP</td><td>Cloud services, shared servers</td></tr>
+<tr><td><strong>Streamable HTTP</strong></td><td>Remote server via HTTP</td><td>Cloud services, shared servers</td></tr>
 </tbody></table>
 </div>
 <h2 id="adding-an-mcp-server"><a class="header" href="#adding-an-mcp-server">Adding an MCP Server</a></h2>
@@ -1005,20 +1005,17 @@ model = "qwen2.5-coder-7b-q4_k_m"
 </ol>
 <h3 id="via-configuration"><a class="header" href="#via-configuration">Via Configuration</a></h3>
 <p>Add servers to <code>moltis.toml</code>:</p>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "filesystem"
+<pre><code class="language-toml">[mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"]
 
-[[mcp.servers]]
-name = "github"
+[mcp.servers.github]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
 
-[[mcp.servers]]
-name = "remote-api"
-url = "https://mcp.example.com/sse"
+[mcp.servers.remote_api]
+url = "https://mcp.example.com/mcp"
 transport = "sse"
 </code></pre>
 <h2 id="popular-mcp-servers"><a class="header" href="#popular-mcp-servers">Popular MCP Servers</a></h2>
@@ -1035,20 +1032,16 @@ transport = "sse"
 <h3 id="community-servers"><a class="header" href="#community-servers">Community Servers</a></h3>
 <p>Explore more at <a href="https://mcp.so">mcp.so</a> and <a href="https://github.com/modelcontextprotocol/servers">GitHub MCP Servers</a>.</p>
 <h2 id="configuration-options"><a class="header" href="#configuration-options">Configuration Options</a></h2>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "my-server"              # Display name
-command = "node"                # Command to run
-args = ["server.js"]            # Command arguments
-cwd = "/path/to/server"         # Working directory
+<pre><code class="language-toml">[mcp.servers.my_server]
+command = "node"                # Required for stdio transport
+args = ["server.js"]            # Optional arguments
 
-# Environment variables
+# Optional environment variables
 env = { API_KEY = "secret", DEBUG = "true" }
 
-# Health check settings
-health_check_interval = 30      # Seconds between health checks
-restart_on_failure = true       # Auto-restart on crash
-max_restart_attempts = 5        # Give up after N restarts
-restart_backoff = "exponential" # "linear" or "exponential"
+# Optional: remote transport
+transport = "sse"               # "stdio" (default) or "sse"
+url = "https://mcp.example.com/mcp"  # Required when transport = "sse"
 </code></pre>
 <h2 id="server-lifecycle"><a class="header" href="#server-lifecycle">Server Lifecycle</a></h2>
 <pre><code>┌─────────────────────────────────────────────────────┐
@@ -1121,11 +1114,9 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 </code></pre>
 <h3 id="configure-in-moltis"><a class="header" href="#configure-in-moltis">Configure in Moltis</a></h3>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "my-server"
+<pre><code class="language-toml">[mcp.servers.my_server]
 command = "node"
 args = ["server.js"]
-cwd = "/path/to/my-server"
 </code></pre>
 <h2 id="debugging"><a class="header" href="#debugging">Debugging</a></h2>
 <h3 id="check-server-status"><a class="header" href="#check-server-status">Check Server Status</a></h3>
@@ -1138,12 +1129,38 @@ cwd = "/path/to/my-server"
 <h3 id="view-logs"><a class="header" href="#view-logs">View Logs</a></h3>
 <p>MCP server stderr is captured in Moltis logs:</p>
 <pre><code class="language-bash"># View gateway logs
-tail -f ~/.moltis/logs/gateway.log | grep mcp
+tail -f ~/.moltis/logs.jsonl | grep -i mcp
 </code></pre>
 <h3 id="test-locally"><a class="header" href="#test-locally">Test Locally</a></h3>
 <p>Run the server directly to debug:</p>
 <pre><code class="language-bash">echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | node server.js
 </code></pre>
+<h2 id="oauth-authentication"><a class="header" href="#oauth-authentication">OAuth Authentication</a></h2>
+<p>Remote MCP servers can require OAuth 2.1 authentication. Moltis handles this automatically — when a server returns <code>401 Unauthorized</code>, the OAuth flow starts without any manual configuration.</p>
+<h3 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h3>
+<ol>
+<li>Moltis connects to the remote MCP server</li>
+<li>The server returns <code>401 Unauthorized</code> with a <code>WWW-Authenticate</code> header</li>
+<li>Moltis discovers the authorization server via <a href="https://www.rfc-editor.org/rfc/rfc9728">RFC 9728</a> (Protected Resource Metadata)</li>
+<li>Moltis performs <a href="https://www.rfc-editor.org/rfc/rfc7591">dynamic client registration</a> (RFC 7591)</li>
+<li>A PKCE authorization code flow opens your browser for login</li>
+<li>After login, tokens are stored and used for all subsequent requests</li>
+</ol>
+<p>Client registrations and tokens are cached locally, so you only need to log in once per server.</p>
+<h3 id="manual-oauth-configuration"><a class="header" href="#manual-oauth-configuration">Manual OAuth Configuration</a></h3>
+<p>If a server doesn’t support standard OAuth discovery, you can configure credentials manually:</p>
+<pre><code class="language-toml">[mcp.servers.private_api]
+url = "https://mcp.example.com/mcp"
+transport = "sse"
+
+[mcp.servers.private_api.oauth]
+client_id = "your-client-id"
+auth_url = "https://auth.example.com/authorize"
+token_url = "https://auth.example.com/token"
+scopes = ["mcp:read", "mcp:write"]
+</code></pre>
+<h3 id="re-authentication"><a class="header" href="#re-authentication">Re-authentication</a></h3>
+<p>If your session expires or tokens are revoked, Moltis automatically re-authenticates on the next <code>401</code> response. You can also trigger re-authentication manually via the <code>mcp.reauth</code> RPC method.</p>
 <h2 id="security-considerations"><a class="header" href="#security-considerations">Security Considerations</a></h2>
 <div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
 <div class="admonition-title">
@@ -3428,7 +3445,7 @@ before deleting a skill.</p>
 </ul>
 <p>You can remove any subscription by clicking the <strong>Remove</strong> button. This works from any device - useful for revoking access to old devices.</p>
 <p>Subscription changes are broadcast in real-time via WebSocket, so all connected clients see updates immediately.</p>
-<h3 id="how-it-works-1"><a class="header" href="#how-it-works-1">How It Works</a></h3>
+<h3 id="how-it-works-2"><a class="header" href="#how-it-works-2">How It Works</a></h3>
 <p>Moltis uses the Web Push API with VAPID (Voluntary Application Server Identification) keys:</p>
 <ol>
 <li><strong>VAPID Keys</strong>: On first run, the server generates a P-256 ECDSA key pair</li>
@@ -3834,7 +3851,7 @@ drift re-trust, dependency install guards, kill switch, audit log), see
 <p>By default, Moltis requires explicit user approval before executing potentially
 dangerous commands. This “human-in-the-loop” design ensures the AI cannot take
 destructive actions without consent.</p>
-<h3 id="how-it-works-2"><a class="header" href="#how-it-works-2">How It Works</a></h3>
+<h3 id="how-it-works-3"><a class="header" href="#how-it-works-3">How It Works</a></h3>
 <p>When the agent wants to run a command:</p>
 <ol>
 <li>The command is analyzed against approval policies</li>
@@ -4465,7 +4482,7 @@ fly secrets set MOLTIS_PASSWORD="your-password"
 # Create persistent storage
 fly volumes create moltis_data --region iad --size 1
 </code></pre>
-<h3 id="how-it-works-3"><a class="header" href="#how-it-works-3">How it works</a></h3>
+<h3 id="how-it-works-4"><a class="header" href="#how-it-works-4">How it works</a></h3>
 <ul>
 <li><strong>Image</strong>: pulled from <code>ghcr.io/moltis-org/moltis:latest</code></li>
 <li><strong>Port</strong>: internal 8080, Fly terminates TLS and routes HTTPS traffic</li>
@@ -4974,7 +4991,7 @@ startup in the correct dependency order.</p>
     │   └── 20240205100004_init.sql   # files, chunks, embedding_cache, FTS
     └── src/lib.rs                     # run_migrations() (separate memory.db)
 </code></pre>
-<h2 id="how-it-works-4"><a class="header" href="#how-it-works-4">How It Works</a></h2>
+<h2 id="how-it-works-5"><a class="header" href="#how-it-works-5">How It Works</a></h2>
 <h3 id="migration-ownership"><a class="header" href="#migration-ownership">Migration Ownership</a></h3>
 <p>Each crate is autonomous and owns its schema:</p>
 <div class="table-wrapper"><table><thead><tr><th>Crate</th><th>Database</th><th>Tables</th><th>Migration File</th></tr></thead><tbody>
@@ -5431,7 +5448,7 @@ fn main() {
 
     // Now spans will add labels to metrics
 }</code></pre></pre>
-<h3 id="how-it-works-5"><a class="header" href="#how-it-works-5">How It Works</a></h3>
+<h3 id="how-it-works-6"><a class="header" href="#how-it-works-6">How It Works</a></h3>
 <p>When tracing is enabled, span fields are automatically added as metric labels:</p>
 <pre><pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -5617,6 +5634,10 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li>OAuth 2.1 support for remote MCP servers — automatic discovery (RFC 9728/8414), dynamic client registration (RFC 7591), PKCE authorization code flow, and Bearer token injection with 401 retry</li>
+<li><code>McpOAuthOverride</code> config option for servers that don’t implement standard OAuth discovery</li>
+<li><code>mcp.reauth</code> RPC method to manually trigger re-authentication for a server</li>
+<li>Persistent storage of dynamic client registrations at <code>~/.config/moltis/mcp_oauth_registrations.json</code></li>
 <li><strong>SSRF allowlist</strong>: <code>tools.web.fetch.ssrf_allowlist</code> config field to exempt trusted
 CIDR ranges from SSRF blocking, enabling Docker inter-container networking.</li>
 <li>Memory config: add <code>memory.disable_rag</code> to force keyword-only memory search while keeping markdown indexing and memory tools enabled</li>
@@ -5627,6 +5648,10 @@ CIDR ranges from SSRF blocking, enabling Docker inter-container networking.</li>
 <h3 id="removed"><a class="header" href="#removed">Removed</a></h3>
 <h3 id="fixed"><a class="header" href="#fixed">Fixed</a></h3>
 <ul>
+<li>MCP OAuth dynamic registration now uses the exact loopback callback URI selected for the current auth flow, improving compatibility with providers that require strict redirect URI matching (for example Linear).</li>
+<li>MCP manager now applies <code>[mcp.servers.&lt;name&gt;.oauth]</code> override settings when building the OAuth provider for SSE servers.</li>
+<li>Streamable HTTP MCP transport now persists and reuses <code>Mcp-Session-Id</code>, parses <code>text/event-stream</code> responses, and sends best-effort <code>DELETE</code> on shutdown to close server sessions.</li>
+<li>MCP docs/config examples now use the current table-based config shape and <code>/mcp</code> endpoint examples for remote servers.</li>
 <li>Memory embeddings endpoint composition now avoids duplicated path segments like <code>/v1/v1/embeddings</code> and accepts base URLs ending in host-only, <code>/v1</code>, versioned paths (for example <code>/v4</code>), or <code>/embeddings</code></li>
 </ul>
 <h3 id="security-2"><a class="header" href="#security-2">Security</a></h3>

@@ -195,7 +195,7 @@
 <h2 id="supported-transports"><a class="header" href="#supported-transports">Supported Transports</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Transport</th><th>Description</th><th>Use Case</th></tr></thead><tbody>
 <tr><td><strong>stdio</strong></td><td>Local process via stdin/stdout</td><td>npm packages, local scripts</td></tr>
-<tr><td><strong>HTTP/SSE</strong></td><td>Remote server via HTTP</td><td>Cloud services, shared servers</td></tr>
+<tr><td><strong>Streamable HTTP</strong></td><td>Remote server via HTTP</td><td>Cloud services, shared servers</td></tr>
 </tbody></table>
 </div>
 <h2 id="adding-an-mcp-server"><a class="header" href="#adding-an-mcp-server">Adding an MCP Server</a></h2>
@@ -208,20 +208,17 @@
 </ol>
 <h3 id="via-configuration"><a class="header" href="#via-configuration">Via Configuration</a></h3>
 <p>Add servers to <code>moltis.toml</code>:</p>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "filesystem"
+<pre><code class="language-toml">[mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/projects"]
 
-[[mcp.servers]]
-name = "github"
+[mcp.servers.github]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
 
-[[mcp.servers]]
-name = "remote-api"
-url = "https://mcp.example.com/sse"
+[mcp.servers.remote_api]
+url = "https://mcp.example.com/mcp"
 transport = "sse"
 </code></pre>
 <h2 id="popular-mcp-servers"><a class="header" href="#popular-mcp-servers">Popular MCP Servers</a></h2>
@@ -238,20 +235,16 @@ transport = "sse"
 <h3 id="community-servers"><a class="header" href="#community-servers">Community Servers</a></h3>
 <p>Explore more at <a href="https://mcp.so">mcp.so</a> and <a href="https://github.com/modelcontextprotocol/servers">GitHub MCP Servers</a>.</p>
 <h2 id="configuration-options"><a class="header" href="#configuration-options">Configuration Options</a></h2>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "my-server"              # Display name
-command = "node"                # Command to run
-args = ["server.js"]            # Command arguments
-cwd = "/path/to/server"         # Working directory
+<pre><code class="language-toml">[mcp.servers.my_server]
+command = "node"                # Required for stdio transport
+args = ["server.js"]            # Optional arguments
 
-# Environment variables
+# Optional environment variables
 env = { API_KEY = "secret", DEBUG = "true" }
 
-# Health check settings
-health_check_interval = 30      # Seconds between health checks
-restart_on_failure = true       # Auto-restart on crash
-max_restart_attempts = 5        # Give up after N restarts
-restart_backoff = "exponential" # "linear" or "exponential"
+# Optional: remote transport
+transport = "sse"               # "stdio" (default) or "sse"
+url = "https://mcp.example.com/mcp"  # Required when transport = "sse"
 </code></pre>
 <h2 id="server-lifecycle"><a class="header" href="#server-lifecycle">Server Lifecycle</a></h2>
 <pre><code>┌─────────────────────────────────────────────────────┐
@@ -324,11 +317,9 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 </code></pre>
 <h3 id="configure-in-moltis"><a class="header" href="#configure-in-moltis">Configure in Moltis</a></h3>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "my-server"
+<pre><code class="language-toml">[mcp.servers.my_server]
 command = "node"
 args = ["server.js"]
-cwd = "/path/to/my-server"
 </code></pre>
 <h2 id="debugging"><a class="header" href="#debugging">Debugging</a></h2>
 <h3 id="check-server-status"><a class="header" href="#check-server-status">Check Server Status</a></h3>
@@ -341,12 +332,38 @@ cwd = "/path/to/my-server"
 <h3 id="view-logs"><a class="header" href="#view-logs">View Logs</a></h3>
 <p>MCP server stderr is captured in Moltis logs:</p>
 <pre><code class="language-bash"># View gateway logs
-tail -f ~/.moltis/logs/gateway.log | grep mcp
+tail -f ~/.moltis/logs.jsonl | grep -i mcp
 </code></pre>
 <h3 id="test-locally"><a class="header" href="#test-locally">Test Locally</a></h3>
 <p>Run the server directly to debug:</p>
 <pre><code class="language-bash">echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | node server.js
 </code></pre>
+<h2 id="oauth-authentication"><a class="header" href="#oauth-authentication">OAuth Authentication</a></h2>
+<p>Remote MCP servers can require OAuth 2.1 authentication. Moltis handles this automatically — when a server returns <code>401 Unauthorized</code>, the OAuth flow starts without any manual configuration.</p>
+<h3 id="how-it-works"><a class="header" href="#how-it-works">How It Works</a></h3>
+<ol>
+<li>Moltis connects to the remote MCP server</li>
+<li>The server returns <code>401 Unauthorized</code> with a <code>WWW-Authenticate</code> header</li>
+<li>Moltis discovers the authorization server via <a href="https://www.rfc-editor.org/rfc/rfc9728">RFC 9728</a> (Protected Resource Metadata)</li>
+<li>Moltis performs <a href="https://www.rfc-editor.org/rfc/rfc7591">dynamic client registration</a> (RFC 7591)</li>
+<li>A PKCE authorization code flow opens your browser for login</li>
+<li>After login, tokens are stored and used for all subsequent requests</li>
+</ol>
+<p>Client registrations and tokens are cached locally, so you only need to log in once per server.</p>
+<h3 id="manual-oauth-configuration"><a class="header" href="#manual-oauth-configuration">Manual OAuth Configuration</a></h3>
+<p>If a server doesn’t support standard OAuth discovery, you can configure credentials manually:</p>
+<pre><code class="language-toml">[mcp.servers.private_api]
+url = "https://mcp.example.com/mcp"
+transport = "sse"
+
+[mcp.servers.private_api.oauth]
+client_id = "your-client-id"
+auth_url = "https://auth.example.com/authorize"
+token_url = "https://auth.example.com/token"
+scopes = ["mcp:read", "mcp:write"]
+</code></pre>
+<h3 id="re-authentication"><a class="header" href="#re-authentication">Re-authentication</a></h3>
+<p>If your session expires or tokens are revoked, Moltis automatically re-authenticates on the next <code>401</code> response. You can also trigger re-authentication manually via the <code>mcp.reauth</code> RPC method.</p>
 <h2 id="security-considerations"><a class="header" href="#security-considerations">Security Considerations</a></h2>
 <div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
 <div class="admonition-title">
