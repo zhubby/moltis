@@ -258,8 +258,12 @@ file, tell the user — it’s your soul, and they should know.</p>
 </blockquote>
 <p>The default soul is ~1,500 characters (~400 tokens).</p>
 <h3 id="user-profile-usermd"><a class="header" href="#user-profile-usermd">User Profile (<code>USER.md</code>)</a></h3>
-<p>Loaded from <code>~/.moltis/USER.md</code> using YAML frontmatter. Currently only the
-<code>name</code> field is injected: <em>“The user’s name is {name}.”</em></p>
+<p>Loaded from <code>~/.moltis/USER.md</code> using YAML frontmatter.</p>
+<ul>
+<li><code>name</code> is injected as: <em>“The user’s name is {name}.”</em></li>
+<li><code>timezone</code> is used by runtime context to localize <code>Host: time=...</code> and
+<code>Host: today=...</code> fields.</li>
+</ul>
 <h3 id="project-context"><a class="header" href="#project-context">Project Context</a></h3>
 <p>Resolved by <code>moltis_projects::context::load_context_files()</code>. The loader walks
 from the project directory upward to the filesystem root, collecting:</p>
@@ -273,7 +277,7 @@ from the project directory upward to the filesystem root, collecting:</p>
 project-specific instructions override workspace-level ones.</p>
 <h3 id="runtime-context"><a class="header" href="#runtime-context">Runtime Context</a></h3>
 <p>Injected as compact key=value lines under a <code>## Runtime</code> heading:</p>
-<pre><code>Host: host=moltis-devbox | os=macos | arch=aarch64 | shell=zsh | provider=openai | model=gpt-5 | session=main | sudo_non_interactive=true | timezone=Europe/Paris
+<pre><code>Host: host=moltis-devbox | os=macos | arch=aarch64 | shell=zsh | time=2026-02-17 16:18:00 CET | today=2026-02-17 | provider=openai | model=gpt-5 | session=main | sudo_non_interactive=true | timezone=Europe/Paris
 Sandbox(exec): enabled=true | mode=all | backend=docker | scope=session | image=moltis-sandbox:abc123 | workspace_mount=ro | network=disabled
 </code></pre>
 <p>When tools are included, an <strong>Execution routing</strong> block explains how <code>exec</code>
