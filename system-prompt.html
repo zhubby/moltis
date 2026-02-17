@@ -209,8 +209,7 @@ walked up the directory tree</li>
 <h3 id="base-introduction"><a class="header" href="#base-introduction">Base Introduction</a></h3>
 <p>A single sentence that sets the assistant role:</p>
 <ul>
-<li>With tools: <em>“You are a helpful assistant with access to tools for executing
-shell commands.”</em></li>
+<li>With tools: <em>“You are a helpful assistant. You can use tools when needed.”</em></li>
 <li>Without tools: <em>“You are a helpful assistant. Answer questions clearly and
 concisely.”</em></li>
 </ul>
@@ -320,7 +319,8 @@ in the prompt, followed by instructions for emitting <code>tool_call</code> JSON
 <h3 id="guidelines-and-silent-replies"><a class="header" href="#guidelines-and-silent-replies">Guidelines and Silent Replies</a></h3>
 <p>The final section contains:</p>
 <ul>
-<li>Tool usage guidelines (when to use exec, browser, etc.)</li>
+<li>Tool usage guidelines (conversation first, when to use exec/browser, <code>/sh</code>
+explicit shell prefix)</li>
 <li>A reminder not to parrot raw tool output</li>
 <li><strong>Silent reply protocol</strong>: when tool output speaks for itself, the LLM should
 return an empty response rather than acknowledging it</li>
