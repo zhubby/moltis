@@ -159,7 +159,7 @@ moltis-channels   = { path = "crates/channels" }
 moltis-common     = { path = "crates/common" }
 moltis-config     = { path = "crates/config" }
 moltis-cron       = { path = "crates/cron" }
-moltis-gateway    = { path = "crates/gateway" }
+moltis-gateway    = { default-features = false, path = "crates/gateway" }
 moltis-mcp        = { path = "crates/mcp" }
 moltis-media      = { path = "crates/media" }
 moltis-memory     = { path = "crates/memory" }

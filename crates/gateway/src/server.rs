@@ -3,14 +3,11 @@ use std::{
     fs::OpenOptions,
     io::Write,
     net::SocketAddr,
-    path::Path as FsPath,
+    path::{Path as FsPath, PathBuf},
     sync::Arc,
 };
 
 use secrecy::ExposeSecret;
-
-#[cfg(feature = "tls")]
-use std::path::PathBuf;
 
 #[cfg(feature = "web-ui")]
 use askama::Template;
@@ -1119,6 +1116,9 @@ pub async fn start_gateway(
     if no_tls {
         config.tls.enabled = false;
     }
+
+    #[cfg(feature = "web-ui")]
+    validate_web_ui_assets()?;
 
     let base_provider_config = config.providers.clone();
 
@@ -6074,48 +6074,211 @@ WORKDIR /home/sandbox\n"
     }
 }
 
-#[cfg(feature = "web-ui")]
+#[cfg(feature = "web-ui-embedded-assets")]
 static ASSETS: include_dir::Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets");
 
 // ── Asset serving: filesystem (dev) or embedded (release) ───────────────────
 
-/// Filesystem path to serve assets from, if available. Checked once at startup.
-/// Set via `MOLTIS_ASSETS_DIR` env var, or auto-detected from the crate source
-/// tree when running via `cargo run`.
 #[cfg(feature = "web-ui")]
-static FS_ASSETS_DIR: std::sync::LazyLock<Option<PathBuf>> = std::sync::LazyLock::new(|| {
-    use std::path::PathBuf;
+#[derive(Clone, Debug)]
+struct FilesystemAssets {
+    dir: PathBuf,
+    // True only for auto-detected source-tree assets used during local
+    // development (`cargo run`).
+    dev_mode: bool,
+}
 
-    // Explicit env var takes precedence
-    if let Ok(dir) = std::env::var("MOLTIS_ASSETS_DIR") {
-        let p = PathBuf::from(dir);
-        if p.is_dir() {
-            info!("Serving assets from filesystem: {}", p.display());
-            return Some(p);
+/// Filesystem path to serve assets from, if available. Checked once at startup.
+/// Set via `MOLTIS_ASSETS_DIR` env var, then `MOLTIS_DEFAULT_ASSETS_DIR` build
+/// variable, or auto-detected from the crate source tree when running via
+/// `cargo run`.
+#[cfg(feature = "web-ui")]
+static FS_ASSETS_DIR: std::sync::LazyLock<Option<FilesystemAssets>> = std::sync::LazyLock::new(
+    || {
+        use std::path::PathBuf;
+
+        // Explicit env var takes precedence
+        if let Ok(dir) = std::env::var("MOLTIS_ASSETS_DIR") {
+            let trimmed = dir.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if p.is_dir() {
+                    info!(
+                        "Serving assets from filesystem (MOLTIS_ASSETS_DIR): {}",
+                        p.display()
+                    );
+                    return Some(FilesystemAssets {
+                        dir: p,
+                        dev_mode: false,
+                    });
+                }
+                warn!(
+                    path = %p.display(),
+                    "MOLTIS_ASSETS_DIR does not exist or is not a directory"
+                );
+            }
         }
-    }
 
-    // Auto-detect: works when running from the repo via `cargo run`
-    let cargo_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/assets");
-    if cargo_dir.is_dir() {
-        info!("Serving assets from filesystem: {}", cargo_dir.display());
-        return Some(cargo_dir);
-    }
+        if let Some(dir) = option_env!("MOLTIS_DEFAULT_ASSETS_DIR") {
+            let trimmed = dir.trim();
+            if !trimmed.is_empty() {
+                let p = PathBuf::from(trimmed);
+                if p.is_dir() {
+                    info!(
+                        "Serving assets from filesystem (MOLTIS_DEFAULT_ASSETS_DIR): {}",
+                        p.display()
+                    );
+                    return Some(FilesystemAssets {
+                        dir: p,
+                        dev_mode: false,
+                    });
+                }
+                warn!(
+                    path = %p.display(),
+                    "compiled MOLTIS_DEFAULT_ASSETS_DIR does not exist or is not a directory"
+                );
+            }
+        }
 
-    info!("Serving assets from embedded binary");
-    None
-});
+        // Auto-detect: works when running from the repo via `cargo run`
+        let cargo_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/assets");
+        if cargo_dir.is_dir() {
+            info!("Serving assets from filesystem: {}", cargo_dir.display());
+            return Some(FilesystemAssets {
+                dir: cargo_dir,
+                dev_mode: true,
+            });
+        }
+
+        #[cfg(feature = "web-ui-embedded-assets")]
+        info!("Serving assets from embedded binary");
+
+        #[cfg(not(feature = "web-ui-embedded-assets"))]
+        warn!(
+            "No assets directory found and embedded assets are disabled; set MOLTIS_ASSETS_DIR or build with MOLTIS_DEFAULT_ASSETS_DIR"
+        );
+
+        None
+    },
+);
 
 /// Whether we're serving from the filesystem (dev mode) or embedded (release).
 #[cfg(feature = "web-ui")]
 fn is_dev_assets() -> bool {
-    FS_ASSETS_DIR.is_some()
+    FS_ASSETS_DIR.as_ref().is_some_and(|assets| assets.dev_mode)
 }
 
-/// Compute a short content hash of all embedded assets. Only used in release
-/// mode (embedded assets) for cache-busting versioned URLs.
+/// Compute a short content hash of all production assets. Used for immutable
+/// cache-busting versioned URLs.
 #[cfg(feature = "web-ui")]
 fn asset_content_hash() -> String {
+    if let Some(assets) = FS_ASSETS_DIR.as_ref()
+        && !assets.dev_mode
+        && let Some(hash) = hash_filesystem_assets(&assets.dir)
+    {
+        return hash;
+    }
+
+    #[cfg(feature = "web-ui-embedded-assets")]
+    {
+        embedded_asset_content_hash()
+    }
+
+    #[cfg(not(feature = "web-ui-embedded-assets"))]
+    {
+        "external-assets".to_owned()
+    }
+}
+
+#[cfg(feature = "web-ui")]
+fn hash_filesystem_assets(root: &std::path::Path) -> Option<String> {
+    use std::{collections::BTreeMap, hash::Hasher};
+
+    let mut files = BTreeMap::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                warn!(
+                    dir = %dir.display(),
+                    %error,
+                    "failed to read assets directory while hashing"
+                );
+                return None;
+            },
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    warn!(%error, "failed to iterate assets directory while hashing");
+                    return None;
+                },
+            };
+
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    warn!(
+                        path = %path.display(),
+                        %error,
+                        "failed to inspect asset entry type while hashing"
+                    );
+                    return None;
+                },
+            };
+
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let rel = match path.strip_prefix(root) {
+                Ok(rel) => rel,
+                Err(error) => {
+                    warn!(
+                        path = %path.display(),
+                        root = %root.display(),
+                        %error,
+                        "failed to compute relative asset path while hashing"
+                    );
+                    return None;
+                },
+            };
+
+            let rel_path = rel.to_string_lossy().replace('\\', "/");
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    warn!(
+                        path = %path.display(),
+                        %error,
+                        "failed to read asset file while hashing"
+                    );
+                    return None;
+                },
+            };
+            files.insert(rel_path, bytes);
+        }
+    }
+
+    let mut h = std::hash::DefaultHasher::new();
+    for (path, contents) in files {
+        h.write(path.as_bytes());
+        h.write(&contents);
+    }
+    Some(format!("{:016x}", h.finish()))
+}
+
+#[cfg(all(feature = "web-ui", feature = "web-ui-embedded-assets"))]
+fn embedded_asset_content_hash() -> String {
     use std::{collections::BTreeMap, hash::Hasher};
 
     let mut files = BTreeMap::new();
@@ -6154,19 +6317,107 @@ fn mime_for_path(path: &str) -> &'static str {
     }
 }
 
+#[cfg(feature = "web-ui")]
+fn sanitize_asset_path(path: &str) -> Option<String> {
+    use std::path::Component;
+
+    let mut normalized = PathBuf::new();
+    for component in std::path::Path::new(path).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {},
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+
+    let normalized = normalized.to_string_lossy().replace('\\', "/");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
 /// Read an asset file, preferring filesystem over embedded.
 #[cfg(feature = "web-ui")]
 fn read_asset(path: &str) -> Option<Vec<u8>> {
+    let path = sanitize_asset_path(path)?;
+
     if let Some(dir) = FS_ASSETS_DIR.as_ref() {
-        let file_path = dir.join(path);
-        // Prevent path traversal
-        if file_path.starts_with(dir)
-            && let Ok(bytes) = std::fs::read(&file_path)
-        {
+        let file_path = dir.dir.join(&path);
+        if let Ok(bytes) = std::fs::read(&file_path) {
             return Some(bytes);
         }
     }
-    ASSETS.get_file(path).map(|f| f.contents().to_vec())
+
+    #[cfg(feature = "web-ui-embedded-assets")]
+    {
+        ASSETS.get_file(&path).map(|f| f.contents().to_vec())
+    }
+
+    #[cfg(not(feature = "web-ui-embedded-assets"))]
+    {
+        None
+    }
+}
+
+#[cfg(feature = "web-ui")]
+fn validate_web_ui_assets() -> anyhow::Result<()> {
+    const REQUIRED: &[&str] = &[
+        "style.css",
+        "js/app.js",
+        "js/onboarding-app.js",
+        "manifest.json",
+        "sw.js",
+    ];
+
+    let Some(assets) = FS_ASSETS_DIR.as_ref() else {
+        #[cfg(feature = "web-ui-embedded-assets")]
+        {
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "web-ui-embedded-assets"))]
+        {
+            let compiled_default = option_env!("MOLTIS_DEFAULT_ASSETS_DIR").unwrap_or("<unset>");
+            anyhow::bail!(
+                "Moltis was built without embedded web assets, but no assets directory was found. \
+Set MOLTIS_ASSETS_DIR or build with MOLTIS_DEFAULT_ASSETS_DIR. \
+Compiled default: {compiled_default}"
+            );
+        }
+    };
+
+    let missing: Vec<&str> = REQUIRED
+        .iter()
+        .copied()
+        .filter(|rel| !assets.dir.join(rel).is_file())
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    #[cfg(feature = "web-ui-embedded-assets")]
+    {
+        warn!(
+            assets_dir = %assets.dir.display(),
+            missing = ?missing,
+            "filesystem assets are incomplete, falling back to embedded assets where available"
+        );
+        Ok(())
+    }
+
+    #[cfg(not(feature = "web-ui-embedded-assets"))]
+    {
+        let compiled_default = option_env!("MOLTIS_DEFAULT_ASSETS_DIR").unwrap_or("<unset>");
+        anyhow::bail!(
+            "Moltis was built without embedded web assets, and the filesystem assets directory is incomplete. \
+Missing: {}. Assets dir: {}. Compiled default: {compiled_default}",
+            missing.join(", "),
+            assets.dir.display(),
+        );
+    }
 }
 
 /// Versioned assets: `/assets/v/<hash>/path` — immutable, cached forever.
@@ -7027,6 +7278,26 @@ mod tests {
             .get("x-content-type-options")
             .and_then(|v| v.to_str().ok());
         assert_eq!(nosniff, Some("nosniff"));
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn sanitize_asset_path_rejects_parent_traversal() {
+        assert_eq!(sanitize_asset_path("../secrets.txt"), None);
+        assert_eq!(sanitize_asset_path("js/../../secrets.txt"), None);
+    }
+
+    #[cfg(feature = "web-ui")]
+    #[test]
+    fn sanitize_asset_path_normalizes_paths() {
+        assert_eq!(
+            sanitize_asset_path("./js/app.js"),
+            Some("js/app.js".to_owned())
+        );
+        assert_eq!(
+            sanitize_asset_path("icons/icon-96.png"),
+            Some("icons/icon-96.png".to_owned())
+        );
     }
 
     #[cfg(feature = "web-ui")]

@@ -21,7 +21,9 @@ class Moltis < Formula
   end
 
   def install
-    bin.install "moltis"
+    libexec.install "moltis"
+    pkgshare.install "assets"
+    (bin/"moltis").write_env_script libexec/"moltis", MOLTIS_ASSETS_DIR: "#{pkgshare}/assets"
   end
 
   test do

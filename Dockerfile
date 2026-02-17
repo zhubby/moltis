@@ -25,8 +25,10 @@ RUN apt-get update -qq && \
     apt-get install -yqq --no-install-recommends cmake build-essential libclang-dev pkg-config git && \
     rm -rf /var/lib/apt/lists/*
 
-# Build release binary
-RUN cargo build --release
+# Build release binary without embedded web assets.
+# Runtime assets are copied into /usr/share/moltis/assets in the final image.
+ENV MOLTIS_DEFAULT_ASSETS_DIR=/usr/share/moltis/assets
+RUN cargo build --release -p moltis --no-default-features --features "file-watcher,local-llm,metrics,prometheus,push-notifications,qmd,tailscale,tls,voice,web-ui"
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -56,6 +58,7 @@ RUN useradd --create-home --user-group moltis && \
 
 # Copy binary from builder
 COPY --from=builder /build/target/release/moltis /usr/local/bin/moltis
+COPY --from=builder /build/crates/gateway/src/assets /usr/share/moltis/assets
 
 # Create config and data directories
 RUN mkdir -p /home/moltis/.config/moltis /home/moltis/.moltis && \

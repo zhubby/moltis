@@ -240,7 +240,8 @@ jobs:
       - name: Build release binary
         env:
           BUILD_TARGET: ${{ matrix.target }}
-        run: cargo build --release --target "$BUILD_TARGET"
+          MOLTIS_DEFAULT_ASSETS_DIR: /usr/share/moltis/assets
+        run: cargo build --release --target "$BUILD_TARGET" -p moltis --no-default-features --features "file-watcher,local-llm,metrics,prometheus,push-notifications,qmd,tailscale,tls,voice,web-ui"
 
       - name: Build .deb package
         env:
@@ -336,7 +337,8 @@ jobs:
       - name: Build release binary
         env:
           BUILD_TARGET: ${{ matrix.target }}
-        run: cargo build --release --target "$BUILD_TARGET"
+          MOLTIS_DEFAULT_ASSETS_DIR: /usr/share/moltis/assets
+        run: cargo build --release --target "$BUILD_TARGET" -p moltis --no-default-features --features "file-watcher,local-llm,metrics,prometheus,push-notifications,qmd,tailscale,tls,voice,web-ui"
 
       - name: Build .rpm package
         env:
@@ -648,7 +650,7 @@ jobs:
       - name: Build release binary
         env:
           BUILD_TARGET: ${{ matrix.target }}
-        run: cargo build --release --target "$BUILD_TARGET"
+        run: cargo build --release --target "$BUILD_TARGET" -p moltis --no-default-features --features "file-watcher,local-llm,metrics,prometheus,push-notifications,qmd,tailscale,tls,voice,web-ui"
 
       - name: Determine package version
         id: version
@@ -665,8 +667,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_TARGET: ${{ matrix.target }}
         run: |
-          cp "target/$BUILD_TARGET/release/moltis" moltis
-          tar czf "moltis-${VERSION}-${BUILD_TARGET}.tar.gz" moltis
+          mkdir -p package
+          cp "target/$BUILD_TARGET/release/moltis" package/moltis
+          cp -R crates/gateway/src/assets package/assets
+          tar czf "moltis-${VERSION}-${BUILD_TARGET}.tar.gz" -C package moltis assets
 
       - name: Sign with Sigstore and generate checksums
         uses: ./.github/actions/sign-artifacts
@@ -1132,7 +1136,9 @@ jobs:
             end
 
             def install
-              bin.install "moltis"
+              libexec.install "moltis"
+              pkgshare.install "assets"
+              (bin/"moltis").write_env_script libexec/"moltis", MOLTIS_ASSETS_DIR: "#{pkgshare}/assets"
             end
 
             test do

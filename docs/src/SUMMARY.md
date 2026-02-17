@@ -44,6 +44,7 @@
 
 - [Docker](docker.md)
 - [Cloud Deploy](cloud-deploy.md)
+- [Web UI Assets](web-ui-assets.md)
 
 ---
 

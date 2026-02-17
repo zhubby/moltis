@@ -9,7 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Gateway build split for web UI assets: `web-ui` now controls UI routes/templates
+  while new `web-ui-embedded-assets` controls `include_dir!` embedding. Binaries
+  can now serve assets from filesystem paths (`MOLTIS_ASSETS_DIR`) or a compiled
+  default (`MOLTIS_DEFAULT_ASSETS_DIR`) without embedding static assets.
+
 ### Changed
+
+- Docker and packaging workflows now support externalized web assets for distro
+  artifacts (Homebrew/deb/rpm), installing `crates/gateway/src/assets` alongside
+  the binary and wiring runtime asset paths.
 
 ### Deprecated
 

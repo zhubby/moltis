@@ -5518,6 +5518,18 @@ struct TtsConvertResponse {
     mime_type: Option<String>,
 }
 
+fn sanitize_text_for_tts(text: &str) -> std::borrow::Cow<'_, str> {
+    #[cfg(feature = "voice")]
+    {
+        moltis_voice::tts::sanitize_text_for_tts(text)
+    }
+
+    #[cfg(not(feature = "voice"))]
+    {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Generate TTS audio bytes for a web UI response.
 ///
 /// Uses the session-level TTS override if configured, otherwise the global TTS
@@ -5543,7 +5555,7 @@ async fn generate_tts_audio(
     }
 
     // Layer 2: strip markdown/URLs the LLM may have included despite the prompt.
-    let text = moltis_voice::tts::sanitize_text_for_tts(text);
+    let text = sanitize_text_for_tts(text);
     let text = text.trim();
     if text.is_empty() {
         return Err("response has no speakable text".to_string());
@@ -5599,7 +5611,7 @@ async fn build_tts_payload(
 
     // Strip markdown/URLs the LLM may have included — use sanitized text
     // only for TTS conversion, but keep the original for the caption.
-    let sanitized = moltis_voice::tts::sanitize_text_for_tts(text);
+    let sanitized = sanitize_text_for_tts(text);
 
     let channel_key = format!("{}:{}", target.channel_type.as_str(), target.account_id);
     let (channel_override, session_override) = {
@@ -5612,7 +5624,7 @@ async fn build_tts_payload(
     let resolved = channel_override.or(session_override);
 
     let request = TtsConvertRequest {
-        text: &sanitized,
+        text: sanitized.as_ref(),
         format: "ogg",
         provider: resolved.as_ref().and_then(|o| o.provider.clone()),
         voice_id: resolved.as_ref().and_then(|o| o.voice_id.clone()),

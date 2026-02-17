@@ -89,7 +89,7 @@ default = [
   "tailscale",
   "tls",
   "voice",
-  "web-ui",
+  "web-ui-embedded-assets",
 ]
 file-watcher = ["moltis-memory/file-watcher", "moltis-skills/file-watcher"]
 local-embeddings = ["moltis-memory/local-embeddings"]
@@ -110,7 +110,8 @@ tls = [
   "dep:tokio-rustls",
 ]
 voice = ["dep:moltis-voice"]
-web-ui = ["dep:askama", "dep:chrono", "dep:include_dir"]
+web-ui = ["dep:askama", "dep:chrono"]
+web-ui-embedded-assets = ["dep:include_dir", "web-ui"]
 
 [dev-dependencies]
 reqwest           = { workspace = true }

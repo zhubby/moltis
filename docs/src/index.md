@@ -8,7 +8,7 @@ Running an AI assistant on your own machine or server is still new territory. Tr
 <strong style="font-size: 1.2em;">A personal AI gateway written in Rust.<br>One binary, no runtime, no npm.</strong>
 </div>
 
-Moltis compiles your entire AI gateway — web UI, LLM providers, tools, and all assets — into a single self-contained executable. There's no Node.js to babysit, no `node_modules` to sync, no V8 garbage collector introducing latency spikes.
+By default, Moltis compiles your entire AI gateway, web UI, LLM providers, tools, and static assets into a single self-contained executable. There's no Node.js to babysit, no `node_modules` to sync, no V8 garbage collector introducing latency spikes. For distro-style external asset layouts, see [Web UI Assets](web-ui-assets.md).
 
 ```bash
 # Quick install (macOS / Linux)

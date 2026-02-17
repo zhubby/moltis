@@ -13,20 +13,34 @@ pkg-fmt = "tgz"
 pkg-url = "{ repo }/releases/download/v{ version }/moltis-{ version }-{ target }.tar.gz"
 
 [package.metadata.deb]
-assets     = [["target/release/moltis", "usr/bin/", "755"]]
-copyright  = "2025, Moltis Contributors"
-depends    = "$auto"
+assets = [
+  [
+    "target/release/moltis",
+    "usr/bin/",
+    "755",
+  ],
+  [
+    "crates/gateway/src/assets",
+    "usr/share/moltis/assets",
+    "644",
+  ],
+]
+copyright = "2025, Moltis Contributors"
+depends = "$auto"
 maintainer = "Moltis Contributors"
-name       = "moltis"
-priority   = "optional"
-section    = "net"
+name = "moltis"
+priority = "optional"
+section = "net"
 
 [package.metadata.generate-rpm]
-assets  = [{ dest = "/usr/bin/moltis", mode = "0755", source = "target/release/moltis" }]
+assets = [
+  { dest = "/usr/bin/moltis", mode = "0755", source = "target/release/moltis" },
+  { dest = "/usr/share/moltis/assets", mode = "0644", source = "crates/gateway/src/assets" },
+]
 license = "MIT"
-name    = "moltis"
+name = "moltis"
 summary = "Personal AI gateway inspired by OpenClaw"
-url     = "https://www.moltis.org/"
+url = "https://www.moltis.org/"
 
 [[bin]]
 name = "moltis"
@@ -65,11 +79,32 @@ which              = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default            = ["push-notifications", "tailscale", "tls", "voice"]
+default = [
+  "file-watcher",
+  "local-llm",
+  "metrics",
+  "prometheus",
+  "push-notifications",
+  "qmd",
+  "tailscale",
+  "tls",
+  "voice",
+  "web-ui",
+  "web-ui-embedded-assets",
+]
+file-watcher = ["moltis-gateway/file-watcher"]
+local-llm = ["moltis-gateway/local-llm"]
+local-llm-cuda = ["moltis-gateway/local-llm-cuda"]
+local-llm-metal = ["moltis-gateway/local-llm-metal"]
+metrics = ["moltis-gateway/metrics"]
+prometheus = ["moltis-gateway/prometheus"]
 push-notifications = ["moltis-gateway/push-notifications"]
-tailscale          = ["moltis-gateway/tailscale"]
-tls                = ["moltis-gateway/tls"]
-voice              = ["moltis-gateway/voice"]
+qmd = ["moltis-gateway/qmd"]
+tailscale = ["moltis-gateway/tailscale"]
+tls = ["moltis-gateway/tls"]
+voice = ["moltis-gateway/voice"]
+web-ui = ["moltis-gateway/web-ui"]
+web-ui-embedded-assets = ["moltis-gateway/web-ui-embedded-assets"]
 
 [lints]
 workspace = true

@@ -132,13 +132,13 @@ Push notifications are controlled by the `push-notifications` feature flag, whic
 ```toml
 # In your Cargo.toml or when building
 [dependencies]
-moltis-gateway = { default-features = false, features = ["web-ui", "tls"] }
+moltis-gateway = { default-features = false, features = ["web-ui", "web-ui-embedded-assets", "tls"] }
 ```
 
 Or build without the feature:
 
 ```bash
-cargo build --no-default-features --features web-ui,tls,tailscale,file-watcher
+cargo build --no-default-features --features web-ui,web-ui-embedded-assets,tls,tailscale,file-watcher
 ```
 
 ### Data Storage

@@ -110,6 +110,18 @@ fn message_text(msg: &Value) -> Option<String> {
     }
 }
 
+fn sanitize_text_for_tts(text: &str) -> std::borrow::Cow<'_, str> {
+    #[cfg(feature = "voice")]
+    {
+        moltis_voice::tts::sanitize_text_for_tts(text)
+    }
+
+    #[cfg(not(feature = "voice"))]
+    {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 /// Truncate a string to `max` chars, appending "…" if truncated.
 fn truncate_preview(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -1095,9 +1107,7 @@ impl SessionService for LiveSessionService {
 
         let text = message_text(target_msg)
             .ok_or_else(|| "assistant message has no text content to synthesize".to_string())?;
-        let sanitized = moltis_voice::tts::sanitize_text_for_tts(&text)
-            .trim()
-            .to_string();
+        let sanitized = sanitize_text_for_tts(&text).trim().to_string();
         if sanitized.is_empty() {
             return Err("assistant message has no speakable text for TTS".to_string());
         }

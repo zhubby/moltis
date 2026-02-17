@@ -4,6 +4,10 @@ Moltis is available as a multi-architecture Docker image supporting both
 `linux/amd64` and `linux/arm64`. The image is published to GitHub Container
 Registry on every release.
 
+```admonish info title="Web UI assets in Docker"
+Official images use filesystem assets in `/usr/share/moltis/assets` rather than embedding static assets in the binary. See [Web UI Assets](web-ui-assets.md) for build and packaging details.
+```
+
 ## Quick Start
 
 ```bash
@@ -170,6 +174,7 @@ sudo systemctl enable --now podman.socket
 |----------|-------------|
 | `MOLTIS_CONFIG_DIR` | Override config directory (default: `~/.config/moltis`) |
 | `MOLTIS_DATA_DIR` | Override data directory (default: `~/.moltis`) |
+| `MOLTIS_ASSETS_DIR` | Override web UI assets directory (optional in official images) |
 
 Example:
 
