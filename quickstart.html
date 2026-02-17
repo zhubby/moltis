@@ -250,8 +250,8 @@ def is_prime(n):
 <h3 id="add-mcp-servers"><a class="header" href="#add-mcp-servers">Add MCP Servers</a></h3>
 <p>Extend capabilities with <a href="mcp.html">MCP servers</a>:</p>
 <pre><code class="language-toml"># In moltis.toml
-[[mcp.servers]]
-name = "github"
+[mcp]
+[mcp.servers.github]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
@@ -260,7 +260,8 @@ env = { GITHUB_TOKEN = "ghp_..." }
 <p>Enable long-term memory for context across sessions:</p>
 <pre><code class="language-toml"># In moltis.toml
 [memory]
-enabled = true
+provider = "openai"
+model = "text-embedding-3-small"
 </code></pre>
 <p>Add knowledge by placing Markdown files in <code>~/.moltis/memory/</code>.</p>
 <h2 id="useful-commands"><a class="header" href="#useful-commands">Useful Commands</a></h2>

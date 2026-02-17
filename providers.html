@@ -213,17 +213,14 @@ Configure providers through the web UI or directly in configuration files.</p>
 </code></pre>
 <p>Enable providers in <code>moltis.toml</code>:</p>
 <pre><code class="language-toml">[providers]
-default = "openai-codex"
+offered = ["openai-codex", "github-copilot", "local-llm"]
 
-[providers.openai-codex]
+[providers.local-llm]
 enabled = true
+models = ["qwen2.5-coder-7b-q4_k_m"]
 
-[providers.github-copilot]
-enabled = true
-
-[providers.local]
-enabled = true
-model = "qwen2.5-coder-7b-q4_k_m"
+[chat]
+priority_models = ["gpt-5.2"]
 </code></pre>
 <h2 id="provider-setup"><a class="header" href="#provider-setup">Provider Setup</a></h2>
 <h3 id="openai-codex"><a class="header" href="#openai-codex">OpenAI Codex</a></h3>
@@ -262,7 +259,8 @@ model = "qwen2.5-coder-7b-q4_k_m"
 <ul>
 <li><strong>Per session</strong>: Use the model selector in the chat UI.</li>
 <li><strong>Per message</strong>: Use <code>/model &lt;name&gt;</code> in chat.</li>
-<li><strong>Global default</strong>: Set <code>[providers].default</code> and <code>[agent].model</code> in <code>moltis.toml</code>.</li>
+<li><strong>Global defaults</strong>: Use <code>[providers].offered</code>, provider <code>models = [...]</code>, and
+<code>[chat].priority_models</code> in <code>moltis.toml</code>.</li>
 </ul>
 <h2 id="troubleshooting"><a class="header" href="#troubleshooting">Troubleshooting</a></h2>
 <h3 id="model-not-available"><a class="header" href="#model-not-available">“Model not available”</a></h3>

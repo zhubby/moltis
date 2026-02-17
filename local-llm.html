@@ -240,22 +240,27 @@ in the UI.</p>
 <li>Click <strong>Configure</strong> — the model will download automatically</li>
 </ol>
 <h3 id="via-configuration-file"><a class="header" href="#via-configuration-file">Via Configuration File</a></h3>
-<p>Add to <code>~/.moltis/moltis.toml</code>:</p>
-<pre><code class="language-toml">[providers.local]
-model = "qwen2.5-coder-7b-q4_k_m"
+<p>Add to <code>~/.config/moltis/moltis.toml</code>:</p>
+<pre><code class="language-toml">[providers.local-llm]
+models = ["qwen2.5-coder-7b-q4_k_m"]
 </code></pre>
 <p>For custom GGUF files:</p>
-<pre><code class="language-toml">[providers.local]
-model = "my-custom-model"
-model_path = "/path/to/model.gguf"
+<pre><code class="language-json">{
+  "models": [
+    {
+      "model_id": "my-custom-model",
+      "model_path": "/path/to/model.gguf",
+      "gpu_layers": 99,
+      "backend": "GGUF"
+    }
+  ]
+}
 </code></pre>
+<p>Save this as <code>~/.config/moltis/local-llm.json</code> (the same file managed by the
+Settings UI).</p>
 <h2 id="model-storage"><a class="header" href="#model-storage">Model Storage</a></h2>
 <p>Downloaded models are cached in <code>~/.cache/moltis/models/</code> by default. This
 directory can grow large (several GB per model).</p>
-<p>To change the cache location:</p>
-<pre><code class="language-toml">[providers.local]
-cache_dir = "/custom/models/path"
-</code></pre>
 <h2 id="huggingface-integration"><a class="header" href="#huggingface-integration">HuggingFace Integration</a></h2>
 <p>You can search and download models directly from HuggingFace:</p>
 <ol>
@@ -282,8 +287,15 @@ cache_dir = "/custom/models/path"
 <h3 id="metal-macos"><a class="header" href="#metal-macos">Metal (macOS)</a></h3>
 <p>Metal acceleration is enabled by default on macOS. The number of GPU layers
 can be configured:</p>
-<pre><code class="language-toml">[providers.local]
-gpu_layers = 99  # Offload all layers to GPU
+<pre><code class="language-json">{
+  "models": [
+    {
+      "model_id": "qwen2.5-coder-7b-q4_k_m",
+      "gpu_layers": 99,
+      "backend": "GGUF"
+    }
+  ]
+}
 </code></pre>
 <h3 id="cuda-nvidia"><a class="header" href="#cuda-nvidia">CUDA (NVIDIA)</a></h3>
 <p>Requires building with the <code>local-llm-cuda</code> feature:</p>
@@ -331,7 +343,7 @@ possible.</p>
 <ul>
 <li>Enable GPU acceleration (Metal on macOS, CUDA on Linux)</li>
 <li>Try a smaller/more quantized model</li>
-<li>Reduce context size in config</li>
+<li>Reduce prompt/context length</li>
 </ul>
 <h3 id="out-of-memory"><a class="header" href="#out-of-memory">Out of memory</a></h3>
 <ul>

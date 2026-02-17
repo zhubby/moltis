@@ -193,39 +193,46 @@
 </tbody></table>
 </div>
 <h2 id="basic-settings"><a class="header" href="#basic-settings">Basic Settings</a></h2>
-<pre><code class="language-toml">[gateway]
+<pre><code class="language-toml">[server]
 port = 13131                    # HTTP/WebSocket port
-host = "0.0.0.0"               # Listen address
+bind = "0.0.0.0"               # Listen address
 
-[agent]
+[identity]
 name = "Moltis"                 # Agent display name
-model = "gpt-5.2-codex"         # Default model
-timeout = 600                   # Agent run timeout (seconds)
-max_iterations = 25             # Max tool call iterations per run
+
+[tools]
+agent_timeout_secs = 600        # Agent run timeout (seconds, 0 = no timeout)
+agent_max_iterations = 25       # Max tool call iterations per run
 </code></pre>
 <h2 id="llm-providers"><a class="header" href="#llm-providers">LLM Providers</a></h2>
 <p>Provider API keys are stored separately in <code>~/.config/moltis/provider_keys.json</code> for security. Configure them through the web UI or directly in the JSON file.</p>
 <pre><code class="language-toml">[providers]
-default = "openai-codex"        # Default provider
+offered = ["openai", "anthropic", "local-llm"]
 
-[providers.openai-codex]
+[providers.openai]
+enabled = true
+models = ["gpt-5.3", "gpt-5.2"]
+
+[providers.anthropic]
 enabled = true
 
-[providers.github-copilot]
+[providers.local-llm]
 enabled = true
+models = ["qwen2.5-coder-7b-q4_k_m"]
 
-[providers.local]
-enabled = true
-model = "qwen2.5-coder-7b-q4_k_m"
+[chat]
+priority_models = ["gpt-5.2"]
 </code></pre>
 <p>See <a href="providers.html">Providers</a> for detailed provider configuration.</p>
 <p><em>More providers are coming soon.</em></p>
 <h2 id="sandbox-configuration"><a class="header" href="#sandbox-configuration">Sandbox Configuration</a></h2>
 <p>Commands run inside isolated containers for security:</p>
 <pre><code class="language-toml">[tools.exec.sandbox]
-enabled = true
-backend = "docker"              # "docker" or "apple" (macOS 15+)
-base_image = "ubuntu:25.10"
+mode = "all"                    # "off", "non-main", or "all"
+scope = "session"               # "command", "session", or "global"
+workspace_mount = "ro"          # "ro", "rw", or "none"
+backend = "auto"                # "auto", "docker", or "apple-container"
+no_network = true
 
 # Packages installed in the sandbox image
 packages = [
@@ -262,24 +269,18 @@ message_queue_mode = "followup"  # Default: one-by-one replay
 <h2 id="memory-system"><a class="header" href="#memory-system">Memory System</a></h2>
 <p>Long-term memory uses embeddings for semantic search:</p>
 <pre><code class="language-toml">[memory]
-enabled = true
-embedding_model = "text-embedding-3-small"  # OpenAI embedding model
-chunk_size = 512                # Characters per chunk
-chunk_overlap = 50              # Overlap between chunks
-
-# Directories to watch for memory files
-watch_dirs = [
-    "~/.moltis/memory",
-]
+backend = "builtin"             # Or "qmd"
+provider = "openai"             # Or "local", "ollama", "custom"
+model = "text-embedding-3-small"
+citations = "auto"              # "on", "off", or "auto"
+llm_reranking = false
+session_export = false
 </code></pre>
 <h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
 <p>Authentication is <strong>only required when accessing Moltis from a non-localhost address</strong>. When running on <code>localhost</code> or <code>127.0.0.1</code>, no authentication is needed by default.</p>
 <p>When you access Moltis from a network address (e.g., <code>http://192.168.1.100:13131</code>), a one-time setup code is printed to the terminal. Use it to set up a password or passkey.</p>
 <pre><code class="language-toml">[auth]
 disabled = false                # Set true to disable auth entirely
-
-# Session settings
-session_expiry = 604800         # Session lifetime in seconds (7 days)
 </code></pre>
 <div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
 <div class="admonition-title">
@@ -294,33 +295,33 @@ session_expiry = 604800         # Session lifetime in seconds (7 days)
 </div>
 <h2 id="hooks"><a class="header" href="#hooks">Hooks</a></h2>
 <p>Configure lifecycle hooks:</p>
-<pre><code class="language-toml">[[hooks]]
+<pre><code class="language-toml">[hooks]
+[[hooks.hooks]]
 name = "my-hook"
 command = "./hooks/my-hook.sh"
 events = ["BeforeToolCall", "AfterToolCall"]
 timeout = 5                     # Timeout in seconds
 
-[hooks.env]
+[hooks.hooks.env]
 MY_VAR = "value"               # Environment variables for the hook
 </code></pre>
 <p>See <a href="hooks.html">Hooks</a> for the full hook system documentation.</p>
 <h2 id="mcp-servers"><a class="header" href="#mcp-servers">MCP Servers</a></h2>
 <p>Connect to Model Context Protocol servers:</p>
-<pre><code class="language-toml">[[mcp.servers]]
-name = "filesystem"
+<pre><code class="language-toml">[mcp]
+
+[mcp.servers.filesystem]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
 
-[[mcp.servers]]
-name = "github"
+[mcp.servers.github]
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "ghp_..." }
 </code></pre>
 <h2 id="telegram-integration"><a class="header" href="#telegram-integration">Telegram Integration</a></h2>
-<pre><code class="language-toml">[telegram]
-enabled = true
-# Token is stored in provider_keys.json, not here
+<pre><code class="language-toml">[channels.telegram.my-bot]
+token = "123456:ABC..."
 allowed_users = [123456789]     # Telegram user IDs allowed to chat
 </code></pre>
 <h2 id="tls--https"><a class="header" href="#tls--https">TLS / HTTPS</a></h2>
@@ -331,20 +332,20 @@ key_path = "~/.config/moltis/key.pem"
 # If paths don't exist, a self-signed certificate is generated
 
 # Port for the plain-HTTP redirect / CA-download server.
-# Defaults to the gateway port + 1 when not set.
+# Defaults to the server port + 1 when not set.
 # http_redirect_port = 13132
 </code></pre>
 <p>Override via environment variable: <code>MOLTIS_TLS__HTTP_REDIRECT_PORT=8080</code>.</p>
 <h2 id="tailscale-integration"><a class="header" href="#tailscale-integration">Tailscale Integration</a></h2>
 <p>Expose Moltis over your Tailscale network:</p>
 <pre><code class="language-toml">[tailscale]
-enabled = true
-mode = "serve"                  # "serve" (private) or "funnel" (public)
+mode = "serve"                  # "off", "serve", or "funnel"
+reset_on_exit = true
 </code></pre>
 <h2 id="observability"><a class="header" href="#observability">Observability</a></h2>
-<pre><code class="language-toml">[telemetry]
+<pre><code class="language-toml">[metrics]
 enabled = true
-otlp_endpoint = "http://localhost:4317"  # OpenTelemetry collector
+prometheus_endpoint = true
 </code></pre>
 <h2 id="process-environment-variables-env"><a class="header" href="#process-environment-variables-env">Process Environment Variables (<code>[env]</code>)</a></h2>
 <p>The <code>[env]</code> section injects variables into the Moltis process at startup.
@@ -377,40 +378,48 @@ Precedence: host/<code>docker -e</code> &gt; config <code>[env]</code> &gt; Sett
 <div class="table-wrapper"><table><thead><tr><th>Variable</th><th>Description</th></tr></thead><tbody>
 <tr><td><code>MOLTIS_CONFIG_DIR</code></td><td>Configuration directory</td></tr>
 <tr><td><code>MOLTIS_DATA_DIR</code></td><td>Data directory</td></tr>
-<tr><td><code>MOLTIS_PORT</code></td><td>Gateway port</td></tr>
-<tr><td><code>MOLTIS_HOST</code></td><td>Listen address</td></tr>
+<tr><td><code>MOLTIS_SERVER__PORT</code></td><td>Server port override</td></tr>
+<tr><td><code>MOLTIS_SERVER__BIND</code></td><td>Server bind address override</td></tr>
+<tr><td><code>MOLTIS_TOOLS__AGENT_TIMEOUT_SECS</code></td><td>Agent run timeout override</td></tr>
+<tr><td><code>MOLTIS_TOOLS__AGENT_MAX_ITERATIONS</code></td><td>Agent loop iteration cap override</td></tr>
 </tbody></table>
 </div>
 <h2 id="cli-flags"><a class="header" href="#cli-flags">CLI Flags</a></h2>
 <pre><code class="language-bash">moltis --config-dir /path/to/config --data-dir /path/to/data
 </code></pre>
 <h2 id="complete-example"><a class="header" href="#complete-example">Complete Example</a></h2>
-<pre><code class="language-toml">[gateway]
+<pre><code class="language-toml">[server]
 port = 13131
-host = "0.0.0.0"
+bind = "0.0.0.0"
 
-[agent]
+[identity]
 name = "Atlas"
-model = "gpt-5.2-codex"
-timeout = 600
-max_iterations = 25
+
+[tools]
+agent_timeout_secs = 600
+agent_max_iterations = 25
 
 [providers]
-default = "openai-codex"
+offered = ["openai", "anthropic", "local-llm"]
 
 [tools.exec.sandbox]
-enabled = true
-backend = "docker"
-base_image = "ubuntu:25.10"
+mode = "all"
+scope = "session"
+workspace_mount = "ro"
+backend = "auto"
+no_network = true
 packages = ["curl", "git", "jq", "python3", "nodejs"]
 
 [memory]
-enabled = true
+backend = "builtin"
+provider = "openai"
+model = "text-embedding-3-small"
 
 [auth]
 disabled = false
 
-[[hooks]]
+[hooks]
+[[hooks.hooks]]
 name = "audit-log"
 command = "./hooks/audit.sh"
 events = ["BeforeToolCall"]
