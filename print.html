@@ -4357,6 +4357,18 @@ complete example:</p>
       - ./data:/home/moltis/.moltis
       - /var/run/docker.sock:/var/run/docker.sock
 </code></pre>
+<h3 id="coolify-hetznervps"><a class="header" href="#coolify-hetznervps">Coolify (Hetzner/VPS)</a></h3>
+<p>For Coolify service stacks, use
+<a href="../examples/docker-compose.coolify.yml"><code>examples/docker-compose.coolify.yml</code></a>.
+It is preconfigured for reverse-proxy deployments (<code>--no-tls</code>) and includes
+the Docker socket mount for sandboxed command execution.</p>
+<p>Key points:</p>
+<ul>
+<li>Set <code>MOLTIS_PASSWORD</code> in the Coolify UI before first deploy.</li>
+<li>Set <code>SERVICE_FQDN_MOLTIS_13131</code> to your app domain.</li>
+<li>Keep <code>/var/run/docker.sock:/var/run/docker.sock</code> mounted if you want sandbox
+isolation for exec tools.</li>
+</ul>
 <p>Start with:</p>
 <pre><code class="language-bash">docker compose up -d
 docker compose logs -f moltis  # watch for startup messages
@@ -4518,6 +4530,18 @@ MCP server connections.</p>
 (local-llm and Ollama) from the provider setup page since they cannot run
 on cloud VMs. The included deploy templates for Fly.io, DigitalOcean, and
 Render already set this variable.</p>
+<h2 id="coolify-self-hosted-eg-hetzner"><a class="header" href="#coolify-self-hosted-eg-hetzner">Coolify (self-hosted, e.g. Hetzner)</a></h2>
+<p>Coolify deployments can run Moltis with sandboxed exec tools, as long as the
+service mounts the host Docker socket.</p>
+<ul>
+<li>Use <a href="../examples/docker-compose.coolify.yml"><code>examples/docker-compose.coolify.yml</code></a>
+as a starting point.</li>
+<li>Run Moltis with <code>--no-tls</code> (Coolify terminates HTTPS at the proxy).</li>
+<li>Set <code>MOLTIS_BEHIND_PROXY=true</code> so client IP/auth behavior is correct behind
+reverse proxying.</li>
+<li>Mount <code>/var/run/docker.sock:/var/run/docker.sock</code> to enable container-backed
+sandbox execution.</li>
+</ul>
 <h2 id="flyio"><a class="header" href="#flyio">Fly.io</a></h2>
 <p>The repository includes a <code>fly.toml</code> ready to use.</p>
 <h3 id="quick-start-2"><a class="header" href="#quick-start-2">Quick start</a></h3>
@@ -5688,6 +5712,11 @@ tools grouped by origin.</p>
 and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>.</p>
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
+<ul>
+<li>Added <code>examples/docker-compose.coolify.yml</code> plus Docker/cloud deploy docs for
+self-hosted Coolify (e.g. Hetzner), including reverse-proxy defaults and
+Docker socket mount guidance for sandboxed exec support.</li>
+</ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <h3 id="deprecated"><a class="header" href="#deprecated">Deprecated</a></h3>
 <h3 id="removed"><a class="header" href="#removed">Removed</a></h3>

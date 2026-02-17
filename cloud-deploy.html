@@ -220,6 +220,18 @@ MCP server connections.</p>
 (local-llm and Ollama) from the provider setup page since they cannot run
 on cloud VMs. The included deploy templates for Fly.io, DigitalOcean, and
 Render already set this variable.</p>
+<h2 id="coolify-self-hosted-eg-hetzner"><a class="header" href="#coolify-self-hosted-eg-hetzner">Coolify (self-hosted, e.g. Hetzner)</a></h2>
+<p>Coolify deployments can run Moltis with sandboxed exec tools, as long as the
+service mounts the host Docker socket.</p>
+<ul>
+<li>Use <a href="../examples/docker-compose.coolify.yml"><code>examples/docker-compose.coolify.yml</code></a>
+as a starting point.</li>
+<li>Run Moltis with <code>--no-tls</code> (Coolify terminates HTTPS at the proxy).</li>
+<li>Set <code>MOLTIS_BEHIND_PROXY=true</code> so client IP/auth behavior is correct behind
+reverse proxying.</li>
+<li>Mount <code>/var/run/docker.sock:/var/run/docker.sock</code> to enable container-backed
+sandbox execution.</li>
+</ul>
 <h2 id="flyio"><a class="header" href="#flyio">Fly.io</a></h2>
 <p>The repository includes a <code>fly.toml</code> ready to use.</p>
 <h3 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h3>

@@ -282,6 +282,18 @@ complete example:</p>
       - ./data:/home/moltis/.moltis
       - /var/run/docker.sock:/var/run/docker.sock
 </code></pre>
+<h3 id="coolify-hetznervps"><a class="header" href="#coolify-hetznervps">Coolify (Hetzner/VPS)</a></h3>
+<p>For Coolify service stacks, use
+<a href="../examples/docker-compose.coolify.yml"><code>examples/docker-compose.coolify.yml</code></a>.
+It is preconfigured for reverse-proxy deployments (<code>--no-tls</code>) and includes
+the Docker socket mount for sandboxed command execution.</p>
+<p>Key points:</p>
+<ul>
+<li>Set <code>MOLTIS_PASSWORD</code> in the Coolify UI before first deploy.</li>
+<li>Set <code>SERVICE_FQDN_MOLTIS_13131</code> to your app domain.</li>
+<li>Keep <code>/var/run/docker.sock:/var/run/docker.sock</code> mounted if you want sandbox
+isolation for exec tools.</li>
+</ul>
 <p>Start with:</p>
 <pre><code class="language-bash">docker compose up -d
 docker compose logs -f moltis  # watch for startup messages
