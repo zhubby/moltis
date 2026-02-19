@@ -202,6 +202,8 @@ fn build_schema_map() -> KnownKeys {
             ("sandbox_image", Leaf),
             ("allowed_domains", Leaf),
             ("low_memory_threshold_mb", Leaf),
+            ("persist_profile", Leaf),
+            ("profile_dir", Leaf),
         ]))
     };
 
@@ -346,6 +348,7 @@ fn build_schema_map() -> KnownKeys {
                 ("port", Leaf),
                 ("http_request_logs", Leaf),
                 ("ws_request_logs", Leaf),
+                ("log_buffer_size", Leaf),
                 ("update_repository_url", Leaf),
             ])),
         ),
@@ -399,6 +402,7 @@ fn build_schema_map() -> KnownKeys {
             Struct(HashMap::from([
                 ("enabled", Leaf),
                 ("prometheus_endpoint", Leaf),
+                ("history_points", Leaf),
                 ("labels", Map(Box::new(Leaf))),
             ])),
         ),
@@ -1101,6 +1105,18 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
                 }
             }
         }
+    }
+
+    // Browser profile_dir should be an absolute path
+    if let Some(ref dir) = config.tools.browser.profile_dir
+        && !Path::new(dir).is_absolute()
+    {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "invalid-value",
+            path: "tools.browser.profile_dir".into(),
+            message: "profile_dir should be an absolute path".into(),
+        });
     }
 
     // port == 0

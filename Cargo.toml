@@ -43,7 +43,7 @@ edition      = "2024"
 license      = "MIT"
 repository   = "https://github.com/moltis-org/moltis"
 rust-version = "1.91"
-version      = "0.9.0"
+version      = "0.9.1"
 
 [workspace.dependencies]
 # Async runtime
@@ -102,6 +102,7 @@ llama-cpp-2  = "0.1"
 mockito      = "1.7"
 open         = "5.3"
 rand         = "0.9"
+regex        = "1"
 secrecy      = { features = ["serde"], version = "0.8" }
 sha2         = "0.10"
 sysinfo      = "0.34"
@@ -135,6 +136,8 @@ metrics-tracing-context     = "0.16"
 image          = { default-features = false, features = ["jpeg", "png", "webp"], version = "0.25" }
 ipnet          = "2"
 pulldown-cmark = { default-features = false, version = "0.12" }
+# Allocator
+tikv-jemallocator = "0.6"
 # Filesystem / archiving
 chrono                = "0.4"
 chrono-tz             = { features = ["serde"], version = "0.10" }
@@ -160,7 +163,7 @@ moltis-channels   = { path = "crates/channels" }
 moltis-common     = { path = "crates/common" }
 moltis-config     = { path = "crates/config" }
 moltis-cron       = { path = "crates/cron" }
-moltis-gateway    = { path = "crates/gateway" }
+moltis-gateway    = { default-features = false, path = "crates/gateway" }
 moltis-mcp        = { path = "crates/mcp" }
 moltis-media      = { path = "crates/media" }
 moltis-memory     = { path = "crates/memory" }
@@ -179,5 +182,7 @@ moltis-tools      = { path = "crates/tools" }
 moltis-voice      = { path = "crates/voice" }
 
 [profile.release]
-lto   = "thin"
-strip = true
+lto            = "thin"
+strip          = true
+panic          = "abort"
+codegen-units  = 1

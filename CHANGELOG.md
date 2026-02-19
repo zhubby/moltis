@@ -21,11 +21,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model overrides UI: route specific providers/models to different prompt
   profiles using glob patterns. Flattened `[[prompt_profiles.overrides]]` TOML
   schema (backward compatible) and new `system_prompt.config.overrides.save` RPC.
+- Event-driven heartbeat wake system: cron jobs can now trigger immediate
+  heartbeat runs via a `wakeMode` field (`"now"` or `"nextHeartbeat"`).
+- System events queue: in-memory bounded buffer that collects events (exec
+  completions, cron triggers) and drains them into the heartbeat prompt so the
+  agent sees what happened while it was idle.
+- Exec completion callback: command executions automatically enqueue a summary
+  event and wake the heartbeat, giving the agent real-time awareness of
+  background task results.
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.1] - 2026-02-19
+
+
+### Added
+
+- `lightweight` feature profile for memory-constrained devices (Raspberry Pi, etc.)
+  with only essential features: `jemalloc`, `tls`, `web-ui`.
+- jemalloc allocator behind `jemalloc` feature flag for lower memory fragmentation.
+- Configurable `history_points` (metrics) and `log_buffer_size` (server) settings
+  to tune in-memory buffer sizes.
+- Persistent browser profiles: cookies, auth state, and local storage now persist
+  across sessions by default. Disable with `persist_profile = false` in
+  `[tools.browser]`, or set a custom path with `profile_dir`. (#162)
 - Added `examples/docker-compose.coolify.yml` plus Docker/cloud deploy docs for
   self-hosted Coolify (e.g. Hetzner), including reverse-proxy defaults and
   Docker socket mount guidance for sandboxed exec support.
+- Markdown and ANSI table rendering in chat messages.
+- Provider-aware `show_map` links for multi-provider map display.
+- Session history caching with visual switch loader for faster session
+  transitions.
 
 ### Changed
+
+- MetricsHistory default reduced from 60,480 to 360 points (~170x less memory).
+- LogBuffer default reduced from 10,000 to 1,000 entries.
+- Shared `reqwest::Client` singleton in `moltis-agents` and `moltis-tools` replaces
+  per-call client creation, saving connection pools and TLS session caches.
+- WebSocket client channels changed from unbounded to bounded (512), adding
+  backpressure for slow consumers.
+- Release profile: `panic = "abort"` and `codegen-units = 1` for smaller binaries.
 
 ### Deprecated
 
@@ -43,7 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runtime prompt host metadata now prefers user/browser timezone over server
   local fallback and includes an explicit `today=YYYY-MM-DD` field so models
   can reliably reason about the user's current date.
-
 - Skills installation now supports Claude marketplace repos that define skills
   directly via `.claude-plugin/marketplace.json` `plugins[].skills[]` paths
   (for example `anthropics/skills`), including loading `SKILL.md` entries under
@@ -51,6 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web search no longer falls back to DuckDuckGo by default when search API keys
   are missing, avoiding repeated CAPTCHA failures; fallback is now opt-in via
   `tools.web.search.duckduckgo_fallback = true`.
+- Terminal: force tmux window resize on client viewport change to prevent
+  stale dimensions after reconnect.
+- Browser: profile persistence now works correctly on Apple Container
+  (macOS containerized sandbox).
+- Browser: centralized stale CDP connection detection prevents ghost browser
+  sessions from accumulating. (#172)
+- Gateway: deduplicate voice replies on Telegram channels to prevent echo
+  loops. (#173)
+- Cron job editor: fix modal default validation and form reset when switching
+  schedule type. (#181)
+- MCP: strip internal metadata from tool call arguments before forwarding to
+  MCP servers.
+- Web search: load runtime env keys and improve Brave search response
+  parsing robustness.
+- Prompt: clarify sandbox vs `data_dir` path semantics in system prompts.
+- Gateway: align `show_map` listing ratings to the right for consistent
+  layout.
 
 ### Security
 
