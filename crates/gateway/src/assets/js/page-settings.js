@@ -1374,9 +1374,16 @@ function SystemPromptSection() {
 	var [deletingProfile, setDeletingProfile] = useState(false);
 	var [settingDefault, setSettingDefault] = useState(false);
 	var [showSectionOptions, setShowSectionOptions] = useState(false);
-	var [sectionOptRuntime, setSectionOptRuntime] = useState({ include_host_fields: true, include_sandbox_fields: true, include_network_sudo_fields: true });
+	var [sectionOptRuntime, setSectionOptRuntime] = useState({
+		include_host_fields: true,
+		include_sandbox_fields: true,
+		include_network_sudo_fields: true,
+	});
 	var [sectionOptUserDetails, setSectionOptUserDetails] = useState({ mode: "name_only" });
-	var [sectionOptMemory, setSectionOptMemory] = useState({ include_memory_md_snapshot: true, force_memory_search_guidance: false });
+	var [sectionOptMemory, setSectionOptMemory] = useState({
+		include_memory_md_snapshot: true,
+		force_memory_search_guidance: false,
+	});
 	var [sectionOptDatetimeTail, setSectionOptDatetimeTail] = useState({ mode: "datetime" });
 	var [enabledSections, setEnabledSections] = useState([]);
 	var [allSectionIds, setAllSectionIds] = useState([]);
@@ -1898,7 +1905,16 @@ function SystemPromptSection() {
 				previewTimerRef.current = null;
 			}
 		};
-	}, [loadingPromptConfig, selectedProfileName, promptTemplate, promptTailTemplate, sectionOptRuntime, sectionOptUserDetails, sectionOptMemory, sectionOptDatetimeTail]);
+	}, [
+		loadingPromptConfig,
+		selectedProfileName,
+		promptTemplate,
+		promptTailTemplate,
+		sectionOptRuntime,
+		sectionOptUserDetails,
+		sectionOptMemory,
+		sectionOptDatetimeTail,
+	]);
 
 	if (loadingPromptConfig) {
 		return html`<div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
@@ -1946,7 +1962,11 @@ function SystemPromptSection() {
 				<button
 					type="button"
 					class="provider-btn provider-btn-secondary provider-btn-sm"
-					onClick=${() => { setShowCreateForm(!showCreateForm); setMsg(null); setError(null); }}
+					onClick=${() => {
+						setShowCreateForm(!showCreateForm);
+						setMsg(null);
+						setError(null);
+					}}
 				>
 					${showCreateForm ? "Cancel" : "+ New Profile"}
 				</button>
