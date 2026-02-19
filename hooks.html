@@ -489,6 +489,27 @@ moltis hooks info my-hook
 <h3 id="command-logger"><a class="header" href="#command-logger">command-logger</a></h3>
 <p>Logs all <code>Command</code> events to a JSONL file for auditing.</p>
 <h2 id="example-hooks"><a class="header" href="#example-hooks">Example Hooks</a></h2>
+<h3 id="recommended-destructive-command-guard-dcg"><a class="header" href="#recommended-destructive-command-guard-dcg">Recommended: Destructive Command Guard (dcg)</a></h3>
+<p><a href="https://github.com/Dicklesworthstone/destructive_command_guard">dcg</a> is an
+external tool that scans shell commands against 49+ destructive pattern
+categories, including heredoc/inline-script scanning, database, cloud, and
+infrastructure patterns.</p>
+<p><strong>Install:</strong></p>
+<pre><code class="language-bash">cargo install dcg
+</code></pre>
+<p><strong>Hook setup:</strong></p>
+<p>Copy the bundled hook example to your hooks directory:</p>
+<pre><code class="language-bash">cp -r examples/hooks/dcg-guard ~/.moltis/hooks/dcg-guard
+chmod +x ~/.moltis/hooks/dcg-guard/handler.sh
+</code></pre>
+<p>The hook subscribes to <code>BeforeToolCall</code>, extracts exec commands, pipes them
+through dcg, and blocks any command that dcg flags as destructive. See
+<code>examples/hooks/dcg-guard/HOOK.md</code> for details.</p>
+<blockquote>
+<p><strong>Note:</strong> dcg complements but does not replace the built-in dangerous command
+blocklist, sandbox isolation, or the approval system. Use it as an additional
+defense layer with broader pattern coverage.</p>
+</blockquote>
 <h3 id="slack-notification-on-session-end"><a class="header" href="#slack-notification-on-session-end">Slack Notification on Session End</a></h3>
 <pre><code class="language-bash">#!/bin/bash
 # slack-notify.sh

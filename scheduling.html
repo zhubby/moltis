@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Session Branching - Moltis Documentation</title>
+        <title>Scheduling (Cron Jobs) - Moltis Documentation</title>
 
 
         <!-- Custom HTML head -->
@@ -149,7 +149,7 @@
                         <a href="https://github.com/moltis-org/moltis" title="Git repository" aria-label="Git repository">
                             <i id="git-repository-button" class="fa fa-github"></i>
                         </a>
-                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/session-branching.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                        <a href="https://github.com/moltis-org/moltis/edit/main/docs/src/src/scheduling.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
                             <i id="git-edit-button" class="fa fa-edit"></i>
                         </a>
 
@@ -183,98 +183,111 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="session-branching"><a class="header" href="#session-branching">Session Branching</a></h1>
-<p>Session branching (forking) lets you create an independent copy of a
-conversation at any point. The new session diverges without affecting the
-original — useful for exploring alternative approaches, running “what if”
-scenarios, or preserving a checkpoint before a risky prompt.</p>
-<h2 id="forking-from-the-ui"><a class="header" href="#forking-from-the-ui">Forking from the UI</a></h2>
-<p>There are two ways to fork a session in the web UI:</p>
-<ul>
-<li><strong>Chat header</strong> — click the <strong>Fork</strong> button in the header bar (next to
-Delete). This is visible for every session except cron sessions.</li>
-<li><strong>Sidebar</strong> — hover over a session in the sidebar and click the fork icon
-that appears in the action buttons.</li>
-</ul>
-<p>Both create a new session that copies all messages from the current one and
-immediately switch you to it.</p>
-<p>Forked sessions appear <strong>indented</strong> under their parent in the sidebar, with a
-branch icon to distinguish them from top-level sessions. The metadata line
-shows <code>fork@N</code> where N is the message index at which the fork occurred.</p>
-<h2 id="agent-tool"><a class="header" href="#agent-tool">Agent Tool</a></h2>
-<p>The agent can also fork programmatically using the <code>branch_session</code> tool:</p>
-<pre><code class="language-json">{
-  "at_message": 5,
-  "label": "explore-alternative"
-}
-</code></pre>
-<ul>
-<li><strong><code>at_message</code></strong> — the message index to fork at (messages 0..N are copied).
-If omitted, all messages are copied.</li>
-<li><strong><code>label</code></strong> — optional human-readable label for the new session.</li>
-</ul>
-<p>The tool returns the new session key.</p>
-<h2 id="rpc-method"><a class="header" href="#rpc-method">RPC Method</a></h2>
-<p>The <code>sessions.fork</code> RPC method is the underlying mechanism:</p>
-<pre><code class="language-json">{ "key": "main", "at_message": 5, "label": "my-fork" }
-</code></pre>
-<p>On success the response payload contains <code>{ "sessionKey": "session:&lt;uuid&gt;" }</code>.</p>
-<h2 id="what-gets-inherited"><a class="header" href="#what-gets-inherited">What Gets Inherited</a></h2>
-<p>When forking, the new session inherits:</p>
-<div class="table-wrapper"><table><thead><tr><th>Inherited</th><th>Not inherited</th></tr></thead><tbody>
-<tr><td>Messages (up to fork point)</td><td>Worktree branch</td></tr>
-<tr><td>Model selection</td><td>Sandbox settings</td></tr>
-<tr><td>Project assignment</td><td>Channel binding</td></tr>
-<tr><td>MCP disabled flag</td><td></td></tr>
+                        <h1 id="scheduling-cron-jobs"><a class="header" href="#scheduling-cron-jobs">Scheduling (Cron Jobs)</a></h1>
+<p>Moltis includes a built-in cron system that lets the agent schedule and manage
+recurring tasks. Jobs can fire agent turns, send system events, or trigger
+other actions on a flexible schedule.</p>
+<h2 id="heartbeat"><a class="header" href="#heartbeat">Heartbeat</a></h2>
+<p>The <strong>heartbeat</strong> is a special system cron job (<code>__heartbeat__</code>) that runs
+periodically (default: every 15 minutes). It gives the agent an opportunity to
+check reminders, run deferred tasks, and react to events that occurred while
+the user was away.</p>
+<p>The heartbeat prompt is assembled from <code>HEARTBEAT.md</code> in the workspace data
+directory. If the file is empty and no pending events exist, the heartbeat
+turn is skipped to save tokens.</p>
+<h2 id="event-driven-heartbeat-wake"><a class="header" href="#event-driven-heartbeat-wake">Event-Driven Heartbeat Wake</a></h2>
+<p>Normally the heartbeat fires on its regular schedule. The <strong>wake</strong> system lets
+other parts of Moltis trigger an immediate heartbeat when something noteworthy
+happens, so the agent can react in near real-time.</p>
+<h3 id="wake-mode"><a class="header" href="#wake-mode">Wake Mode</a></h3>
+<p>Every cron job has a <code>wakeMode</code> field that controls whether it triggers an
+immediate heartbeat after execution:</p>
+<div class="table-wrapper"><table><thead><tr><th>Value</th><th>Behaviour</th></tr></thead><tbody>
+<tr><td><code>"nextHeartbeat"</code> (default)</td><td>No extra wake — events are picked up on the next scheduled heartbeat</td></tr>
+<tr><td><code>"now"</code></td><td>Immediately reschedules the heartbeat to run as soon as possible</td></tr>
 </tbody></table>
 </div>
-<h2 id="parent-child-relationships"><a class="header" href="#parent-child-relationships">Parent-Child Relationships</a></h2>
-<p>Fork relationships are stored directly on the <code>sessions</code> table:</p>
+<p>Set <code>wakeMode</code> when creating or updating a job through the <code>cron</code> tool:</p>
+<pre><code class="language-json">{
+  "action": "add",
+  "job": {
+    "name": "check-deploy",
+    "schedule": { "kind": "every", "every_ms": 300000 },
+    "payload": { "kind": "agentTurn", "message": "Check deploy status" },
+    "wakeMode": "now"
+  }
+}
+</code></pre>
+<p>Aliases are accepted: <code>"immediate"</code>, <code>"immediately"</code> map to <code>"now"</code>;
+<code>"next"</code>, <code>"default"</code>, <code>"next_heartbeat"</code>, <code>"next-heartbeat"</code> map to
+<code>"nextHeartbeat"</code>.</p>
+<h3 id="system-events-queue"><a class="header" href="#system-events-queue">System Events Queue</a></h3>
+<p>Moltis maintains an in-memory bounded queue of <strong>system events</strong> — short text
+summaries of things that happened (command completions, cron triggers, etc.).
+When the heartbeat fires, any pending events are drained from the queue and
+prepended to the heartbeat prompt so the agent sees what occurred.</p>
+<p>The queue holds up to 20 events. Consecutive duplicate events are
+deduplicated. Events that arrive after the buffer is full are silently dropped
+(oldest events are preserved).</p>
+<h3 id="exec-completion-events"><a class="header" href="#exec-completion-events">Exec Completion Events</a></h3>
+<p>When a background command finishes (via the <code>exec</code> tool), Moltis automatically
+enqueues a summary event with the command name, exit code, and a short preview
+of stdout/stderr. If the heartbeat is idle, it is woken immediately so the
+agent can react to the result.</p>
+<p>This means the agent learns about completed background tasks without polling
+— a long-running build or deployment that finishes while the user is away will
+surface in the next heartbeat turn.</p>
+<h2 id="schedule-types"><a class="header" href="#schedule-types">Schedule Types</a></h2>
+<p>Jobs support several schedule kinds:</p>
+<div class="table-wrapper"><table><thead><tr><th>Kind</th><th>Fields</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>every</code></td><td><code>every_ms</code></td><td>Repeat at a fixed interval (milliseconds)</td></tr>
+<tr><td><code>cron</code></td><td><code>cron_expr</code></td><td>Standard cron expression (e.g. <code>"0 */6 * * *"</code>)</td></tr>
+<tr><td><code>at</code></td><td><code>at_ms</code></td><td>Run once at a specific Unix timestamp (ms)</td></tr>
+</tbody></table>
+</div>
+<h2 id="cron-tool"><a class="header" href="#cron-tool">Cron Tool</a></h2>
+<p>The agent manages jobs through the built-in <code>cron</code> tool. Available actions:</p>
 <ul>
-<li><strong><code>parent_session_key</code></strong> — the key of the session this was forked from.</li>
-<li><strong><code>fork_point</code></strong> — the message index where the fork occurred.</li>
+<li><strong><code>add</code></strong> — Create a new job</li>
+<li><strong><code>list</code></strong> — List all jobs</li>
+<li><strong><code>update</code></strong> — Patch an existing job (name, schedule, enabled, wakeMode, etc.)</li>
+<li><strong><code>remove</code></strong> — Delete a job</li>
+<li><strong><code>runs</code></strong> — View recent execution history for a job</li>
 </ul>
-<p>These fields drive the tree rendering in the sidebar. Sessions with a parent
-appear indented under it; deeply nested forks indent further.</p>
-<div id="admonition-deleting-a-parent" class="admonition admonish-warning" role="note" aria-labelledby="admonition-deleting-a-parent-title">
-<div class="admonition-title">
-<div id="admonition-deleting-a-parent-title">
-<p>Deleting a parent</p>
+<h3 id="one-shot-jobs"><a class="header" href="#one-shot-jobs">One-Shot Jobs</a></h3>
+<p>Set <code>deleteAfterRun: true</code> to automatically remove a job after its first
+execution. Combined with the <code>at</code> schedule, this is useful for deferred
+one-time tasks (reminders, follow-ups).</p>
+<h2 id="session-targeting"><a class="header" href="#session-targeting">Session Targeting</a></h2>
+<p>Each job specifies where its agent turn runs:</p>
+<div class="table-wrapper"><table><thead><tr><th>Target</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>"main"</code></td><td>The main UI session (default)</td></tr>
+<tr><td><code>{ "channel": "&lt;name&gt;" }</code></td><td>A specific channel session</td></tr>
+</tbody></table>
 </div>
-<a class="admonition-anchor-link" href="#admonition-deleting-a-parent"></a>
+<h2 id="security"><a class="header" href="#security">Security</a></h2>
+<p>See <a href="security.html#cron-job-security">Cron Job Security</a> for rate limiting,
+sandbox isolation, and job notification details.</p>
+<h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Metric</th><th>Type</th><th>Description</th></tr></thead><tbody>
+<tr><td><code>moltis_cron_jobs_scheduled</code></td><td>Gauge</td><td>Number of scheduled jobs</td></tr>
+<tr><td><code>moltis_cron_executions_total</code></td><td>Counter</td><td>Job executions</td></tr>
+<tr><td><code>moltis_cron_execution_duration_seconds</code></td><td>Histogram</td><td>Job duration</td></tr>
+<tr><td><code>moltis_cron_errors_total</code></td><td>Counter</td><td>Failed jobs</td></tr>
+<tr><td><code>moltis_cron_stuck_jobs_cleared_total</code></td><td>Counter</td><td>Jobs exceeding 2h timeout</td></tr>
+<tr><td><code>moltis_cron_input_tokens_total</code></td><td>Counter</td><td>Input tokens from cron runs</td></tr>
+<tr><td><code>moltis_cron_output_tokens_total</code></td><td>Counter</td><td>Output tokens from cron runs</td></tr>
+</tbody></table>
 </div>
-<div>
-<p>Deleting a parent session does <strong>not</strong> cascade to its children. Child sessions
-become top-level sessions — they keep their messages and history but lose
-their visual nesting in the sidebar.</p>
-</div>
-</div>
-<h2 id="navigation-after-delete"><a class="header" href="#navigation-after-delete">Navigation After Delete</a></h2>
-<p>When you delete a forked session, the UI navigates back to its parent session.
-If the deleted session had no parent (or the parent no longer exists), it falls
-back to the next sibling or <code>main</code>.</p>
-<div id="admonition-independence" class="admonition admonish-info" role="note" aria-labelledby="admonition-independence-title">
-<div class="admonition-title">
-<div id="admonition-independence-title">
-<p>Independence</p>
-</div>
-<a class="admonition-anchor-link" href="#admonition-independence"></a>
-</div>
-<div>
-<p>A forked session is fully independent after creation. Changes to the parent
-do not propagate to the fork, and vice versa.</p>
-</div>
-</div>
-
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="session-state.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="session-branching.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="scheduling.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="skill-tools.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -284,11 +297,11 @@ do not propagate to the fork, and vice versa.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="session-state.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="session-branching.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="scheduling.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="skill-tools.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

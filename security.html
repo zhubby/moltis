@@ -221,6 +221,23 @@ approval_mode = "always"  # always require approval
 </code></pre>
 <p><strong>Recommendation</strong>: Keep <code>approval_mode = "smart"</code> (the default) for most use
 cases. Only use <code>"never"</code> in fully automated, sandboxed environments.</p>
+<h3 id="built-in-dangerous-command-blocklist"><a class="header" href="#built-in-dangerous-command-blocklist">Built-in Dangerous Command Blocklist</a></h3>
+<p>Even with <code>approval_mode = "never"</code> or <code>security_level = "full"</code>, Moltis
+maintains a safety floor: a hardcoded set of regex patterns for the most
+critical destructive commands (e.g. <code>rm -rf /</code>, <code>git reset --hard</code>,
+<code>DROP TABLE</code>, <code>mkfs</code>, <code>terraform destroy</code>). Matching commands always require
+approval regardless of configuration.</p>
+<p>Users can override specific patterns by adding matching entries to their
+<code>allowlist</code> in <code>moltis.toml</code>. The blocklist only applies to host execution;
+sandboxed commands are already isolated.</p>
+<h3 id="destructive-command-guard-dcg"><a class="header" href="#destructive-command-guard-dcg">Destructive Command Guard (dcg)</a></h3>
+<p>For broader coverage beyond the built-in blocklist, install the
+<a href="https://github.com/Dicklesworthstone/destructive_command_guard">Destructive Command Guard</a>
+(dcg) as a hook. dcg adds 49+ pattern categories including heredoc/inline-script
+scanning, database, cloud, and infrastructure patterns.</p>
+<p>See <a href="hooks.html#recommended-destructive-command-guard-dcg">Hooks: Destructive Command Guard</a>
+for setup instructions.</p>
+<p>dcg complements (does not replace) sandbox isolation and the approval system.</p>
 <h2 id="sandbox-isolation"><a class="header" href="#sandbox-isolation">Sandbox Isolation</a></h2>
 <p>Commands execute inside isolated containers (Docker or Apple Container) by
 default. This protects your host system from:</p>
