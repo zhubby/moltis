@@ -23,9 +23,13 @@ pub use {
         user_global_config_dir_if_different, user_path,
     },
     schema::{
-        AgentIdentity, AuthConfig, ChatConfig, GeoLocation, MessageQueueMode, MoltisConfig,
-        ResolvedIdentity, Timezone, UserProfile, VoiceConfig, VoiceElevenLabsConfig,
-        VoiceOpenAiConfig, VoiceSttConfig, VoiceSttProvider, VoiceTtsConfig, VoiceWhisperConfig,
+        AgentIdentity, AuthConfig, ChatConfig, GeoLocation, MemoryBootstrapSectionOptions,
+        MessageQueueMode, MoltisConfig, PromptProfileConfig, PromptProfileMatch,
+        PromptProfileOverride, PromptProfilesConfig, PromptSectionId, PromptSectionOptions,
+        ResolvedIdentity, RuntimeDatetimeTailMode, RuntimeDatetimeTailSectionOptions,
+        RuntimeSectionOptions, Timezone, UserDetailsMode, UserDetailsSectionOptions, UserProfile,
+        VoiceConfig, VoiceElevenLabsConfig, VoiceOpenAiConfig, VoiceSttConfig, VoiceSttProvider,
+        VoiceTtsConfig, VoiceWhisperConfig,
     },
     validate::{Diagnostic, Severity, ValidationResult},
 };

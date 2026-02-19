@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- System prompt profile CRUD: create, delete, and set-default profile from the
+  settings UI via new `system_prompt.config.create`, `.delete`, and
+  `.set_default` RPC methods.
+- Section Options panel in system prompt settings: toggle runtime, user details,
+  memory bootstrap, and datetime tail options per profile with live preview.
+- Enabled Sections toggle grid: enable/disable individual prompt sections per
+  profile (required sections are locked).
+- Resolved profile name now shown in the Live Preview header.
+- Template variables list is collapsible (hidden by default).
+- Model overrides UI: route specific providers/models to different prompt
+  profiles using glob patterns. Flattened `[[prompt_profiles.overrides]]` TOML
+  schema (backward compatible) and new `system_prompt.config.overrides.save` RPC.
 - Added `examples/docker-compose.coolify.yml` plus Docker/cloud deploy docs for
   self-hosted Coolify (e.g. Hetzner), including reverse-proxy defaults and
   Docker socket mount guidance for sandboxed exec support.
@@ -21,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed extra indentation in settings page for system-prompt, security,
+  tailscale, voice, notifications, and config sections.
+- Deduplicated `parse_optional_trimmed_string_param` between chat.rs and
+  methods.rs (single `pub(crate)` copy in chat.rs).
 - Onboarding identity save now captures browser timezone and persists it to
   `USER.md` via `user_timezone`, so first-run profile setup records the user's
   timezone alongside their name.

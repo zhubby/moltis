@@ -96,6 +96,7 @@ const READ_METHODS: &[&str] = &[
     "voice.config.voxtral_requirements",
     "voice.providers.all",
     "voice.elevenlabs.catalog",
+    "system_prompt.config.get",
     "memory.status",
     "memory.config.get",
     "memory.qmd.status",
@@ -182,6 +183,11 @@ const WRITE_METHODS: &[&str] = &[
     "voice.override.session.clear",
     "voice.override.channel.set",
     "voice.override.channel.clear",
+    "system_prompt.config.update",
+    "system_prompt.config.create",
+    "system_prompt.config.delete",
+    "system_prompt.config.set_default",
+    "system_prompt.config.overrides.save",
     "memory.config.update",
     "hooks.enable",
     "hooks.disable",
@@ -221,6 +227,112 @@ fn model_probe_params(provider: Option<&str>) -> serde_json::Value {
         params["provider"] = serde_json::json!(provider);
     }
     params
+}
+
+use crate::chat::parse_optional_trimmed_string_param as parse_optional_trimmed_string_field;
+
+/// Apply section_options fields from a JSON object to the given options struct.
+pub(crate) fn apply_section_options(
+    options: &mut moltis_config::PromptSectionOptions,
+    value: &serde_json::Value,
+) {
+    if let Some(runtime) = value.get("runtime") {
+        if let Some(v) = runtime.get("include_host_fields").and_then(|v| v.as_bool()) {
+            options.runtime.include_host_fields = v;
+        }
+        if let Some(v) = runtime
+            .get("include_sandbox_fields")
+            .and_then(|v| v.as_bool())
+        {
+            options.runtime.include_sandbox_fields = v;
+        }
+        if let Some(v) = runtime
+            .get("include_network_sudo_fields")
+            .and_then(|v| v.as_bool())
+        {
+            options.runtime.include_network_sudo_fields = v;
+        }
+    }
+    if let Some(user_details) = value.get("user_details")
+        && let Some(mode_str) = user_details.get("mode").and_then(|v| v.as_str())
+    {
+        match mode_str {
+            "name_only" => options.user_details.mode = moltis_config::UserDetailsMode::NameOnly,
+            "full_profile" => {
+                options.user_details.mode = moltis_config::UserDetailsMode::FullProfile;
+            },
+            _ => {},
+        }
+    }
+    if let Some(memory) = value.get("memory_bootstrap") {
+        if let Some(v) = memory
+            .get("include_memory_md_snapshot")
+            .and_then(|v| v.as_bool())
+        {
+            options.memory_bootstrap.include_memory_md_snapshot = v;
+        }
+        if let Some(v) = memory
+            .get("force_memory_search_guidance")
+            .and_then(|v| v.as_bool())
+        {
+            options.memory_bootstrap.force_memory_search_guidance = v;
+        }
+    }
+    if let Some(tail) = value.get("runtime_datetime_tail")
+        && let Some(mode_str) = tail.get("mode").and_then(|v| v.as_str())
+    {
+        match mode_str {
+            "datetime" => {
+                options.runtime_datetime_tail.mode =
+                    moltis_config::RuntimeDatetimeTailMode::Datetime;
+            },
+            "date_only" => {
+                options.runtime_datetime_tail.mode =
+                    moltis_config::RuntimeDatetimeTailMode::DateOnly;
+            },
+            "disabled" => {
+                options.runtime_datetime_tail.mode =
+                    moltis_config::RuntimeDatetimeTailMode::Disabled;
+            },
+            _ => {},
+        }
+    }
+}
+
+/// Parse `enabled_sections` from params as a list of valid `PromptSectionId` values.
+fn parse_enabled_sections(
+    params: &serde_json::Value,
+) -> Result<Option<Vec<moltis_config::PromptSectionId>>, ErrorShape> {
+    let Some(value) = params.get("enabled_sections") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let arr = value.as_array().ok_or_else(|| {
+        ErrorShape::new(
+            error_codes::INVALID_REQUEST,
+            "'enabled_sections' must be an array of strings",
+        )
+    })?;
+    let mut sections = Vec::with_capacity(arr.len());
+    for item in arr {
+        let s = item.as_str().ok_or_else(|| {
+            ErrorShape::new(
+                error_codes::INVALID_REQUEST,
+                "each element of 'enabled_sections' must be a string",
+            )
+        })?;
+        let section_id: moltis_config::PromptSectionId =
+            serde_json::from_value(serde_json::Value::String(s.to_string())).map_err(|_| {
+                ErrorShape::new(
+                    error_codes::INVALID_REQUEST,
+                    format!("unknown section id: '{s}'"),
+                )
+            })?;
+        sections.push(section_id);
+    }
+    Ok(Some(sections))
 }
 
 /// Check role + scopes for a method. Returns None if authorized, Some(error) if not.
@@ -354,6 +466,45 @@ impl MethodRegistry {
         let mut names: Vec<_> = self.handlers.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    /// Build the shared JSON response for `system_prompt.config.*` methods.
+    fn build_system_prompt_config_response() -> Result<serde_json::Value, ErrorShape> {
+        let config = moltis_config::discover_and_load();
+        let template_variables: Vec<serde_json::Value> =
+            moltis_agents::prompt::prompt_template_variables()
+                .iter()
+                .map(|variable| {
+                    serde_json::json!({
+                        "name": variable.name,
+                        "description": variable.description,
+                    })
+                })
+                .collect();
+
+        let section_to_str = |id: &moltis_config::PromptSectionId| -> Option<String> {
+            serde_json::to_value(id)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+        };
+        let all_section_ids: Vec<String> = moltis_agents::prompt::all_prompt_sections()
+            .iter()
+            .filter_map(section_to_str)
+            .collect();
+        let required_section_ids: Vec<String> = moltis_agents::prompt::required_sections(true)
+            .iter()
+            .filter_map(section_to_str)
+            .collect();
+
+        Ok(serde_json::json!({
+            "default": config.prompt_profiles.default,
+            "profiles": config.prompt_profiles.profiles,
+            "overrides": config.prompt_profiles.overrides,
+            "default_prompt_template": moltis_agents::prompt::default_prompt_template(),
+            "template_variables": template_variables,
+            "all_section_ids": all_section_ids,
+            "required_section_ids": required_section_ids,
+        }))
     }
 
     fn register_defaults(&mut self) {
@@ -4232,6 +4383,329 @@ impl MethodRegistry {
         // ── Memory ─────────────────────────────────────────────────────
 
         self.register(
+            "system_prompt.config.get",
+            Box::new(|_ctx| Box::pin(async move { Self::build_system_prompt_config_response() })),
+        );
+
+        self.register(
+            "system_prompt.config.update",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let profile_name = ctx
+                        .params
+                        .get("profile")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                "missing 'profile' parameter",
+                            )
+                        })?
+                        .to_string();
+
+                    let prompt_template =
+                        parse_optional_trimmed_string_field(&ctx.params, "prompt_template")
+                            .map_err(|error| {
+                                ErrorShape::new(error_codes::INVALID_REQUEST, error)
+                            })?;
+                    let prompt_tail_template =
+                        parse_optional_trimmed_string_field(&ctx.params, "prompt_tail_template")
+                            .map_err(|error| {
+                                ErrorShape::new(error_codes::INVALID_REQUEST, error)
+                            })?;
+
+                    let section_options = ctx.params.get("section_options");
+                    let enabled_sections = parse_enabled_sections(&ctx.params)?;
+
+                    if prompt_template.is_none()
+                        && prompt_tail_template.is_none()
+                        && section_options.is_none()
+                        && enabled_sections.is_none()
+                    {
+                        return Err(ErrorShape::new(
+                            error_codes::INVALID_REQUEST,
+                            "nothing to update (set prompt_template, prompt_tail_template, section_options, and/or enabled_sections)",
+                        ));
+                    }
+
+                    if let Err(error) = moltis_config::update_config(|cfg| {
+                        if let Some(profile) = cfg
+                            .prompt_profiles
+                            .profiles
+                            .iter_mut()
+                            .find(|profile| profile.name == profile_name)
+                        {
+                            if let Some(template) = prompt_template.clone() {
+                                profile.prompt_template = template;
+                            }
+                            if let Some(template) = prompt_tail_template.clone() {
+                                profile.prompt_tail_template = template;
+                            }
+                            if let Some(opts) = section_options {
+                                apply_section_options(&mut profile.section_options, opts);
+                            }
+                            if let Some(ref sections) = enabled_sections {
+                                profile.enabled_sections.clone_from(sections);
+                            }
+                            return;
+                        }
+
+                        let mut profile = moltis_config::PromptProfileConfig {
+                            name: profile_name.clone(),
+                            ..moltis_config::PromptProfileConfig::default()
+                        };
+                        if let Some(template) = prompt_template.clone() {
+                            profile.prompt_template = template;
+                        }
+                        if let Some(template) = prompt_tail_template.clone() {
+                            profile.prompt_tail_template = template;
+                        }
+                        if let Some(opts) = section_options {
+                            apply_section_options(&mut profile.section_options, opts);
+                        }
+                        if let Some(ref sections) = enabled_sections {
+                            profile.enabled_sections.clone_from(sections);
+                        }
+                        cfg.prompt_profiles.profiles.push(profile);
+                    }) {
+                        return Err(ErrorShape::new(
+                            error_codes::UNAVAILABLE,
+                            format!("failed to persist system prompt config: {error}"),
+                        ));
+                    }
+
+                    Self::build_system_prompt_config_response()
+                })
+            }),
+        );
+
+        self.register(
+            "system_prompt.config.create",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let name = ctx
+                        .params
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                "missing 'name' parameter",
+                            )
+                        })?
+                        .to_string();
+
+                    let description = ctx
+                        .params
+                        .get("description")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty());
+
+                    if let Err(error) = moltis_config::update_config(|cfg| {
+                        if cfg.prompt_profiles.profiles.iter().any(|p| p.name == name) {
+                            return;
+                        }
+                        cfg.prompt_profiles
+                            .profiles
+                            .push(moltis_config::PromptProfileConfig {
+                                name: name.clone(),
+                                description,
+                                ..moltis_config::PromptProfileConfig::default()
+                            });
+                    }) {
+                        return Err(ErrorShape::new(
+                            error_codes::UNAVAILABLE,
+                            format!("failed to persist system prompt config: {error}"),
+                        ));
+                    }
+
+                    Self::build_system_prompt_config_response()
+                })
+            }),
+        );
+
+        self.register(
+            "system_prompt.config.delete",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let name = ctx
+                        .params
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                "missing 'name' parameter",
+                            )
+                        })?
+                        .to_string();
+
+                    if let Err(error) = moltis_config::update_config(|cfg| {
+                        if cfg.prompt_profiles.default == name {
+                            return;
+                        }
+                        if cfg.prompt_profiles.profiles.len() <= 1 {
+                            return;
+                        }
+                        cfg.prompt_profiles.profiles.retain(|p| p.name != name);
+                        cfg.prompt_profiles.overrides.retain(|o| o.profile != name);
+                    }) {
+                        return Err(ErrorShape::new(
+                            error_codes::UNAVAILABLE,
+                            format!("failed to persist system prompt config: {error}"),
+                        ));
+                    }
+
+                    // Check postconditions
+                    let config = moltis_config::discover_and_load();
+                    if config
+                        .prompt_profiles
+                        .profiles
+                        .iter()
+                        .any(|p| p.name == name)
+                    {
+                        return Err(ErrorShape::new(
+                            error_codes::INVALID_REQUEST,
+                            "cannot delete the default profile or the last remaining profile",
+                        ));
+                    }
+
+                    Self::build_system_prompt_config_response()
+                })
+            }),
+        );
+
+        self.register(
+            "system_prompt.config.set_default",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let name = ctx
+                        .params
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                "missing 'name' parameter",
+                            )
+                        })?
+                        .to_string();
+
+                    {
+                        let config = moltis_config::discover_and_load();
+                        if !config
+                            .prompt_profiles
+                            .profiles
+                            .iter()
+                            .any(|p| p.name == name)
+                        {
+                            return Err(ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                format!("profile '{name}' does not exist"),
+                            ));
+                        }
+                    }
+
+                    if let Err(error) = moltis_config::update_config(|cfg| {
+                        cfg.prompt_profiles.default.clone_from(&name);
+                    }) {
+                        return Err(ErrorShape::new(
+                            error_codes::UNAVAILABLE,
+                            format!("failed to persist system prompt config: {error}"),
+                        ));
+                    }
+
+                    Self::build_system_prompt_config_response()
+                })
+            }),
+        );
+
+        self.register(
+            "system_prompt.config.overrides.save",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    let overrides_value = ctx
+                        .params
+                        .get("overrides")
+                        .ok_or_else(|| {
+                            ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                "missing 'overrides' parameter",
+                            )
+                        })?;
+                    let arr = overrides_value.as_array().ok_or_else(|| {
+                        ErrorShape::new(
+                            error_codes::INVALID_REQUEST,
+                            "'overrides' must be an array",
+                        )
+                    })?;
+
+                    let mut overrides = Vec::with_capacity(arr.len());
+                    for (index, item) in arr.iter().enumerate() {
+                        let profile = item
+                            .get("profile")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .ok_or_else(|| {
+                                ErrorShape::new(
+                                    error_codes::INVALID_REQUEST,
+                                    format!("overrides[{index}]: missing 'profile'"),
+                                )
+                            })?
+                            .to_string();
+                        let provider = item
+                            .get("provider")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
+                        let model = item
+                            .get("model")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
+
+                        if provider.is_none() && model.is_none() {
+                            return Err(ErrorShape::new(
+                                error_codes::INVALID_REQUEST,
+                                format!(
+                                    "overrides[{index}]: at least one of 'provider' or 'model' is required"
+                                ),
+                            ));
+                        }
+
+                        overrides.push(moltis_config::PromptProfileOverride {
+                            provider,
+                            model,
+                            profile,
+                            ..Default::default()
+                        });
+                    }
+
+                    if let Err(error) = moltis_config::update_config(|cfg| {
+                        cfg.prompt_profiles.overrides = overrides;
+                    }) {
+                        return Err(ErrorShape::new(
+                            error_codes::UNAVAILABLE,
+                            format!("failed to persist overrides: {error}"),
+                        ));
+                    }
+
+                    Self::build_system_prompt_config_response()
+                })
+            }),
+        );
+
+        self.register(
             "memory.status",
             Box::new(|ctx| {
                 Box::pin(async move {
@@ -5938,6 +6412,154 @@ mod tests {
                 "read-only scope should deny {method}"
             );
         }
+    }
+
+    #[test]
+    fn system_prompt_config_methods_require_expected_scopes() {
+        assert!(
+            authorize_method(
+                "system_prompt.config.get",
+                "operator",
+                &scopes(&["operator.read"])
+            )
+            .is_none()
+        );
+        assert!(
+            authorize_method(
+                "system_prompt.config.get",
+                "operator",
+                &scopes(&["operator.write"])
+            )
+            .is_none()
+        );
+        assert!(authorize_method("system_prompt.config.get", "operator", &scopes(&[])).is_some());
+
+        for method in &[
+            "system_prompt.config.update",
+            "system_prompt.config.create",
+            "system_prompt.config.delete",
+            "system_prompt.config.set_default",
+            "system_prompt.config.overrides.save",
+        ] {
+            assert!(
+                authorize_method(method, "operator", &scopes(&["operator.write"])).is_none(),
+                "write scope should authorize {method}"
+            );
+            assert!(
+                authorize_method(method, "operator", &scopes(&["operator.read"])).is_some(),
+                "read-only scope should deny {method}"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_section_options_applies_partial_updates() {
+        let mut options = moltis_config::PromptSectionOptions::default();
+        assert!(options.runtime.include_host_fields);
+        assert!(options.runtime.include_sandbox_fields);
+
+        let update = serde_json::json!({
+            "runtime": { "include_host_fields": false },
+            "user_details": { "mode": "full_profile" },
+            "runtime_datetime_tail": { "mode": "date_only" },
+        });
+        apply_section_options(&mut options, &update);
+
+        assert!(!options.runtime.include_host_fields);
+        assert!(options.runtime.include_sandbox_fields);
+        assert_eq!(
+            options.user_details.mode,
+            moltis_config::UserDetailsMode::FullProfile
+        );
+        assert_eq!(
+            options.runtime_datetime_tail.mode,
+            moltis_config::RuntimeDatetimeTailMode::DateOnly
+        );
+    }
+
+    #[test]
+    fn apply_section_options_ignores_unknown_modes() {
+        let mut options = moltis_config::PromptSectionOptions::default();
+        let update = serde_json::json!({
+            "user_details": { "mode": "nonexistent" },
+            "runtime_datetime_tail": { "mode": "bogus" },
+        });
+        apply_section_options(&mut options, &update);
+        assert_eq!(
+            options.user_details.mode,
+            moltis_config::UserDetailsMode::NameOnly
+        );
+        assert_eq!(
+            options.runtime_datetime_tail.mode,
+            moltis_config::RuntimeDatetimeTailMode::Datetime
+        );
+    }
+
+    #[test]
+    fn parse_enabled_sections_valid_array() {
+        let params = serde_json::json!({
+            "enabled_sections": ["runtime", "guidelines", "identity"]
+        });
+        let sections = parse_enabled_sections(&params)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections[0], moltis_config::PromptSectionId::Runtime);
+        assert_eq!(sections[1], moltis_config::PromptSectionId::Guidelines);
+        assert_eq!(sections[2], moltis_config::PromptSectionId::Identity);
+    }
+
+    #[test]
+    fn parse_enabled_sections_missing_returns_none() {
+        let params = serde_json::json!({});
+        assert!(parse_enabled_sections(&params).ok().flatten().is_none());
+    }
+
+    #[test]
+    fn parse_enabled_sections_null_returns_none() {
+        let params = serde_json::json!({ "enabled_sections": null });
+        assert!(parse_enabled_sections(&params).ok().flatten().is_none());
+    }
+
+    #[test]
+    fn parse_enabled_sections_invalid_id_returns_error() {
+        let params = serde_json::json!({ "enabled_sections": ["nonexistent"] });
+        assert!(parse_enabled_sections(&params).is_err());
+    }
+
+    #[test]
+    fn parse_enabled_sections_non_array_returns_error() {
+        let params = serde_json::json!({ "enabled_sections": "runtime" });
+        assert!(parse_enabled_sections(&params).is_err());
+    }
+
+    #[test]
+    fn parse_optional_trimmed_string_field_handles_null_empty_and_missing() {
+        let params = serde_json::json!({
+            "template": "  hello  ",
+            "tail": null,
+            "empty": "   ",
+            "invalid": 12,
+        });
+
+        assert_eq!(
+            parse_optional_trimmed_string_field(&params, "missing").unwrap_or_default(),
+            None
+        );
+        assert_eq!(
+            parse_optional_trimmed_string_field(&params, "template").unwrap_or_default(),
+            Some(Some("  hello  ".to_string()))
+        );
+        assert_eq!(
+            parse_optional_trimmed_string_field(&params, "tail").unwrap_or_default(),
+            Some(None)
+        );
+        assert_eq!(
+            parse_optional_trimmed_string_field(&params, "empty").unwrap_or_default(),
+            Some(None)
+        );
+        assert!(parse_optional_trimmed_string_field(&params, "invalid").is_err());
     }
 
     #[test]
