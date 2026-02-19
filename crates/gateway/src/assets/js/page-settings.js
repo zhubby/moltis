@@ -1970,8 +1970,9 @@ function SystemPromptSection() {
 				>
 					${showCreateForm ? "Cancel" : "+ New Profile"}
 				</button>
-				${selectedProfileName && selectedProfileName !== defaultProfileName
-					? html`<button
+				${
+					selectedProfileName && selectedProfileName !== defaultProfileName
+						? html`<button
 						type="button"
 						class="provider-btn provider-btn-secondary provider-btn-sm"
 						disabled=${settingDefault}
@@ -1979,10 +1980,11 @@ function SystemPromptSection() {
 					>
 						${settingDefault ? "Setting…" : "Set as Default"}
 					</button>`
-					: null
+						: null
 				}
-				${selectedProfileName && selectedProfileName !== defaultProfileName && profiles.length > 1
-					? html`<button
+				${
+					selectedProfileName && selectedProfileName !== defaultProfileName && profiles.length > 1
+						? html`<button
 						type="button"
 						class="provider-btn provider-btn-danger provider-btn-sm"
 						disabled=${deletingProfile}
@@ -1990,11 +1992,12 @@ function SystemPromptSection() {
 					>
 						${deletingProfile ? "Deleting…" : "Delete Profile"}
 					</button>`
-					: null
+						: null
 				}
 			</div>
-			${showCreateForm
-				? html`<div class="provider-item flex flex-col gap-2 p-3">
+			${
+				showCreateForm
+					? html`<div class="provider-item flex flex-col gap-2 p-3">
 					<div>
 						<div class="text-xs text-[var(--muted)] mb-1">Profile Name</div>
 						<input
@@ -2026,7 +2029,7 @@ function SystemPromptSection() {
 						</button>
 					</div>
 				</div>`
-				: null
+					: null
 			}
 
 			<div>
@@ -2142,8 +2145,9 @@ function SystemPromptSection() {
 				>
 					${showSectionOptions ? "Hide Section Options" : "Show Section Options"}
 				</button>
-				${showSectionOptions
-					? html`<div class="provider-item flex flex-col gap-3 p-3">
+				${
+					showSectionOptions
+						? html`<div class="provider-item flex flex-col gap-3 p-3">
 						<div>
 							<div class="text-xs font-medium text-[var(--text-strong)] mb-1">Runtime Section</div>
 							<div class="flex flex-col gap-1">
@@ -2210,37 +2214,34 @@ function SystemPromptSection() {
 							</div>
 						</div>
 
-						${allSectionIds.length
-							? html`<div>
+						${
+							allSectionIds.length
+								? html`<div>
 								<div class="text-xs font-medium text-[var(--text-strong)] mb-1">Enabled Sections</div>
 								<div class="grid grid-cols-2 gap-1">
-									${allSectionIds.map(
-										(id) => {
-											var isRequired = requiredSectionIds.includes(id);
-											var isEnabled = enabledSections.includes(id);
-											return html`<label key=${id} class="flex items-center gap-2 text-xs text-[var(--text)]">
+									${allSectionIds.map((id) => {
+										var isRequired = requiredSectionIds.includes(id);
+										var isEnabled = enabledSections.includes(id);
+										return html`<label key=${id} class="flex items-center gap-2 text-xs text-[var(--text)]">
 												<input type="checkbox"
 													checked=${isEnabled || isRequired}
 													disabled=${isRequired}
 													onChange=${(e) => {
 														if (isRequired) return;
 														setEnabledSections((prev) =>
-															e.target.checked
-																? [...prev.filter((s) => s !== id), id]
-																: prev.filter((s) => s !== id),
+															e.target.checked ? [...prev.filter((s) => s !== id), id] : prev.filter((s) => s !== id),
 														);
 													}}
 												/>
 												${id.replace(/_/g, " ")}${isRequired ? " (required)" : ""}
 											</label>`;
-										},
-									)}
+									})}
 								</div>
 							</div>`
-							: null
+								: null
 						}
 					</div>`
-					: null
+						: null
 				}
 			</div>
 
@@ -2283,8 +2284,9 @@ function SystemPromptSection() {
 			<p class="text-xs text-[var(--muted)] m-0 mb-2">
 				Route specific providers or models to a different prompt profile using glob patterns (e.g. <code>*sonnet*</code>, <code>openai</code>).
 			</p>
-			${showOverrides
-				? html`<div class="flex flex-col gap-2">
+			${
+				showOverrides
+					? html`<div class="flex flex-col gap-2">
 					${overrides.map(
 						(o, index) => html`<div key=${index} class="provider-item flex items-center gap-2 m-0 p-2">
 							<div class="flex flex-col gap-1 flex-1 min-w-0">
@@ -2296,9 +2298,7 @@ function SystemPromptSection() {
 											value=${o.profile}
 											onChange=${(e) => onUpdateOverride(index, "profile", e.target.value)}
 										>
-											${profiles.map(
-												(p) => html`<option key=${p.name} value=${p.name}>${p.name}</option>`,
-											)}
+											${profiles.map((p) => html`<option key=${p.name} value=${p.name}>${p.name}</option>`)}
 										</select>
 									</div>
 									<div>
@@ -2361,7 +2361,7 @@ function SystemPromptSection() {
 						>${savingOverrides ? "Saving\u2026" : "Save Overrides"}</button>
 					</div>
 				</div>`
-				: null
+					: null
 			}
 		</div>
 
@@ -2369,9 +2369,10 @@ function SystemPromptSection() {
 			<div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
 				<div class="flex items-center gap-2">
 					<h3 class="text-sm font-medium text-[var(--text-strong)]">Live Preview</h3>
-					${previewProfileName
-						? html`<span class="text-xs text-[var(--muted)]">Profile: ${previewProfileName}</span>`
-						: null
+					${
+						previewProfileName
+							? html`<span class="text-xs text-[var(--muted)]">Profile: ${previewProfileName}</span>`
+							: null
 					}
 				</div>
 				<div class="flex items-center gap-2 text-xs text-[var(--muted)]">
@@ -2395,8 +2396,9 @@ function SystemPromptSection() {
 			>
 				${showVariables ? "Hide" : "Show"} Template Variables (${templateVariables.length})
 			</button>
-			${showVariables
-				? html`<div class="flex flex-col gap-1.5">
+			${
+				showVariables
+					? html`<div class="flex flex-col gap-1.5">
 					${templateVariables.map(
 						(entry) => html`<div
 							key=${entry.name}
@@ -2420,7 +2422,7 @@ function SystemPromptSection() {
 						</div>`,
 					)}
 				</div>`
-				: null
+					: null
 			}
 		</div>
 	</div>`;
