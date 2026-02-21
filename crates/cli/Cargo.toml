@@ -79,6 +79,7 @@ default = [
   "tailscale",
   "tls",
   "voice",
+  "voicebox",
   "web-ui",
 ]
 # Minimal build for memory-constrained devices (Raspberry Pi, etc.).
