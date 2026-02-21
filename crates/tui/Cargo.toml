@@ -1,0 +1,38 @@
+[package]
+description       = "Terminal user interface for Moltis gateway"
+edition.workspace = true
+name              = "moltis-tui"
+version.workspace = true
+
+[dependencies]
+crossterm         = { workspace = true }
+futures           = { workspace = true }
+moltis-config     = { workspace = true }
+moltis-protocol   = { workspace = true }
+pulldown-cmark    = { workspace = true }
+ratatui           = { workspace = true }
+reqwest           = { workspace = true }
+rustls              = { workspace = true }
+rustls-native-certs = { workspace = true }
+rustls-pemfile      = { workspace = true }
+secrecy           = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+thiserror         = { workspace = true }
+tokio             = { workspace = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+tracing           = { workspace = true }
+tui-textarea      = { workspace = true }
+url               = { workspace = true }
+uuid              = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }
+
+[features]
+default = []
+metrics = []
+tracing = []
+
+[lints]
+workspace = true

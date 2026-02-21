@@ -26,6 +26,7 @@ members = [
   "crates/skills",
   "crates/telegram",
   "crates/tools",
+  "crates/tui",
   "crates/voice",
 ]
 resolver = "2"
@@ -69,6 +70,11 @@ tracing-opentelemetry = "0.30"
 tracing-subscriber    = { features = ["env-filter", "json"], version = "0.3" }
 # CLI
 clap = { features = ["derive", "env"], version = "4" }
+# Terminal UI
+crossterm = { features = ["event-stream"], version = "0.28" }
+ratatui   = "0.29"
+rpassword = "5"
+tui-textarea = "0.7"
 # Database
 sqlx = { features = ["migrate", "runtime-tokio", "sqlite"], version = "0.8" }
 # HTTP client
@@ -111,7 +117,8 @@ teloxide     = { features = ["macros"], version = "0.13" }
 axum-server    = { features = ["tls-rustls"], version = "0.7" }
 rcgen          = "0.13"
 rustls         = { features = ["ring"], version = "0.23" }
-rustls-pemfile = "2"
+rustls-native-certs = "0.8"
+rustls-pemfile      = "2"
 time           = "0.3"
 tokio-rustls   = "0.26"
 # Cryptography / authentication
@@ -182,6 +189,7 @@ moltis-sessions   = { path = "crates/sessions" }
 moltis-skills     = { path = "crates/skills" }
 moltis-telegram   = { path = "crates/telegram" }
 moltis-tools      = { path = "crates/tools" }
+moltis-tui        = { path = "crates/tui" }
 moltis-voice      = { path = "crates/voice" }
 
 [profile.release]

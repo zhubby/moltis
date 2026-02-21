@@ -145,6 +145,17 @@ enum Commands {
     /// Install the Moltis CA certificate into the system trust store.
     #[cfg(feature = "tls")]
     TrustCa,
+    /// Launch the terminal user interface (connects to a running gateway).
+    #[cfg(feature = "tui")]
+    Tui {
+        /// Gateway WebSocket URL (e.g. wss://localhost:9433/ws/chat).
+        /// When omitted, derived from moltis.toml server config.
+        #[arg(long, env = "MOLTIS_URL")]
+        url: Option<String>,
+        /// API key for authentication.
+        #[arg(long, env = "MOLTIS_API_KEY")]
+        api_key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -184,7 +195,10 @@ enum SkillAction {
 
 /// Initialise tracing and optionally attach a [`LogBroadcastLayer`] that
 /// captures events into an in-memory ring buffer for the web UI.
-fn init_telemetry(cli: &Cli, log_buffer: Option<LogBuffer>) {
+///
+/// When `tui_mode` is true, logs are written to `tui.log` inside the data
+/// directory instead of stderr (which would corrupt the ratatui display).
+fn init_telemetry(cli: &Cli, log_buffer: Option<LogBuffer>, tui_mode: bool) {
     // Start with user-specified or default log level
     let base_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.log_level));
@@ -209,7 +223,23 @@ fn init_telemetry(cli: &Cli, log_buffer: Option<LogBuffer>) {
     // Optionally attach the in-memory capture layer.
     let log_layer = log_buffer.map(LogBroadcastLayer::new);
 
-    if cli.json_logs {
+    if tui_mode {
+        // TUI mode: redirect logs to a file so they don't corrupt the terminal.
+        let log_path = moltis_config::data_dir().join("tui.log");
+        let log_file = std::fs::File::create(&log_path).unwrap_or_else(|e| {
+            panic!("failed to create TUI log file {}: {e}", log_path.display())
+        });
+        registry
+            .with(
+                fmt::layer()
+                    .with_writer(std::sync::Mutex::new(log_file))
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_ansi(false),
+            )
+            .with(log_layer)
+            .init();
+    } else if cli.json_logs {
         registry
             .with(fmt::layer().json().with_target(true).with_thread_ids(false))
             .with(log_layer)
@@ -315,7 +345,12 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    init_telemetry(&cli, log_buffer.clone());
+    #[cfg(feature = "tui")]
+    let tui_mode = matches!(cli.command, Some(Commands::Tui { .. }));
+    #[cfg(not(feature = "tui"))]
+    let tui_mode = false;
+
+    init_telemetry(&cli, log_buffer.clone(), tui_mode);
 
     info!(version = env!("CARGO_PKG_VERSION"), "moltis starting");
 
@@ -403,6 +438,12 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Hooks { action }) => hooks_commands::handle_hooks(action).await,
         #[cfg(feature = "tls")]
         Some(Commands::TrustCa) => trust_ca().await,
+        #[cfg(feature = "tui")]
+        Some(Commands::Tui { url, api_key }) => {
+            moltis_tui::run_tui(url.as_deref(), api_key.as_deref())
+                .await
+                .map_err(Into::into)
+        },
         Some(_) => {
             eprintln!("command not yet implemented");
             Ok(())

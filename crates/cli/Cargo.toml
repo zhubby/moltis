@@ -37,6 +37,7 @@ anyhow             = { workspace = true }
 clap               = { workspace = true }
 dotenvy            = { workspace = true }
 moltis-agents      = { workspace = true }
+moltis-tui         = { optional = true, workspace = true }
 moltis-browser     = { workspace = true }
 moltis-common      = { workspace = true }
 moltis-config      = { workspace = true }
@@ -78,6 +79,7 @@ default = [
   "qmd",
   "tailscale",
   "tls",
+  "tui",
   "voice",
   "web-ui",
 ]
@@ -93,6 +95,7 @@ push-notifications = ["moltis-gateway/push-notifications"]
 qmd                = ["moltis-gateway/qmd"]
 tailscale          = ["moltis-gateway/tailscale"]
 tls                = ["moltis-gateway/tls"]
+tui                = ["dep:moltis-tui"]
 voice              = ["moltis-gateway/voice"]
 web-ui             = ["moltis-gateway/web-ui"]
 
