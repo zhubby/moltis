@@ -223,7 +223,7 @@ pub struct VoiceConfig {
 pub struct VoiceTtsConfig {
     /// Enable TTS globally.
     pub enabled: bool,
-    /// Default provider: "elevenlabs", "openai", "google", "piper", "coqui".
+    /// Default provider: "elevenlabs", "openai", "google", "piper", "coqui", "voicebox".
     pub provider: String,
     /// Provider IDs to list in the UI. Empty means list all.
     pub providers: Vec<String>,
@@ -237,6 +237,8 @@ pub struct VoiceTtsConfig {
     pub piper: VoicePiperTtsConfig,
     /// Coqui TTS (local server) settings.
     pub coqui: VoiceCoquiTtsConfig,
+    /// Voicebox TTS (local voice-cloning server) settings.
+    pub voicebox: VoiceVoiceboxTtsConfig,
 }
 
 impl Default for VoiceTtsConfig {
@@ -250,6 +252,7 @@ impl Default for VoiceTtsConfig {
             google: VoiceGoogleTtsConfig::default(),
             piper: VoicePiperTtsConfig::default(),
             coqui: VoiceCoquiTtsConfig::default(),
+            voicebox: VoiceVoiceboxTtsConfig::default(),
         }
     }
 }
@@ -348,6 +351,31 @@ impl Default for VoiceCoquiTtsConfig {
             endpoint: "http://localhost:5002".into(),
             model: None,
             speaker: None,
+            language: None,
+        }
+    }
+}
+
+/// Voicebox TTS (local voice-cloning server) configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceVoiceboxTtsConfig {
+    /// Voicebox server endpoint (default: http://localhost:8000).
+    pub endpoint: String,
+    /// Voice profile ID (must be created in Voicebox UI first).
+    pub profile_id: Option<String>,
+    /// Model size (e.g., "1.7B").
+    pub model_size: Option<String>,
+    /// Language code (e.g., "en").
+    pub language: Option<String>,
+}
+
+impl Default for VoiceVoiceboxTtsConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://localhost:8000".into(),
+            profile_id: None,
+            model_size: None,
             language: None,
         }
     }

@@ -5,7 +5,11 @@ mod elevenlabs;
 mod google;
 mod openai;
 mod piper;
+#[cfg(feature = "voicebox")]
+mod voicebox;
 
+#[cfg(feature = "voicebox")]
+pub use voicebox::VoiceboxTts;
 pub use {
     coqui::CoquiTts, elevenlabs::ElevenLabsTts, google::GoogleTts, openai::OpenAiTts,
     piper::PiperTts,

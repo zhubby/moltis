@@ -94,6 +94,7 @@ qmd                = ["moltis-gateway/qmd"]
 tailscale          = ["moltis-gateway/tailscale"]
 tls                = ["moltis-gateway/tls"]
 voice              = ["moltis-gateway/voice"]
+voicebox           = ["moltis-gateway/voicebox"]
 web-ui             = ["moltis-gateway/web-ui"]
 
 [lints]

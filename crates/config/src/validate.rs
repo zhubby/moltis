@@ -457,6 +457,15 @@ fn build_schema_map() -> KnownKeys {
                                 ("endpoint", Leaf),
                             ])),
                         ),
+                        (
+                            "voicebox",
+                            Struct(HashMap::from([
+                                ("endpoint", Leaf),
+                                ("profile_id", Leaf),
+                                ("model_size", Leaf),
+                                ("language", Leaf),
+                            ])),
+                        ),
                     ])),
                 ),
                 (
@@ -969,6 +978,7 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
         "google-tts",
         "piper",
         "coqui",
+        "voicebox",
     ];
     for (idx, provider) in config.voice.tts.providers.iter().enumerate() {
         if !valid_voice_tts_providers.contains(&provider.as_str()) {

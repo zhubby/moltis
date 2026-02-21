@@ -21,6 +21,9 @@ tracing     = { workspace = true }
 urlencoding = "2"
 which       = "7"
 
+[features]
+voicebox = []
+
 [dev-dependencies]
 tokio    = { features = ["macros", "test-util"], workspace = true }
 wiremock = "0.6"

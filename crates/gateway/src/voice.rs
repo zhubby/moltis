@@ -25,6 +25,9 @@ use moltis_voice::{
     WhisperCliStt, WhisperStt, strip_ssml_tags,
 };
 
+#[cfg(feature = "voicebox")]
+use moltis_voice::{VoiceboxTts, VoiceboxTtsConfig};
+
 #[cfg(feature = "voice")]
 use crate::services::TtsService;
 
@@ -123,6 +126,13 @@ impl LiveTtsService {
                 speaker: None,
                 language: None,
             },
+            #[cfg(feature = "voicebox")]
+            voicebox: VoiceboxTtsConfig {
+                endpoint: cfg.voice.tts.voicebox.endpoint.clone(),
+                profile_id: cfg.voice.tts.voicebox.profile_id.clone(),
+                model_size: cfg.voice.tts.voicebox.model_size.clone(),
+                language: cfg.voice.tts.voicebox.language.clone(),
+            },
         }
     }
 
@@ -163,13 +173,23 @@ impl LiveTtsService {
                     None
                 }
             },
+            #[cfg(feature = "voicebox")]
+            TtsProviderId::Voicebox => {
+                let voicebox = VoiceboxTts::new(&config.voicebox);
+                if voicebox.is_configured() {
+                    Some(Box::new(voicebox) as Box<dyn TtsProvider + Send + Sync>)
+                } else {
+                    None
+                }
+            },
         }
     }
 
     /// List all providers with their configuration status.
     fn list_providers() -> Vec<(TtsProviderId, bool)> {
         let config = Self::load_config();
-        vec![
+        #[allow(unused_mut)]
+        let mut providers = vec![
             (
                 TtsProviderId::ElevenLabs,
                 config.elevenlabs.api_key.is_some(),
@@ -178,7 +198,10 @@ impl LiveTtsService {
             (TtsProviderId::Google, config.google.api_key.is_some()),
             (TtsProviderId::Piper, config.piper.model_path.is_some()),
             (TtsProviderId::Coqui, true), // Always available if server running
-        ]
+        ];
+        #[cfg(feature = "voicebox")]
+        providers.push((TtsProviderId::Voicebox, true)); // Always available if server running
+        providers
     }
 }
 
@@ -804,8 +827,13 @@ mod tests {
         let providers = service.providers().await.unwrap();
 
         let providers_arr = providers.as_array().unwrap();
-        // 5 providers: elevenlabs, openai, google, piper, coqui
-        assert_eq!(providers_arr.len(), 5);
+        // Base providers: elevenlabs, openai, google, piper, coqui
+        let expected_count = if cfg!(feature = "voicebox") {
+            6
+        } else {
+            5
+        };
+        assert_eq!(providers_arr.len(), expected_count);
 
         let ids: Vec<_> = providers_arr
             .iter()

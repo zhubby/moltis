@@ -22,6 +22,9 @@ pub enum TtsProviderId {
     Piper,
     #[serde(rename = "coqui")]
     Coqui,
+    #[cfg(feature = "voicebox")]
+    #[serde(rename = "voicebox")]
+    Voicebox,
 }
 
 impl fmt::Display for TtsProviderId {
@@ -32,6 +35,8 @@ impl fmt::Display for TtsProviderId {
             Self::Google => write!(f, "google"),
             Self::Piper => write!(f, "piper"),
             Self::Coqui => write!(f, "coqui"),
+            #[cfg(feature = "voicebox")]
+            Self::Voicebox => write!(f, "voicebox"),
         }
     }
 }
@@ -45,6 +50,8 @@ impl TtsProviderId {
             "google" => Some(Self::Google),
             "piper" => Some(Self::Piper),
             "coqui" => Some(Self::Coqui),
+            #[cfg(feature = "voicebox")]
+            "voicebox" => Some(Self::Voicebox),
             _ => None,
         }
     }
@@ -57,6 +64,8 @@ impl TtsProviderId {
             Self::Google => "Google Cloud TTS",
             Self::Piper => "Piper",
             Self::Coqui => "Coqui TTS",
+            #[cfg(feature = "voicebox")]
+            Self::Voicebox => "Voicebox",
         }
     }
 
@@ -68,6 +77,8 @@ impl TtsProviderId {
             Self::Google,
             Self::Piper,
             Self::Coqui,
+            #[cfg(feature = "voicebox")]
+            Self::Voicebox,
         ]
     }
 }
@@ -200,6 +211,10 @@ pub struct TtsConfig {
 
     /// Coqui TTS (local) settings.
     pub coqui: CoquiTtsConfig,
+
+    /// Voicebox TTS (local voice-cloning) settings.
+    #[cfg(feature = "voicebox")]
+    pub voicebox: VoiceboxTtsConfig,
 }
 
 impl Default for TtsConfig {
@@ -214,6 +229,8 @@ impl Default for TtsConfig {
             google: GoogleTtsConfig::default(),
             piper: PiperTtsConfig::default(),
             coqui: CoquiTtsConfig::default(),
+            #[cfg(feature = "voicebox")]
+            voicebox: VoiceboxTtsConfig::default(),
         }
     }
 }
@@ -351,6 +368,36 @@ impl Default for CoquiTtsConfig {
             endpoint: "http://localhost:5002".into(),
             model: None,
             speaker: None,
+            language: None,
+        }
+    }
+}
+
+/// Voicebox TTS (local voice-cloning) configuration.
+#[cfg(feature = "voicebox")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceboxTtsConfig {
+    /// Voicebox server endpoint (default: http://localhost:8000).
+    pub endpoint: String,
+
+    /// Voice profile ID (must be created in Voicebox UI first).
+    pub profile_id: Option<String>,
+
+    /// Model size (e.g., "1.7B").
+    pub model_size: Option<String>,
+
+    /// Language code (e.g., "en").
+    pub language: Option<String>,
+}
+
+#[cfg(feature = "voicebox")]
+impl Default for VoiceboxTtsConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://localhost:8000".into(),
+            profile_id: None,
+            model_size: None,
             language: None,
         }
     }
@@ -662,6 +709,8 @@ mod tests {
                 google: GoogleTtsConfig::default(),
                 piper: PiperTtsConfig::default(),
                 coqui: CoquiTtsConfig::default(),
+                #[cfg(feature = "voicebox")]
+                voicebox: VoiceboxTtsConfig::default(),
             },
             stt: SttConfig::default(),
         };

@@ -24,3 +24,6 @@ pub use {
         strip_ssml_tags,
     },
 };
+
+#[cfg(feature = "voicebox")]
+pub use {config::VoiceboxTtsConfig, tts::VoiceboxTts};
