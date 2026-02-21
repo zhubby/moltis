@@ -5217,7 +5217,7 @@ async fn run_explicit_shell_command(
         duration_ms: started.elapsed().as_millis() as u64,
         request_input_tokens: Some(0),
         request_output_tokens: Some(0),
-        message_index: user_message_index + 1,
+        message_index: user_message_index + 2, // +1 for user msg, +1 for tool result
         reply_medium: ReplyMedium::Text,
         iterations: Some(1),
         tool_calls_made: Some(1),
@@ -5827,7 +5827,9 @@ async fn run_with_tools(
                 silent = is_silent,
                 "agent run complete"
             );
-            let assistant_message_index = user_message_index + 1;
+            // Tool results are persisted between the user message and the
+            // assistant message, so the assistant index must account for them.
+            let assistant_message_index = user_message_index + 1 + tool_calls_made;
 
             // Generate & persist TTS audio for voice-medium web UI replies.
             let mut audio_warning: Option<String> = None;
@@ -6491,7 +6493,9 @@ async fn deliver_channel_replies(
     streamed_target_keys: &HashSet<ChannelReplyTargetKey>,
 ) {
     let mut targets = state.drain_channel_replies(session_key).await;
-    if !streamed_target_keys.is_empty() {
+    // When the reply medium is voice we must still deliver TTS audio even if
+    // the text was already streamed — skip the stream dedupe entirely.
+    if desired_reply_medium != ReplyMedium::Voice && !streamed_target_keys.is_empty() {
         targets.retain(|target| {
             let key = ChannelReplyTargetKey::from(target);
             !streamed_target_keys.contains(&key)
@@ -6553,6 +6557,7 @@ async fn deliver_channel_replies(
         Arc::clone(state),
         desired_reply_medium,
         status_log,
+        streamed_target_keys,
     )
     .await;
 }
@@ -6704,6 +6709,7 @@ async fn deliver_channel_replies_to_targets(
     state: Arc<GatewayState>,
     desired_reply_medium: ReplyMedium,
     status_log: Vec<String>,
+    streamed_target_keys: &HashSet<ChannelReplyTargetKey>,
 ) {
     let session_key = session_key.to_string();
     let text = text.to_string();
@@ -6715,6 +6721,10 @@ async fn deliver_channel_replies_to_targets(
         let session_key = session_key.clone();
         let text = text.clone();
         let logbook_html = logbook_html.clone();
+        // Text was already delivered via edit-in-place streaming — skip text
+        // caption/follow-up and only send the TTS voice audio.
+        let text_already_streamed =
+            streamed_target_keys.contains(&ChannelReplyTargetKey::from(&target));
         tasks.push(tokio::spawn(async move {
             let tts_payload = match desired_reply_medium {
                 ReplyMedium::Voice => build_tts_payload(&state, &session_key, &target, &text).await,
@@ -6726,8 +6736,39 @@ async fn deliver_channel_replies_to_targets(
                     Some(mut payload) => {
                         let transcript = std::mem::take(&mut payload.text);
 
-                        // Short transcript fits as a caption on the voice message.
-                        if transcript.len() <= moltis_telegram::markdown::TELEGRAM_CAPTION_LIMIT {
+                        if text_already_streamed {
+                            // Text was already streamed — send voice audio only.
+                            if let Err(e) = outbound
+                                .send_media(&target.account_id, &target.chat_id, &payload, reply_to)
+                                .await
+                            {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send channel voice reply: {e}"
+                                );
+                            }
+                            // Send logbook as a follow-up if present.
+                            if !logbook_html.is_empty()
+                                && let Err(e) = outbound
+                                    .send_html(
+                                        &target.account_id,
+                                        &target.chat_id,
+                                        &logbook_html,
+                                        None,
+                                    )
+                                    .await
+                            {
+                                warn!(
+                                    account_id = target.account_id,
+                                    chat_id = target.chat_id,
+                                    "failed to send logbook follow-up: {e}"
+                                );
+                            }
+                        } else if transcript.len()
+                            <= moltis_telegram::markdown::TELEGRAM_CAPTION_LIMIT
+                        {
+                            // Short transcript fits as a caption on the voice message.
                             payload.text = transcript;
                             if let Err(e) = outbound
                                 .send_media(&target.account_id, &target.chat_id, &payload, reply_to)
@@ -6742,7 +6783,7 @@ async fn deliver_channel_replies_to_targets(
                             // Send logbook as a follow-up if present.
                             if !logbook_html.is_empty()
                                 && let Err(e) = outbound
-                                    .send_text(
+                                    .send_html(
                                         &target.account_id,
                                         &target.chat_id,
                                         &logbook_html,
@@ -7694,6 +7735,7 @@ mod tests {
             state,
             ReplyMedium::Text,
             Vec::new(),
+            &HashSet::new(),
         )
         .await;
 

@@ -4,6 +4,7 @@ import { signal, useSignal } from "@preact/signals";
 import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
+import { fetchChannelStatus } from "./channel-utils.js";
 import * as gon from "./gon.js";
 import { refresh as refreshGon } from "./gon.js";
 import { sendRpc } from "./helpers.js";
@@ -30,6 +31,7 @@ var heartbeatSaving = signal(false);
 var heartbeatRunning = signal(false);
 var heartbeatConfig = signal(gon.get("heartbeat_config") || {});
 var sandboxImages = signal([]);
+var channelAccounts = signal([]);
 var heartbeatModel = signal(gon.get("heartbeat_config")?.model || "");
 var heartbeatSandboxImage = signal(gon.get("heartbeat_config")?.sandbox_image || "");
 
@@ -42,6 +44,14 @@ function loadSandboxImages() {
 		.catch(() => {
 			// Ignore fetch errors — images list is optional.
 		});
+}
+
+function loadChannelAccounts() {
+	fetchChannelStatus().then((res) => {
+		if (res?.ok) {
+			channelAccounts.value = (res.payload?.channels || []).filter((c) => c.status === "connected");
+		}
+	});
 }
 
 function loadHeartbeatStatus() {
@@ -416,6 +426,7 @@ function StatusBar() {
 function CronJobRow(props) {
 	var job = props.job;
 	var modelLabel = job.payload?.kind === "agentTurn" ? job.payload.model || "default" : "\u2014";
+	var deliveryLabel = job.payload?.deliver && job.payload?.channel ? `\u2192 ${job.payload.channel}` : null;
 	var executionLabel =
 		job.sandbox?.enabled === false
 			? "host"
@@ -466,6 +477,7 @@ function CronJobRow(props) {
     <td>${job.name}</td>
     <td class="cron-mono">${formatSchedule(job.schedule)}</td>
     <td class="cron-mono">${modelLabel}</td>
+    <td class="cron-mono">${deliveryLabel ? html`<span class="text-xs">${deliveryLabel}</span>` : "\u2014"}</td>
     <td class="cron-mono">${executionLabel}</td>
     <td class="cron-mono">${job.state?.nextRunAtMs ? html`<time data-epoch-ms="${job.state.nextRunAtMs}">${new Date(job.state.nextRunAtMs).toISOString()}</time>` : "\u2014"}</td>
     <td>${job.state?.lastStatus ? html`<span class="cron-badge ${job.state.lastStatus}">${job.state.lastStatus}</span>` : "\u2014"}</td>
@@ -497,7 +509,7 @@ function CronJobTable() {
     <thead>
       <tr>
         <th>Name</th><th>Schedule</th>
-        <th>Model</th><th>Execution</th><th>Next Run</th><th>Last Status</th><th>Actions</th><th>Enabled</th>
+        <th>Model</th><th>Delivery</th><th>Execution</th><th>Next Run</th><th>Last Status</th><th>Actions</th><th>Enabled</th>
       </tr>
     </thead>
     <tbody>
@@ -566,17 +578,59 @@ function CronModal() {
 	var isEdit = !!editingJob.value;
 	var job = editingJob.value;
 	var saving = useSignal(false);
-	var schedKind = useSignal(isEdit ? job.schedule.kind : "cron");
+	var schedKind = useSignal("cron");
 	var errorField = useSignal(null);
-	var jobModel = useSignal(isEdit && job.payload.kind === "agentTurn" ? job.payload.model || "" : "");
-	var jobSandboxImage = useSignal(isEdit ? job.sandbox?.image || "" : "");
-	var jobName = useSignal(isEdit ? job.name : "");
-	var payloadKind = useSignal(isEdit ? job.payload.kind : "systemEvent");
-	var sessionTarget = useSignal(isEdit ? job.sessionTarget || "main" : "main");
-	var messageText = useSignal(isEdit ? job.payload.text || job.payload.message || "" : "");
-	var executionTarget = useSignal(isEdit && job.sandbox?.enabled === false ? "host" : "sandbox");
-	var deleteAfterRun = useSignal(isEdit ? job.deleteAfterRun : false);
-	var jobEnabled = useSignal(isEdit ? job.enabled : true);
+	var jobModel = useSignal("");
+	var jobSandboxImage = useSignal("");
+	var jobName = useSignal("");
+	var payloadKind = useSignal("systemEvent");
+	var sessionTarget = useSignal("main");
+	var messageText = useSignal("");
+	var executionTarget = useSignal("sandbox");
+	var deleteAfterRun = useSignal(false);
+	var jobEnabled = useSignal(true);
+	var deliverToChannel = useSignal(false);
+	var deliverChannel = useSignal("");
+	var deliverTo = useSignal("");
+
+	// Sync signal values when the edited job changes (useSignal only
+	// uses the initial value on first mount, so we must update manually).
+	useEffect(() => {
+		if (editingJob.value) {
+			var j = editingJob.value;
+			saving.value = false;
+			errorField.value = null;
+			schedKind.value = j.schedule.kind;
+			jobModel.value = j.payload.kind === "agentTurn" ? j.payload.model || "" : "";
+			jobSandboxImage.value = j.sandbox?.image || "";
+			jobName.value = j.name;
+			payloadKind.value = j.payload.kind;
+			sessionTarget.value = j.sessionTarget || "main";
+			messageText.value = j.payload.text || j.payload.message || "";
+			executionTarget.value = j.sandbox?.enabled === false ? "host" : "sandbox";
+			deleteAfterRun.value = j.deleteAfterRun;
+			jobEnabled.value = j.enabled;
+			deliverToChannel.value = j.payload?.deliver === true;
+			deliverChannel.value = j.payload?.channel || "";
+			deliverTo.value = j.payload?.to || "";
+		} else {
+			saving.value = false;
+			errorField.value = null;
+			schedKind.value = "cron";
+			jobModel.value = "";
+			jobSandboxImage.value = "";
+			jobName.value = "";
+			payloadKind.value = "systemEvent";
+			sessionTarget.value = "main";
+			messageText.value = "";
+			executionTarget.value = "sandbox";
+			deleteAfterRun.value = false;
+			jobEnabled.value = true;
+			deliverToChannel.value = false;
+			deliverChannel.value = "";
+			deliverTo.value = "";
+		}
+	}, [editingJob.value]);
 
 	function onPayloadKindChange(e) {
 		payloadKind.value = e.target.value;
@@ -610,7 +664,13 @@ function CronModal() {
 		var payload =
 			selectedPayloadKind === "systemEvent"
 				? { kind: "systemEvent", text: msgText }
-				: { kind: "agentTurn", message: msgText, deliver: false };
+				: {
+						kind: "agentTurn",
+						message: msgText,
+						deliver: deliverToChannel.value,
+						...(deliverToChannel.value && deliverChannel.value ? { channel: deliverChannel.value } : {}),
+						...(deliverToChannel.value && deliverTo.value.trim() ? { to: deliverTo.value.trim() } : {}),
+					};
 		if (selectedPayloadKind === "agentTurn" && jobModel.value) {
 			payload.model = jobModel.value;
 		}
@@ -709,6 +769,50 @@ function CronModal() {
       />
       <p class="text-xs text-[var(--muted)] mt-1">Only used for Agent Turn jobs.</p>
 
+      ${
+				payloadKind.value === "agentTurn" &&
+				html`
+        <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px;">
+          <label class="text-xs text-[var(--muted)] flex items-center gap-2">
+            <input type="checkbox" checked=${deliverToChannel.value}
+              onChange=${(e) => {
+								deliverToChannel.value = e.target.checked;
+							}} />
+            Deliver output to channel
+          </label>
+          ${
+						deliverToChannel.value &&
+						html`
+            <div class="mt-3">
+              <label class="block text-xs text-[var(--muted)] mb-1">Channel Account</label>
+              <${ComboSelect}
+                options=${channelAccounts.value.map((c) => ({
+									value: c.account_id,
+									label: c.name || c.account_id,
+								}))}
+                value=${deliverChannel.value}
+                onChange=${(v) => {
+									deliverChannel.value = v;
+								}}
+                placeholder="Select channel account"
+                searchPlaceholder="Search channels\u2026"
+              />
+            </div>
+            <div class="mt-3">
+              <label class="block text-xs text-[var(--muted)] mb-1">Chat ID (recipient)</label>
+              <input class="provider-key-input" placeholder="Telegram chat_id"
+                value=${deliverTo.value}
+                onInput=${(e) => {
+									deliverTo.value = e.target.value;
+								}} />
+              <p class="text-xs text-[var(--muted)] mt-1">The Telegram chat ID where output will be sent.</p>
+            </div>
+          `
+					}
+        </div>
+      `
+			}
+
       <label class="text-xs text-[var(--muted)]">Session Target</label>
       <select data-field="target" class="provider-key-input"
         value=${sessionTarget.value}
@@ -788,6 +892,7 @@ function CronJobsPanel() {
 		loadStatus();
 		loadJobs();
 		loadSandboxImages();
+		loadChannelAccounts();
 	}, []);
 
 	return html`<div class="p-4 flex flex-col gap-4">
@@ -833,6 +938,7 @@ export function initCrons(container, param) {
 	heartbeatStatus.value = null;
 	heartbeatRuns.value = gon.get("heartbeat_runs") || [];
 	sandboxImages.value = [];
+	channelAccounts.value = [];
 	heartbeatModel.value = gon.get("heartbeat_config")?.model || "";
 	heartbeatSandboxImage.value = gon.get("heartbeat_config")?.sandbox_image || "";
 

@@ -189,8 +189,7 @@ pub struct ChannelMessageMeta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Filename of saved voice audio (set by `save_channel_voice`).
-    /// Internal plumbing — not broadcast over WebSocket.
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_filename: Option<String>,
 }
 
@@ -289,6 +288,19 @@ pub trait ChannelOutbound: Send + Sync {
     ) -> Result<()> {
         let _ = suffix_html;
         self.send_text(account_id, to, text, reply_to).await
+    }
+    /// Send pre-formatted HTML without markdown conversion.
+    ///
+    /// Used for content that is already valid Telegram HTML (e.g. the activity
+    /// logbook with `<blockquote>` tags).  Default falls back to `send_text`.
+    async fn send_html(
+        &self,
+        account_id: &str,
+        to: &str,
+        html: &str,
+        reply_to: Option<&str>,
+    ) -> Result<()> {
+        self.send_text(account_id, to, html, reply_to).await
     }
     /// Send a text message without notification (silent). Falls back to send_text by default.
     async fn send_text_silent(

@@ -21,6 +21,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Model overrides UI: route specific providers/models to different prompt
   profiles using glob patterns. Flattened `[[prompt_profiles.overrides]]` TOML
   schema (backward compatible) and new `system_prompt.config.overrides.save` RPC.
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.10] - 2026-02-21
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.9] - 2026-02-21
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.8] - 2026-02-21
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.7] - 2026-02-20
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.6] - 2026-02-20
+
+
+### Added
+
+- Cron jobs can now deliver agent turn output to Telegram channels via the `deliver`, `channel`, and `to` payload fields
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Accessing `http://` on the HTTPS port now returns a 301 redirect to `https://` instead of a garbled TLS handshake page
+- SQLite metrics store now uses WAL journal mode and `synchronous=NORMAL` to fix slow INSERT times (1-3s) on Docker/WSL2
+
+### Security
+
+## [0.9.5] - 2026-02-20
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+- Skip jemalloc on Windows (platform-specific dependency gate)
+
+### Security
+
+## [0.9.4] - 2026-02-20
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.3] - 2026-02-20
+
+
+### Added
+
+### Changed
+
+### Deprecated
+
+### Removed
+
+### Fixed
+
+### Security
+
+## [0.9.2] - 2026-02-20
+
+
+### Added
 - Event-driven heartbeat wake system: cron jobs can now trigger immediate
   heartbeat runs via a `wakeMode` field (`"now"` or `"nextHeartbeat"`).
 - System events queue: in-memory bounded buffer that collects events (exec
