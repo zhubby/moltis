@@ -190,6 +190,10 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li>GraphQL API at <code>/graphql</code> (GET serves GraphiQL playground and WebSocket subscriptions, POST handles queries/mutations) exposing all RPC methods as typed operations</li>
+<li>New <code>moltis-graphql</code> crate with queries, mutations, subscriptions, custom <code>Json</code> scalar, and <code>ServiceCaller</code> trait abstraction</li>
+<li><code>graphql</code> feature flag (default on) in gateway and CLI crates for compile-time opt-out</li>
+<li>Settings &gt; GraphQL page embedding GraphiQL playground at <code>/settings/graphql</code></li>
 <li>Gateway startup now seeds a built-in <code>dcg-guard</code> hook in <code>~/.moltis/hooks/dcg-guard/</code> (manifest + handler), so destructive command guarding is available out of the box once <code>dcg</code> is installed</li>
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
@@ -200,6 +204,9 @@ provider is set.</li>
 onboarding-ready configs.</li>
 <li>Updated the <code>dcg-guard</code> example hook docs and handler behavior to gracefully no-op when <code>dcg</code> is missing, instead of hard-failing</li>
 <li>Automatic model/provider selection now prefers subscription-backed providers (OpenAI Codex, GitHub Copilot) ahead of API-key providers, while still honoring explicit model priorities</li>
+<li>GraphQL gateway now builds its schema once at startup and reuses it for HTTP and WebSocket requests</li>
+<li>GraphQL resolvers now share common RPC helper macros and use typed response objects for <code>node.describe</code>, <code>voice.config</code>, <code>voice.voxtral_requirements</code>, <code>skills.security_status</code>, <code>skills.security_scan</code>, and <code>memory.config</code></li>
+<li>GraphQL <code>logs.ack</code> mutation now matches backend behavior and no longer takes an <code>ids</code> argument</li>
 </ul>
 <h3 id="deprecated"><a class="header" href="#deprecated">Deprecated</a></h3>
 <h3 id="removed"><a class="header" href="#removed">Removed</a></h3>
@@ -215,6 +222,8 @@ centered spinner.</li>
 <li>Onboarding voice provider rows now use a dedicated <code>needs-key</code> badge class and styling, with E2E coverage to verify the badge pill rendering</li>
 <li>OpenAI Codex OAuth token handling now preserves account context across refreshes and resolves <code>ChatGPT-Account-Id</code> from additional JWT/auth.json shapes to avoid auth failures with Max-style OAuth flows</li>
 <li>Onboarding/provider setup now surfaces subscription OAuth providers (OpenAI Codex, GitHub Copilot) as configured when local OAuth tokens are present, even if they are omitted from <code>providers.offered</code></li>
+<li>GraphQL WebSocket upgrade detection now accepts clients that provide <code>Upgrade</code>/<code>Sec-WebSocket-Key</code> without <code>Connection: upgrade</code></li>
+<li>GraphQL channel and memory status bridges now return schema-compatible shapes for <code>channels.status</code>, <code>channels.list</code>, and <code>memory.status</code></li>
 <li>Provider errors with <code>insufficient_quota</code> now surface as explicit quota/billing failures (with the upstream message) instead of generic retrying/rate-limit behavior</li>
 </ul>
 <h3 id="security"><a class="header" href="#security">Security</a></h3>

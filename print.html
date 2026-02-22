@@ -3380,6 +3380,154 @@ LLMs that forget to pass session_id</li>
 <li>If you still hit limits, check <code>memory_limit_percent</code> threshold</li>
 <li>Use <code>close</code> action when done to free up sessions</li>
 </ul>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="graphql-api"><a class="header" href="#graphql-api">GraphQL API</a></h1>
+<p>Moltis exposes a GraphQL API that mirrors gateway RPC methods with typed query
+and mutation responses where the data shape is known.</p>
+<h2 id="availability"><a class="header" href="#availability">Availability</a></h2>
+<p>GraphQL is compile-time feature gated:</p>
+<ul>
+<li>Gateway feature: <code>graphql</code></li>
+<li>CLI feature: <code>graphql</code> (enabled in default feature set)</li>
+</ul>
+<p>If Moltis is built without this feature, <code>/graphql</code> is not registered.</p>
+<p>When built with the feature, GraphQL is runtime-toggleable:</p>
+<ul>
+<li>Config: <code>[graphql] enabled = true|false</code></li>
+<li>UI: <code>Settings &gt; GraphQL</code> toggle</li>
+</ul>
+<p>Changes apply immediately, without restart.</p>
+<h2 id="endpoints"><a class="header" href="#endpoints">Endpoints</a></h2>
+<div class="table-wrapper"><table><thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead><tbody>
+<tr><td><code>GET</code></td><td><code>/graphql</code></td><td>GraphiQL playground and WebSocket subscriptions</td></tr>
+<tr><td><code>POST</code></td><td><code>/graphql</code></td><td>Queries and mutations</td></tr>
+</tbody></table>
+</div>
+<p>WebSocket subprotocols accepted:</p>
+<ul>
+<li><code>graphql-transport-ws</code></li>
+<li><code>graphql-ws</code></li>
+</ul>
+<h2 id="authentication-and-security"><a class="header" href="#authentication-and-security">Authentication and Security</a></h2>
+<p>GraphQL is protected by the same auth decisions used elsewhere in the gateway.
+It is not on the public path allowlist.</p>
+<ul>
+<li>With <code>web-ui</code> builds, GraphQL is behind the global <code>auth_gate</code> middleware.</li>
+<li>Without <code>web-ui</code>, GraphQL is explicitly guarded by <code>graphql_auth_gate</code>.</li>
+</ul>
+<p>When auth is required and the request is unauthenticated, GraphQL returns <code>401</code>
+(<code>{"error":"not authenticated"}</code> or <code>{"error":"setup required"}</code>).</p>
+<p>When GraphQL is runtime-disabled, <code>/graphql</code> returns <code>503</code>
+(<code>{"error":"graphql server is disabled"}</code>).</p>
+<p>Supported auth methods:</p>
+<ul>
+<li>Valid session cookie (<code>moltis_session</code>)</li>
+<li><code>Authorization: Bearer &lt;api_key&gt;</code></li>
+</ul>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+<div class="admonition-title">
+<div id="admonition-warning-title">
+<p>Warning</p>
+</div>
+<a class="admonition-anchor-link" href="graphql.html#admonition-warning"></a>
+</div>
+<div>
+<p>Do not expose Moltis to untrusted networks with authentication disabled.</p>
+</div>
+</div>
+<h2 id="schema-layout"><a class="header" href="#schema-layout">Schema Layout</a></h2>
+<p>The schema is organized by namespaces that map to gateway method groups.</p>
+<p>Top-level query fields include:</p>
+<ul>
+<li><code>health</code></li>
+<li><code>status</code></li>
+<li><code>system</code>, <code>node</code>, <code>chat</code>, <code>sessions</code>, <code>channels</code></li>
+<li><code>config</code>, <code>cron</code>, <code>heartbeat</code>, <code>logs</code></li>
+<li><code>tts</code>, <code>stt</code>, <code>voice</code></li>
+<li><code>skills</code>, <code>models</code>, <code>providers</code>, <code>mcp</code></li>
+<li><code>usage</code>, <code>execApprovals</code>, <code>projects</code>, <code>memory</code>, <code>hooks</code>, <code>agents</code></li>
+<li><code>voicewake</code>, <code>device</code></li>
+</ul>
+<p>Top-level mutation fields follow the same namespace pattern (for example:
+<code>chat.send</code>, <code>config.set</code>, <code>cron.add</code>, <code>providers.oauthStart</code>, <code>mcp.reauth</code>).</p>
+<p>Subscriptions include:</p>
+<ul>
+<li><code>chatEvent</code></li>
+<li><code>sessionChanged</code></li>
+<li><code>cronNotification</code></li>
+<li><code>channelEvent</code></li>
+<li><code>nodeEvent</code></li>
+<li><code>tick</code></li>
+<li><code>logEntry</code></li>
+<li><code>mcpStatusChanged</code></li>
+<li><code>approvalEvent</code></li>
+<li><code>configChanged</code></li>
+<li><code>presenceChanged</code></li>
+<li><code>metricsUpdate</code></li>
+<li><code>updateAvailable</code></li>
+<li><code>voiceConfigChanged</code></li>
+<li><code>skillsInstallProgress</code></li>
+<li><code>allEvents</code></li>
+</ul>
+<h2 id="typed-data-and-json-scalar"><a class="header" href="#typed-data-and-json-scalar">Typed Data and <code>Json</code> Scalar</a></h2>
+<p>Most GraphQL return types are concrete structs. The custom <code>Json</code> scalar is
+still used where runtime shape is intentionally dynamic (for example: arbitrary
+config values, context payloads, or pass-through node payloads).</p>
+<h2 id="examples"><a class="header" href="#examples">Examples</a></h2>
+<h3 id="query-health"><a class="header" href="#query-health">Query (health)</a></h3>
+<pre><code class="language-bash">curl -sS http://localhost:13131/graphql \
+  -H 'content-type: application/json' \
+  -H 'authorization: Bearer mk_your_api_key' \
+  -d '{"query":"{ health { ok connections } }"}'
+</code></pre>
+<h3 id="query-with-namespace-fields"><a class="header" href="#query-with-namespace-fields">Query with namespace fields</a></h3>
+<pre><code class="language-graphql">query {
+  status {
+    hostname
+    version
+    connections
+  }
+  cron {
+    list {
+      id
+      name
+      enabled
+    }
+  }
+}
+</code></pre>
+<h3 id="mutation"><a class="header" href="#mutation">Mutation</a></h3>
+<pre><code class="language-graphql">mutation {
+  chat {
+    send(message: "Hello from GraphQL") {
+      ok
+      sessionKey
+    }
+  }
+}
+</code></pre>
+<h3 id="subscription-graphql-transport-ws"><a class="header" href="#subscription-graphql-transport-ws">Subscription (<code>graphql-transport-ws</code>)</a></h3>
+<ol>
+<li>Connect to <code>ws://localhost:13131/graphql</code> with subprotocol
+<code>graphql-transport-ws</code>.</li>
+<li>Send:</li>
+</ol>
+<pre><code class="language-json">{ "type": "connection_init" }
+</code></pre>
+<ol start="3">
+<li>Start a subscription:</li>
+</ol>
+<pre><code class="language-json">{
+  "id": "1",
+  "type": "subscribe",
+  "payload": {
+    "query": "subscription { tick { ts connections } }"
+  }
+}
+</code></pre>
+<h2 id="graphiql-in-the-web-ui"><a class="header" href="#graphiql-in-the-web-ui">GraphiQL in the Web UI</a></h2>
+<p>When the binary includes GraphQL, the Settings page includes a <strong>GraphQL</strong> tab.
+At the top of that page you can enable/disable GraphQL immediately; when
+enabled it embeds GraphiQL at <code>/graphql</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="session-state"><a class="header" href="#session-state">Session State</a></h1>
 <p>Moltis provides a per-session key-value store that allows skills, extensions,
 and the agent itself to persist context across messages within a session.</p>
@@ -5959,6 +6107,10 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li>GraphQL API at <code>/graphql</code> (GET serves GraphiQL playground and WebSocket subscriptions, POST handles queries/mutations) exposing all RPC methods as typed operations</li>
+<li>New <code>moltis-graphql</code> crate with queries, mutations, subscriptions, custom <code>Json</code> scalar, and <code>ServiceCaller</code> trait abstraction</li>
+<li><code>graphql</code> feature flag (default on) in gateway and CLI crates for compile-time opt-out</li>
+<li>Settings &gt; GraphQL page embedding GraphiQL playground at <code>/settings/graphql</code></li>
 <li>Gateway startup now seeds a built-in <code>dcg-guard</code> hook in <code>~/.moltis/hooks/dcg-guard/</code> (manifest + handler), so destructive command guarding is available out of the box once <code>dcg</code> is installed</li>
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
@@ -5969,6 +6121,9 @@ provider is set.</li>
 onboarding-ready configs.</li>
 <li>Updated the <code>dcg-guard</code> example hook docs and handler behavior to gracefully no-op when <code>dcg</code> is missing, instead of hard-failing</li>
 <li>Automatic model/provider selection now prefers subscription-backed providers (OpenAI Codex, GitHub Copilot) ahead of API-key providers, while still honoring explicit model priorities</li>
+<li>GraphQL gateway now builds its schema once at startup and reuses it for HTTP and WebSocket requests</li>
+<li>GraphQL resolvers now share common RPC helper macros and use typed response objects for <code>node.describe</code>, <code>voice.config</code>, <code>voice.voxtral_requirements</code>, <code>skills.security_status</code>, <code>skills.security_scan</code>, and <code>memory.config</code></li>
+<li>GraphQL <code>logs.ack</code> mutation now matches backend behavior and no longer takes an <code>ids</code> argument</li>
 </ul>
 <h3 id="deprecated"><a class="header" href="#deprecated">Deprecated</a></h3>
 <h3 id="removed"><a class="header" href="#removed">Removed</a></h3>
@@ -5984,6 +6139,8 @@ centered spinner.</li>
 <li>Onboarding voice provider rows now use a dedicated <code>needs-key</code> badge class and styling, with E2E coverage to verify the badge pill rendering</li>
 <li>OpenAI Codex OAuth token handling now preserves account context across refreshes and resolves <code>ChatGPT-Account-Id</code> from additional JWT/auth.json shapes to avoid auth failures with Max-style OAuth flows</li>
 <li>Onboarding/provider setup now surfaces subscription OAuth providers (OpenAI Codex, GitHub Copilot) as configured when local OAuth tokens are present, even if they are omitted from <code>providers.offered</code></li>
+<li>GraphQL WebSocket upgrade detection now accepts clients that provide <code>Upgrade</code>/<code>Sec-WebSocket-Key</code> without <code>Connection: upgrade</code></li>
+<li>GraphQL channel and memory status bridges now return schema-compatible shapes for <code>channels.status</code>, <code>channels.list</code>, and <code>memory.status</code></li>
 <li>Provider errors with <code>insufficient_quota</code> now surface as explicit quota/billing failures (with the upstream message) instead of generic retrying/rate-limit behavior</li>
 </ul>
 <h3 id="security-3"><a class="header" href="#security-3">Security</a></h3>
