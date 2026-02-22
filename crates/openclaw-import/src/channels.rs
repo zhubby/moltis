@@ -27,7 +27,7 @@ pub struct ImportedTelegramChannel {
 }
 
 /// Import result for channels.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImportedChannels {
     pub telegram: Vec<ImportedTelegramChannel>,
 }

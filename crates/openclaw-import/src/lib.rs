@@ -25,6 +25,7 @@ use std::path::Path;
 use {
     report::{CategoryReport, ImportCategory, ImportReport},
     serde::{Deserialize, Serialize},
+    tracing::{debug, warn},
 };
 
 pub use detect::{OpenClawDetection, detect};
@@ -113,7 +114,13 @@ pub fn import(
 
     // Identity
     if selection.identity {
-        let (cat_report, _imported_identity) = identity::import_identity(detection);
+        let (cat_report, imported_identity) = identity::import_identity(detection);
+        if cat_report.items_imported > 0
+            && let Err(e) = persist_identity(&imported_identity, config_dir)
+        {
+            warn!("failed to persist identity to config: {e}");
+        }
+        report.imported_identity = Some(imported_identity);
         report.add_category(cat_report);
     }
 
@@ -150,7 +157,13 @@ pub fn import(
 
     // Channels
     if selection.channels {
-        let (cat_report, _imported_channels) = channels::import_channels(detection);
+        let (cat_report, imported_channels) = channels::import_channels(detection);
+        if !imported_channels.telegram.is_empty()
+            && let Err(e) = persist_channels(&imported_channels, config_dir)
+        {
+            warn!("failed to persist channels to config: {e}");
+        }
+        report.imported_channels = Some(imported_channels);
         report.add_category(cat_report);
     }
 
@@ -210,6 +223,91 @@ fn save_import_state(path: &Path, report: &ImportReport) -> anyhow::Result<()> {
     }
     let json = serde_json::to_string_pretty(&state)?;
     std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Persist imported identity data to `moltis.toml`.
+///
+/// Loads any existing config, merges identity and timezone, and writes back.
+fn persist_identity(
+    imported: &identity::ImportedIdentity,
+    config_dir: &Path,
+) -> anyhow::Result<()> {
+    let config_path = config_dir.join("moltis.toml");
+    let mut config = load_or_default_config(&config_path);
+
+    if let Some(ref name) = imported.agent_name {
+        debug!(name, "persisting agent name to moltis.toml");
+        config.identity.name = Some(name.clone());
+    }
+
+    if let Some(ref tz_str) = imported.user_timezone {
+        if let Ok(tz) = tz_str.parse::<moltis_config::Timezone>() {
+            debug!(timezone = tz_str, "persisting user timezone to moltis.toml");
+            config.user.timezone = Some(tz);
+        } else {
+            warn!(timezone = tz_str, "unknown timezone, skipping");
+        }
+    }
+
+    save_config_to_path(&config_path, &config)
+}
+
+/// Persist imported Telegram channels to `[channels.telegram]` in `moltis.toml`.
+fn persist_channels(
+    imported: &channels::ImportedChannels,
+    config_dir: &Path,
+) -> anyhow::Result<()> {
+    let config_path = config_dir.join("moltis.toml");
+    let mut config = load_or_default_config(&config_path);
+
+    for ch in &imported.telegram {
+        let allowlist: Vec<String> = ch.allowed_users.iter().map(|id| id.to_string()).collect();
+
+        // Map OpenClaw dm_policy to Moltis format (default to "allowlist")
+        let dm_policy = match ch.dm_policy.as_deref() {
+            Some("pairing") => "pairing",
+            Some("otp") => "otp",
+            Some("open") => "open",
+            Some("disabled") => "disabled",
+            _ => "allowlist",
+        };
+
+        let value = serde_json::json!({
+            "token": ch.bot_token,
+            "dm_policy": dm_policy,
+            "allowlist": allowlist,
+        });
+
+        debug!(account_id = %ch.account_id, "persisting Telegram channel to moltis.toml");
+        config
+            .channels
+            .telegram
+            .insert(ch.account_id.clone(), value);
+    }
+
+    save_config_to_path(&config_path, &config)
+}
+
+/// Load a `MoltisConfig` from a TOML file, or return defaults if not found.
+fn load_or_default_config(path: &Path) -> moltis_config::MoltisConfig {
+    if !path.is_file() {
+        return moltis_config::MoltisConfig::default();
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return moltis_config::MoltisConfig::default();
+    };
+    toml::from_str(&content).unwrap_or_default()
+}
+
+/// Serialize a `MoltisConfig` to TOML and write it to the given path.
+fn save_config_to_path(path: &Path, config: &moltis_config::MoltisConfig) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let toml_str =
+        toml::to_string_pretty(config).map_err(|e| anyhow::anyhow!("serialize config: {e}"))?;
+    std::fs::write(path, toml_str)?;
     Ok(())
 }
 
@@ -478,5 +576,151 @@ mod tests {
         let loaded = load_import_state(data_dir).unwrap();
         assert_eq!(loaded.last_import_at, Some(12345));
         assert_eq!(loaded.categories_imported.len(), 2);
+    }
+
+    #[test]
+    fn import_persists_identity_to_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+        let selection = ImportSelection {
+            identity: true,
+            ..Default::default()
+        };
+        let report = import(&detection, &selection, &config_dir, &data_dir);
+
+        // Identity should be persisted to moltis.toml
+        let config_path = config_dir.join("moltis.toml");
+        assert!(config_path.is_file(), "moltis.toml should be created");
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
+
+        assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        assert_eq!(
+            config.user.timezone.as_ref().map(|t| t.name()),
+            Some("America/New_York")
+        );
+
+        // Report should include imported identity
+        assert!(report.imported_identity.is_some());
+        let id = report.imported_identity.unwrap();
+        assert_eq!(id.agent_name.as_deref(), Some("Claude"));
+        assert_eq!(id.user_timezone.as_deref(), Some("America/New_York"));
+    }
+
+    #[test]
+    fn import_persists_channels_to_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+        let selection = ImportSelection {
+            channels: true,
+            ..Default::default()
+        };
+        let report = import(&detection, &selection, &config_dir, &data_dir);
+
+        // Channels should be persisted to moltis.toml
+        let config_path = config_dir.join("moltis.toml");
+        assert!(config_path.is_file(), "moltis.toml should be created");
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
+
+        assert!(
+            !config.channels.telegram.is_empty(),
+            "telegram channels should be populated"
+        );
+        let entry = config.channels.telegram.get("default").unwrap();
+        assert_eq!(entry["token"].as_str(), Some("123:ABC"));
+        assert_eq!(entry["dm_policy"].as_str(), Some("allowlist"));
+
+        // Allowlist should contain the user ID
+        let allowlist = entry["allowlist"].as_array().unwrap();
+        assert!(allowlist.iter().any(|v| v.as_str() == Some("111")));
+
+        // Report should include imported channels
+        assert!(report.imported_channels.is_some());
+        let ch = report.imported_channels.unwrap();
+        assert_eq!(ch.telegram.len(), 1);
+        assert_eq!(ch.telegram[0].bot_token, "123:ABC");
+    }
+
+    #[test]
+    fn import_merges_identity_with_existing_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        // Pre-existing config with a vibe set
+        let existing = moltis_config::MoltisConfig {
+            identity: moltis_config::AgentIdentity {
+                vibe: Some("chill".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string_pretty(&existing).unwrap();
+        std::fs::write(config_dir.join("moltis.toml"), &toml_str).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+        let selection = ImportSelection {
+            identity: true,
+            ..Default::default()
+        };
+        import(&detection, &selection, &config_dir, &data_dir);
+
+        let content = std::fs::read_to_string(config_dir.join("moltis.toml")).unwrap();
+        let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
+
+        // Imported name should be set
+        assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        // Pre-existing vibe should be preserved
+        assert_eq!(config.identity.vibe.as_deref(), Some("chill"));
+    }
+
+    #[test]
+    fn full_import_persists_identity_and_channels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+        let report = import(&detection, &ImportSelection::all(), &config_dir, &data_dir);
+
+        // moltis.toml should contain both identity and channels
+        let content = std::fs::read_to_string(config_dir.join("moltis.toml")).unwrap();
+        let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
+
+        assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        assert!(!config.channels.telegram.is_empty());
+
+        // Report should have both
+        assert!(report.imported_identity.is_some());
+        assert!(report.imported_channels.is_some());
     }
 }

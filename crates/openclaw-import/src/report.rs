@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::{channels::ImportedChannels, identity::ImportedIdentity};
+
 /// A single import category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +102,12 @@ pub struct TodoItem {
 pub struct ImportReport {
     pub categories: Vec<CategoryReport>,
     pub todos: Vec<TodoItem>,
+    /// Identity data extracted during import (if selected).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_identity: Option<ImportedIdentity>,
+    /// Channel data extracted during import (if selected).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_channels: Option<ImportedChannels>,
 }
 
 impl ImportReport {
@@ -108,6 +116,8 @@ impl ImportReport {
         Self {
             categories: Vec::new(),
             todos: Vec::new(),
+            imported_identity: None,
+            imported_channels: None,
         }
     }
 

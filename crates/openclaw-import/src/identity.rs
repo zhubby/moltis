@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Extracted identity from an OpenClaw installation.
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ImportedIdentity {
     /// Agent display name (from `ui.assistant.name` or first agent's name).
     pub agent_name: Option<String>,

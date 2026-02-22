@@ -2207,18 +2207,18 @@ function OpenClawImportStep({ onNext, onBack }) {
 		});
 	}
 
-	function doImport() {
+	async function doImport() {
 		setImporting(true);
 		setError(null);
-		sendRpc("openclaw.import", selection).then((res) => {
-			setImporting(false);
-			if (res?.ok) {
-				setResult(res.payload);
-				setDone(true);
-			} else {
-				setError(res?.error?.message || "Import failed");
-			}
-		});
+		var res = await sendRpc("openclaw.import", selection);
+		setImporting(false);
+		if (res?.ok) {
+			setResult(res.payload);
+			await refreshGon();
+			setDone(true);
+		} else {
+			setError(res?.error?.message || "Import failed");
+		}
 	}
 
 	if (loading) {
