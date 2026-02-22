@@ -1540,7 +1540,7 @@ function OnboardingVoiceRow({
 			<div class="flex-1 min-w-0 flex flex-col gap-0.5">
 				<div class="flex items-center gap-2 flex-wrap">
 					<span class="text-sm font-medium text-[var(--text-strong)]">${provider.name}</span>
-					${provider.available ? html`<span class="provider-item-badge configured">configured</span>` : html`<span class="provider-item-badge">needs key</span>`}
+						${provider.available ? html`<span class="provider-item-badge configured">configured</span>` : html`<span class="provider-item-badge needs-key">needs key</span>`}
 					${keySourceLabel ? html`<span class="text-xs text-[var(--muted)]">${keySourceLabel}</span>` : null}
 				</div>
 				${provider.description ? html`<span class="text-xs text-[var(--muted)]">${provider.description}${!isConfiguring && provider.keyUrl ? html`${" \u2014 "}get your key at <a href=${provider.keyUrl} target="_blank" class="text-[var(--accent)] underline">${provider.keyUrlLabel || provider.keyUrl}</a>` : null}</span>` : null}
@@ -2219,7 +2219,10 @@ function SummaryStep({ onBack, onFinish }) {
 	}, []);
 
 	if (loading || !data) {
-		return html`<div class="text-sm text-[var(--muted)]">Loading summary\u2026</div>`;
+		return html`<div class="flex flex-col items-center justify-center gap-3 min-h-[200px]">
+			<div class="inline-block w-8 h-8 border-2 border-[var(--border)] border-t-[var(--accent)] rounded-full animate-spin"></div>
+			<div class="text-sm text-[var(--muted)]">Loading summary\u2026</div>
+		</div>`;
 	}
 
 	var activeModel = localStorage.getItem("moltis-model");

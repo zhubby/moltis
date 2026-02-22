@@ -152,11 +152,14 @@ impl moltis_tools::location::LocationRequester for GatewayLocationRequester {
         {
             let mut inner_w = self.state.inner.write().await;
             let invokes = &mut inner_w.pending_invokes;
-            invokes.insert(request_id.clone(), crate::state::PendingInvoke {
-                request_id: request_id.clone(),
-                sender: tx,
-                created_at: std::time::Instant::now(),
-            });
+            invokes.insert(
+                request_id.clone(),
+                crate::state::PendingInvoke {
+                    request_id: request_id.clone(),
+                    sender: tx,
+                    created_at: std::time::Instant::now(),
+                },
+            );
         }
 
         // Wait up to 30 seconds for the user to grant/deny permission.
@@ -270,13 +273,14 @@ impl moltis_tools::location::LocationRequester for GatewayLocationRequester {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut inner = self.state.inner.write().await;
-            inner
-                .pending_invokes
-                .insert(pending_key.clone(), crate::state::PendingInvoke {
+            inner.pending_invokes.insert(
+                pending_key.clone(),
+                crate::state::PendingInvoke {
                     request_id: pending_key.clone(),
                     sender: tx,
                     created_at: std::time::Instant::now(),
-                });
+                },
+            );
         }
 
         // Wait up to 60 seconds — user needs to navigate Telegram's UI.
@@ -1363,9 +1367,9 @@ pub async fn start_gateway(
                         token_url: o.token_url.clone(),
                         scopes: o.scopes.clone(),
                     });
-                merged
-                    .servers
-                    .insert(name.clone(), moltis_mcp::McpServerConfig {
+                merged.servers.insert(
+                    name.clone(),
+                    moltis_mcp::McpServerConfig {
                         command: entry.command.clone(),
                         args: entry.args.clone(),
                         env: entry.env.clone(),
@@ -1373,7 +1377,8 @@ pub async fn start_gateway(
                         transport,
                         url: entry.url.clone(),
                         oauth,
-                    });
+                    },
+                );
             }
         }
         mcp_configured_count = merged.servers.values().filter(|s| s.enabled).count();
@@ -1836,10 +1841,15 @@ pub async fn start_gateway(
             // Spawn async broadcast in a background task since we're in a sync callback.
             let state = Arc::clone(state);
             tokio::spawn(async move {
-                broadcast(&state, event, payload, BroadcastOpts {
-                    drop_if_slow: true,
-                    ..Default::default()
-                })
+                broadcast(
+                    &state,
+                    event,
+                    payload,
+                    BroadcastOpts {
+                        drop_if_slow: true,
+                        ..Default::default()
+                    },
+                )
                 .await;
             });
         });
@@ -2243,6 +2253,7 @@ pub async fn start_gateway(
     seed_default_workspace_markdown_files();
     seed_example_skill();
     seed_example_hook();
+    seed_dcg_guard_hook();
     let persisted_disabled = crate::methods::load_disabled_hooks();
     let (hook_registry, discovered_hooks_info) =
         discover_and_build_hooks(&persisted_disabled, Some(&session_store)).await;
@@ -3383,10 +3394,15 @@ pub async fn start_gateway(
                         }
                     };
                     if changed && let Ok(payload) = serde_json::to_value(&next) {
-                        broadcast(&update_state, "update.available", payload, BroadcastOpts {
-                            drop_if_slow: true,
-                            ..Default::default()
-                        })
+                        broadcast(
+                            &update_state,
+                            "update.available",
+                            payload,
+                            BroadcastOpts {
+                                drop_if_slow: true,
+                                ..Default::default()
+                            },
+                        )
                         .await;
                     }
                 },
@@ -3451,12 +3467,15 @@ pub async fn start_gateway(
                         .by_provider
                         .iter()
                         .map(|(name, metrics)| {
-                            (name.clone(), moltis_metrics::ProviderTokens {
-                                input_tokens: metrics.input_tokens,
-                                output_tokens: metrics.output_tokens,
-                                completions: metrics.completions,
-                                errors: metrics.errors,
-                            })
+                            (
+                                name.clone(),
+                                moltis_metrics::ProviderTokens {
+                                    input_tokens: metrics.input_tokens,
+                                    output_tokens: metrics.output_tokens,
+                                    completions: metrics.completions,
+                                    errors: metrics.errors,
+                                },
+                            )
                         })
                         .collect();
 
@@ -3576,10 +3595,15 @@ pub async fn start_gateway(
                                 }),
                             ),
                         };
-                        broadcast(&event_state, event_name, payload, BroadcastOpts {
-                            drop_if_slow: true,
-                            ..Default::default()
-                        })
+                        broadcast(
+                            &event_state,
+                            event_name,
+                            payload,
+                            BroadcastOpts {
+                                drop_if_slow: true,
+                                ..Default::default()
+                            },
+                        )
                         .await;
                     },
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
@@ -3598,10 +3622,15 @@ pub async fn start_gateway(
                 match rx.recv().await {
                     Ok(entry) => {
                         if let Ok(payload) = serde_json::to_value(&entry) {
-                            broadcast(&log_state, "logs.entry", payload, BroadcastOpts {
-                                drop_if_slow: true,
-                                ..Default::default()
-                            })
+                            broadcast(
+                                &log_state,
+                                "logs.entry",
+                                payload,
+                                BroadcastOpts {
+                                    drop_if_slow: true,
+                                    ..Default::default()
+                                },
+                            )
                             .await;
                         }
                     },
@@ -7195,6 +7224,34 @@ fn seed_example_hook() {
     }
 }
 
+/// Seed the `dcg-guard` hook into `~/.moltis/hooks/dcg-guard/` on first run.
+///
+/// Writes both `HOOK.md` and `handler.sh`. The handler gracefully no-ops when
+/// `dcg` is not installed, so the hook is always eligible.
+fn seed_dcg_guard_hook() {
+    let hook_dir = moltis_config::data_dir().join("hooks/dcg-guard");
+    let hook_md = hook_dir.join("HOOK.md");
+    if hook_md.exists() {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&hook_dir) {
+        tracing::debug!("could not create dcg-guard hook dir: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::write(&hook_md, DCG_GUARD_HOOK_MD) {
+        tracing::debug!("could not write dcg-guard HOOK.md: {e}");
+    }
+    let handler = hook_dir.join("handler.sh");
+    if let Err(e) = std::fs::write(&handler, DCG_GUARD_HANDLER_SH) {
+        tracing::debug!("could not write dcg-guard handler.sh: {e}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&handler, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
 /// Seed built-in personal skills into `~/.moltis/skills/`.
 ///
 /// These are safe defaults shipped with the binary. Existing user content
@@ -7322,6 +7379,74 @@ os = ["darwin", "linux"]    # skip on other OSes
 bins = ["jq"]               # required binaries in PATH
 env = ["MY_API_KEY"]        # required environment variables
 ```
+"#;
+
+/// Content for the seeded dcg-guard hook manifest.
+const DCG_GUARD_HOOK_MD: &str = r#"+++
+name = "dcg-guard"
+description = "Blocks destructive commands using Destructive Command Guard (dcg)"
+emoji = "🛡️"
+events = ["BeforeToolCall"]
+command = "./handler.sh"
+timeout = 5
++++
+
+# Destructive Command Guard (dcg)
+
+Uses the external [dcg](https://github.com/Dicklesworthstone/destructive_command_guard)
+tool to scan shell commands before execution. dcg ships 49+ pattern categories
+covering filesystem, git, database, cloud, and infrastructure commands.
+
+This hook is **seeded by default** into `~/.moltis/hooks/dcg-guard/` on first
+run. When `dcg` is not installed the hook is a no-op (all commands pass through).
+
+## Install dcg
+
+```bash
+cargo install dcg
+```
+
+Once installed, the hook will automatically start guarding destructive commands
+on the next Moltis restart.
+"#;
+
+/// Content for the seeded dcg-guard handler script.
+const DCG_GUARD_HANDLER_SH: &str = r#"#!/usr/bin/env bash
+# Hook handler: translates Moltis BeforeToolCall payload to dcg format.
+# When dcg is not installed the hook is a no-op (all commands pass through).
+
+set -euo pipefail
+
+# Gracefully skip when dcg is not installed.
+if ! command -v dcg >/dev/null 2>&1; then
+    cat >/dev/null   # drain stdin
+    exit 0
+fi
+
+INPUT=$(cat)
+
+# Only inspect exec tool calls.
+TOOL_NAME=$(printf '%s' "$INPUT" | grep -o '"tool_name":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ "$TOOL_NAME" != "exec" ]; then
+    exit 0
+fi
+
+# Extract the command string from the arguments object.
+COMMAND=$(printf '%s' "$INPUT" | grep -o '"command":"[^"]*"' | head -1 | cut -d'"' -f4)
+if [ -z "$COMMAND" ]; then
+    exit 0
+fi
+
+# Build the payload dcg expects and pipe it in.
+DCG_INPUT=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$COMMAND")
+DCG_RESULT=$(printf '%s' "$DCG_INPUT" | dcg 2>&1) || {
+    # dcg returned non-zero — command is destructive.
+    echo "$DCG_RESULT" >&2
+    exit 1
+}
+
+# dcg returned 0 — command is safe.
+exit 0
 "#;
 
 /// Content for the starter example personal skill.
@@ -7669,7 +7794,7 @@ pub(crate) async fn discover_and_build_hooks(
     (Some(Arc::new(registry)), info_list)
 }
 
-#[allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use {
@@ -8413,21 +8538,27 @@ mod tests {
             "https://localhost:49494".to_string(),
             "https://m4max.local:49494".to_string(),
         ]);
-        assert_eq!(lines, vec![
-            "passkey origin: https://localhost:49494",
-            "passkey origin: https://m4max.local:49494",
-        ]);
+        assert_eq!(
+            lines,
+            vec![
+                "passkey origin: https://localhost:49494",
+                "passkey origin: https://m4max.local:49494",
+            ]
+        );
     }
 
     #[test]
     fn startup_setup_code_lines_adds_spacers() {
         let lines = startup_setup_code_lines("493413");
-        assert_eq!(lines, vec![
-            "",
-            "setup code: 493413",
-            "enter this code to set your password or register a passkey",
-            "",
-        ]);
+        assert_eq!(
+            lines,
+            vec![
+                "",
+                "setup code: 493413",
+                "enter this code to set your password or register a passkey",
+                "",
+            ]
+        );
     }
 
     // ── is_local_connection / proxy header detection tests ───────────────
@@ -8683,13 +8814,16 @@ mod tests {
             ("OPENAI_API_KEY".to_string(), "config-openai".to_string()),
             ("BRAVE_API_KEY".to_string(), "config-brave".to_string()),
         ]);
-        let merged = merge_env_overrides(&base, vec![
-            ("OPENAI_API_KEY".to_string(), "db-openai".to_string()),
-            (
-                "PERPLEXITY_API_KEY".to_string(),
-                "db-perplexity".to_string(),
-            ),
-        ]);
+        let merged = merge_env_overrides(
+            &base,
+            vec![
+                ("OPENAI_API_KEY".to_string(), "db-openai".to_string()),
+                (
+                    "PERPLEXITY_API_KEY".to_string(),
+                    "db-perplexity".to_string(),
+                ),
+            ],
+        );
         assert_eq!(
             merged.get("OPENAI_API_KEY").map(String::as_str),
             Some("config-openai")
