@@ -2389,8 +2389,9 @@ impl ChatService for LiveChatService {
         } else {
             let text = params
                 .get("text")
+                .or_else(|| params.get("message"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "missing 'text' or 'content' parameter".to_string())?
+                .ok_or_else(|| "missing 'text', 'message', or 'content' parameter".to_string())?
                 .to_string();
             (text.clone(), MessageContent::Text(text))
         };
@@ -2606,6 +2607,7 @@ impl ChatService for LiveChatService {
                     )
                     .await;
                     return Ok(serde_json::json!({
+                        "ok": true,
                         "queued": true,
                         "mode": format!("{queue_mode:?}").to_lowercase(),
                     }));
@@ -2781,7 +2783,7 @@ impl ChatService for LiveChatService {
                 .await
                 .insert(session_key.clone(), run_id.clone());
 
-            return Ok(serde_json::json!({ "runId": run_id }));
+            return Ok(serde_json::json!({ "ok": true, "runId": run_id }));
         }
 
         // Resolve model: explicit param → session metadata → first registered.
@@ -3158,6 +3160,7 @@ impl ChatService for LiveChatService {
                 )
                 .await;
                 return Ok(serde_json::json!({
+                    "ok": true,
                     "queued": true,
                     "mode": format!("{queue_mode:?}").to_lowercase(),
                 }));
@@ -3421,7 +3424,7 @@ impl ChatService for LiveChatService {
             .await
             .insert(session_key.clone(), run_id.clone());
 
-        Ok(serde_json::json!({ "runId": run_id }))
+        Ok(serde_json::json!({ "ok": true, "runId": run_id }))
     }
 
     async fn send_sync(&self, params: Value) -> ServiceResult {
@@ -4479,6 +4482,20 @@ impl ChatService for LiveChatService {
             "systemPromptChars": system_prompt_chars,
             "totalChars": total_chars,
         }))
+    }
+
+    async fn active(&self, params: Value) -> ServiceResult {
+        let session_key = params
+            .get("sessionKey")
+            .or_else(|| params.get("session_key"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "missing 'sessionKey' parameter".to_string())?;
+        let active = self
+            .active_runs_by_session
+            .read()
+            .await
+            .contains_key(session_key);
+        Ok(serde_json::json!({ "active": active }))
     }
 
     async fn active_session_keys(&self) -> Vec<String> {

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `graphql` feature flag (default on) in gateway and CLI crates for compile-time opt-out
 - Settings > GraphQL page embedding GraphiQL playground at `/settings/graphql`
 - Gateway startup now seeds a built-in `dcg-guard` hook in `~/.moltis/hooks/dcg-guard/` (manifest + handler), so destructive command guarding is available out of the box once `dcg` is installed
+- GraphQL `sessions.active` query to check whether a session has an active LLM run
+
 ### Changed
 
 - Voice now auto-selects the first configured TTS/STT provider when no explicit
@@ -32,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- GraphQL chat methods now use the late-bound `state.chat()` service, ensuring they share the same `LiveChatService` instance as WebSocket and RPC callers
+- GraphQL `SessionEntry.id` type corrected from `i64` to `String` to match actual RPC data
 - OpenAI TTS and Whisper STT now correctly reuse OpenAI credentials from
   voice config, `OPENAI_API_KEY`, or the LLM OpenAI provider config.
 - Voice provider parsing now accepts `openai-tts` and `google-tts` aliases
