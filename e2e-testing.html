@@ -193,7 +193,7 @@
 <li>Runtime state is isolated so local machine config does not leak into test outcomes.</li>
 </ul>
 <h2 id="current-setup"><a class="header" href="#current-setup">Current Setup</a></h2>
-<p>The e2e harness lives in <code>crates/gateway/ui</code>:</p>
+<p>The e2e harness lives in <code>crates/web/ui</code>:</p>
 <ul>
 <li><code>playwright.config.js</code> configures Playwright and web server startup.</li>
 <li><code>e2e/start-gateway.sh</code> boots the gateway in deterministic test mode.</li>
@@ -218,7 +218,7 @@ just ui-e2e
 <p>Headed mode:</p>
 <pre><code class="language-bash">just ui-e2e-headed
 </code></pre>
-<p>Directly from <code>crates/gateway/ui</code>:</p>
+<p>Directly from <code>crates/web/ui</code>:</p>
 <pre><code class="language-bash">npm install
 npm run e2e:install
 npm run e2e
@@ -226,11 +226,11 @@ npm run e2e
 <h2 id="test-artifacts"><a class="header" href="#test-artifacts">Test Artifacts</a></h2>
 <p>On failures, Playwright stores artifacts in:</p>
 <ul>
-<li><code>crates/gateway/ui/test-results/</code> (screenshots, video, traces)</li>
-<li><code>crates/gateway/ui/playwright-report/</code> (HTML report)</li>
+<li><code>crates/web/ui/test-results/</code> (screenshots, video, traces)</li>
+<li><code>crates/web/ui/playwright-report/</code> (HTML report)</li>
 </ul>
 <p>Open a trace with:</p>
-<pre><code class="language-bash">cd crates/gateway/ui
+<pre><code class="language-bash">cd crates/web/ui
 npx playwright show-trace test-results/&lt;test-dir&gt;/trace.zip
 </code></pre>
 <h2 id="writing-stable-tests"><a class="header" href="#writing-stable-tests">Writing Stable Tests</a></h2>

@@ -198,6 +198,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
+<li><strong>Crate restructure</strong>: gateway crate reduced from ~42K to ~29K lines by extracting <code>moltis-chat</code> (chat engine, agent orchestration), <code>moltis-auth</code> (password + passkey auth), <code>moltis-tls</code> (TLS/HTTPS termination), <code>moltis-service-traits</code> (shared service interfaces), and moving share rendering into <code>moltis-web</code></li>
 <li>Voice now auto-selects the first configured TTS/STT provider when no explicit
 provider is set.</li>
 <li>Default voice template/settings now favor OpenAI TTS and Whisper STT in

@@ -289,7 +289,12 @@ loop:</p>
 <tr><td><code>Iteration(n)</code></td><td><code>iteration</code></td></tr>
 </tbody></table>
 </div>
-<h3 id="6-frontend-cratesgatewaysrcassetsjs"><a class="header" href="#6-frontend-cratesgatewaysrcassetsjs">6. Frontend (<code>crates/gateway/src/assets/js/</code>)</a></h3>
+<h3 id="6-web-crate-cratesweb"><a class="header" href="#6-web-crate-cratesweb">6. Web Crate (<code>crates/web/</code>)</a></h3>
+<p>The <code>moltis-web</code> crate owns the browser-facing layer: HTML templates, static
+assets (JS, CSS, icons), and the axum routes that serve them. It injects its
+routes into the gateway via the <code>RouteEnhancer</code> composition pattern, keeping
+web UI concerns separate from API and agent logic in the gateway.</p>
+<h3 id="7-frontend-crateswebsrcassetsjs"><a class="header" href="#7-frontend-crateswebsrcassetsjs">7. Frontend (<code>crates/web/src/assets/js/</code>)</a></h3>
 <p>The JavaScript frontend handles streaming via WebSocket:</p>
 <ol>
 <li><strong>websocket.js</strong> - Receives WebSocket frames and dispatches to handlers</li>
@@ -320,10 +325,10 @@ loop:</p>
                                                                RunnerEvent
                                                                       │
                                                                       ▼
-┌──────────────┐   WebSocket  ┌──────────────┐    Callback     ┌──────────────┐
-│   Browser    │◀─────────────│   Gateway    │◀────────────────│   Callback   │
-│              │              │              │                 │   (on_event) │
-└──────────────┘              └──────────────┘                 └──────────────┘
+┌──────────────┐   WebSocket  ┌──────────────┐   Routes/WS   ┌──────────────┐    Callback     ┌──────────────┐
+│   Browser    │◀─────────────│  Web Crate   │◀──────────────│   Gateway    │◀────────────────│   Callback   │
+│              │              │  (moltis-web)│               │              │                 │   (on_event) │
+└──────────────┘              └──────────────┘               └──────────────┘                 └──────────────┘
 </code></pre>
 <h2 id="adding-streaming-to-new-providers"><a class="header" href="#adding-streaming-to-new-providers">Adding Streaming to New Providers</a></h2>
 <p>To add streaming support for a new LLM provider:</p>

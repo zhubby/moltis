@@ -194,7 +194,7 @@ the latest details. Contributions to keep this page accurate are welcome.</p>
 <div class="table-wrapper"><table><thead><tr><th></th><th><a href="https://github.com/openclaw/openclaw">OpenClaw</a></th><th><a href="https://github.com/sipeed/picoclaw">PicoClaw</a></th><th><a href="https://github.com/qwibitai/nanoclaw">NanoClaw</a></th><th><a href="https://github.com/zeroclaw-labs/zeroclaw">ZeroClaw</a></th><th><strong>Moltis</strong></th></tr></thead><tbody>
 <tr><td>Language</td><td>TypeScript</td><td>Go</td><td>TypeScript</td><td>Rust</td><td><strong>Rust</strong></td></tr>
 <tr><td>Agent loop</td><td>~430K LoC</td><td>Small</td><td>~500 LoC</td><td>~3.4K LoC</td><td><strong>~5K LoC</strong></td></tr>
-<tr><td>Full codebase</td><td>—</td><td>—</td><td>—</td><td>1,000+ tests</td><td><strong>~150K LoC</strong> (2,300+ tests)</td></tr>
+<tr><td>Full codebase</td><td>—</td><td>—</td><td>—</td><td>1,000+ tests</td><td><strong>~124K LoC</strong> (2,300+ tests)</td></tr>
 <tr><td>Runtime</td><td>Node.js + npm</td><td>Single binary</td><td>Node.js</td><td>Single binary (3.4 MB)</td><td><strong>Single binary (44 MB)</strong></td></tr>
 <tr><td>Sandbox</td><td>App-level</td><td>—</td><td>Docker</td><td>Docker</td><td><strong>Docker + Apple Container</strong></td></tr>
 <tr><td>Memory safety</td><td>GC</td><td>GC</td><td>GC</td><td>Ownership</td><td><strong>Ownership, zero <code>unsafe</code>*</strong></td></tr>
@@ -202,7 +202,7 @@ the latest details. Contributions to keep this page accurate are welcome.</p>
 <tr><td>Voice I/O</td><td>Plugin</td><td>—</td><td>—</td><td>—</td><td><strong>Built-in (15+ providers)</strong></td></tr>
 <tr><td>MCP</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td><strong>Yes (stdio + HTTP/SSE)</strong></td></tr>
 <tr><td>Hooks</td><td>Yes (limited)</td><td>—</td><td>—</td><td>—</td><td><strong>15 event types</strong></td></tr>
-<tr><td>Skills</td><td>Yes (store)</td><td>Yes</td><td>Yes</td><td>Yes</td><td><strong>Yes</strong></td></tr>
+<tr><td>Skills</td><td>Yes (store)</td><td>Yes</td><td>Yes</td><td>Yes</td><td><strong>Yes (+ OpenClaw Store)</strong></td></tr>
 <tr><td>Memory/RAG</td><td>Plugin</td><td>—</td><td>Per-group</td><td>SQLite + FTS</td><td><strong>SQLite + FTS + vector</strong></td></tr>
 </tbody></table>
 </div>
@@ -232,8 +232,9 @@ and 9+ channel integrations. Memory is backed by SQLite with hybrid vector +
 FTS search. The focus is on minimal footprint and broad platform support.</p>
 <h3 id="moltis--auditable-rust-gateway"><a class="header" href="#moltis--auditable-rust-gateway">Moltis — Auditable Rust gateway</a></h3>
 <p>Moltis prioritizes auditability and defense in depth. The core agent engine
-(runner + provider model) is ~5K lines; the full workspace is ~150K lines across
-modular crates, each independently auditable. Key differences from ZeroClaw:</p>
+(runner + provider model) is ~5K lines; the core (excluding the optional web UI)
+is ~121K lines across modular crates, each independently auditable. Key
+differences from ZeroClaw:</p>
 <ul>
 <li><strong>Larger binary (44 MB)</strong> in exchange for built-in voice I/O, browser
 automation, web UI, and MCP support</li>

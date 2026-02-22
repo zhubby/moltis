@@ -559,7 +559,7 @@ the latest details. Contributions to keep this page accurate are welcome.</p>
 <div class="table-wrapper"><table><thead><tr><th></th><th><a href="https://github.com/openclaw/openclaw">OpenClaw</a></th><th><a href="https://github.com/sipeed/picoclaw">PicoClaw</a></th><th><a href="https://github.com/qwibitai/nanoclaw">NanoClaw</a></th><th><a href="https://github.com/zeroclaw-labs/zeroclaw">ZeroClaw</a></th><th><strong>Moltis</strong></th></tr></thead><tbody>
 <tr><td>Language</td><td>TypeScript</td><td>Go</td><td>TypeScript</td><td>Rust</td><td><strong>Rust</strong></td></tr>
 <tr><td>Agent loop</td><td>~430K LoC</td><td>Small</td><td>~500 LoC</td><td>~3.4K LoC</td><td><strong>~5K LoC</strong></td></tr>
-<tr><td>Full codebase</td><td>—</td><td>—</td><td>—</td><td>1,000+ tests</td><td><strong>~150K LoC</strong> (2,300+ tests)</td></tr>
+<tr><td>Full codebase</td><td>—</td><td>—</td><td>—</td><td>1,000+ tests</td><td><strong>~124K LoC</strong> (2,300+ tests)</td></tr>
 <tr><td>Runtime</td><td>Node.js + npm</td><td>Single binary</td><td>Node.js</td><td>Single binary (3.4 MB)</td><td><strong>Single binary (44 MB)</strong></td></tr>
 <tr><td>Sandbox</td><td>App-level</td><td>—</td><td>Docker</td><td>Docker</td><td><strong>Docker + Apple Container</strong></td></tr>
 <tr><td>Memory safety</td><td>GC</td><td>GC</td><td>GC</td><td>Ownership</td><td><strong>Ownership, zero <code>unsafe</code>*</strong></td></tr>
@@ -567,7 +567,7 @@ the latest details. Contributions to keep this page accurate are welcome.</p>
 <tr><td>Voice I/O</td><td>Plugin</td><td>—</td><td>—</td><td>—</td><td><strong>Built-in (15+ providers)</strong></td></tr>
 <tr><td>MCP</td><td>Yes</td><td>—</td><td>—</td><td>—</td><td><strong>Yes (stdio + HTTP/SSE)</strong></td></tr>
 <tr><td>Hooks</td><td>Yes (limited)</td><td>—</td><td>—</td><td>—</td><td><strong>15 event types</strong></td></tr>
-<tr><td>Skills</td><td>Yes (store)</td><td>Yes</td><td>Yes</td><td>Yes</td><td><strong>Yes</strong></td></tr>
+<tr><td>Skills</td><td>Yes (store)</td><td>Yes</td><td>Yes</td><td>Yes</td><td><strong>Yes (+ OpenClaw Store)</strong></td></tr>
 <tr><td>Memory/RAG</td><td>Plugin</td><td>—</td><td>Per-group</td><td>SQLite + FTS</td><td><strong>SQLite + FTS + vector</strong></td></tr>
 </tbody></table>
 </div>
@@ -597,8 +597,9 @@ and 9+ channel integrations. Memory is backed by SQLite with hybrid vector +
 FTS search. The focus is on minimal footprint and broad platform support.</p>
 <h3 id="moltis--auditable-rust-gateway"><a class="header" href="#moltis--auditable-rust-gateway">Moltis — Auditable Rust gateway</a></h3>
 <p>Moltis prioritizes auditability and defense in depth. The core agent engine
-(runner + provider model) is ~5K lines; the full workspace is ~150K lines across
-modular crates, each independently auditable. Key differences from ZeroClaw:</p>
+(runner + provider model) is ~5K lines; the core (excluding the optional web UI)
+is ~121K lines across modular crates, each independently auditable. Key
+differences from ZeroClaw:</p>
 <ul>
 <li><strong>Larger binary (44 MB)</strong> in exchange for built-in voice I/O, browser
 automation, web UI, and MCP support</li>
@@ -963,7 +964,7 @@ non-CUDA test/coverage defaults for local runs.</li>
 not already available.</li>
 <li><code>zizmor</code> is advisory in local runs and does not block lint/test execution.</li>
 <li>Test output is suppressed unless tests fail.</li>
-<li><code>local/e2e</code> auto-runs <code>npm ci</code> only when <code>crates/gateway/ui/node_modules</code>
+<li><code>local/e2e</code> auto-runs <code>npm ci</code> only when <code>crates/web/ui/node_modules</code>
 is missing, then runs <code>npm run e2e:install</code> and <code>npm run e2e</code>. Override with
 <code>LOCAL_VALIDATE_E2E_CMD</code>.</li>
 </ul>
@@ -981,7 +982,7 @@ release paths).</p>
 <li>Runtime state is isolated so local machine config does not leak into test outcomes.</li>
 </ul>
 <h2 id="current-setup"><a class="header" href="#current-setup">Current Setup</a></h2>
-<p>The e2e harness lives in <code>crates/gateway/ui</code>:</p>
+<p>The e2e harness lives in <code>crates/web/ui</code>:</p>
 <ul>
 <li><code>playwright.config.js</code> configures Playwright and web server startup.</li>
 <li><code>e2e/start-gateway.sh</code> boots the gateway in deterministic test mode.</li>
@@ -1006,7 +1007,7 @@ just ui-e2e
 <p>Headed mode:</p>
 <pre><code class="language-bash">just ui-e2e-headed
 </code></pre>
-<p>Directly from <code>crates/gateway/ui</code>:</p>
+<p>Directly from <code>crates/web/ui</code>:</p>
 <pre><code class="language-bash">npm install
 npm run e2e:install
 npm run e2e
@@ -1014,11 +1015,11 @@ npm run e2e
 <h2 id="test-artifacts"><a class="header" href="#test-artifacts">Test Artifacts</a></h2>
 <p>On failures, Playwright stores artifacts in:</p>
 <ul>
-<li><code>crates/gateway/ui/test-results/</code> (screenshots, video, traces)</li>
-<li><code>crates/gateway/ui/playwright-report/</code> (HTML report)</li>
+<li><code>crates/web/ui/test-results/</code> (screenshots, video, traces)</li>
+<li><code>crates/web/ui/playwright-report/</code> (HTML report)</li>
 </ul>
 <p>Open a trace with:</p>
-<pre><code class="language-bash">cd crates/gateway/ui
+<pre><code class="language-bash">cd crates/web/ui
 npx playwright show-trace test-results/&lt;test-dir&gt;/trace.zip
 </code></pre>
 <h2 id="writing-stable-tests"><a class="header" href="#writing-stable-tests">Writing Stable Tests</a></h2>
@@ -5343,7 +5344,12 @@ loop:</p>
 <tr><td><code>Iteration(n)</code></td><td><code>iteration</code></td></tr>
 </tbody></table>
 </div>
-<h3 id="6-frontend-cratesgatewaysrcassetsjs"><a class="header" href="#6-frontend-cratesgatewaysrcassetsjs">6. Frontend (<code>crates/gateway/src/assets/js/</code>)</a></h3>
+<h3 id="6-web-crate-cratesweb"><a class="header" href="#6-web-crate-cratesweb">6. Web Crate (<code>crates/web/</code>)</a></h3>
+<p>The <code>moltis-web</code> crate owns the browser-facing layer: HTML templates, static
+assets (JS, CSS, icons), and the axum routes that serve them. It injects its
+routes into the gateway via the <code>RouteEnhancer</code> composition pattern, keeping
+web UI concerns separate from API and agent logic in the gateway.</p>
+<h3 id="7-frontend-crateswebsrcassetsjs"><a class="header" href="#7-frontend-crateswebsrcassetsjs">7. Frontend (<code>crates/web/src/assets/js/</code>)</a></h3>
 <p>The JavaScript frontend handles streaming via WebSocket:</p>
 <ol>
 <li><strong>websocket.js</strong> - Receives WebSocket frames and dispatches to handlers</li>
@@ -5374,10 +5380,10 @@ loop:</p>
                                                                RunnerEvent
                                                                       │
                                                                       ▼
-┌──────────────┐   WebSocket  ┌──────────────┐    Callback     ┌──────────────┐
-│   Browser    │◀─────────────│   Gateway    │◀────────────────│   Callback   │
-│              │              │              │                 │   (on_event) │
-└──────────────┘              └──────────────┘                 └──────────────┘
+┌──────────────┐   WebSocket  ┌──────────────┐   Routes/WS   ┌──────────────┐    Callback     ┌──────────────┐
+│   Browser    │◀─────────────│  Web Crate   │◀──────────────│   Gateway    │◀────────────────│   Callback   │
+│              │              │  (moltis-web)│               │              │                 │   (on_event) │
+└──────────────┘              └──────────────┘               └──────────────┘                 └──────────────┘
 </code></pre>
 <h2 id="adding-streaming-to-new-providers"><a class="header" href="#adding-streaming-to-new-providers">Adding Streaming to New Providers</a></h2>
 <p>To add streaming support for a new LLM provider:</p>
@@ -6115,6 +6121,7 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 </ul>
 <h3 id="changed"><a class="header" href="#changed">Changed</a></h3>
 <ul>
+<li><strong>Crate restructure</strong>: gateway crate reduced from ~42K to ~29K lines by extracting <code>moltis-chat</code> (chat engine, agent orchestration), <code>moltis-auth</code> (password + passkey auth), <code>moltis-tls</code> (TLS/HTTPS termination), <code>moltis-service-traits</code> (shared service interfaces), and moving share rendering into <code>moltis-web</code></li>
 <li>Voice now auto-selects the first configured TTS/STT provider when no explicit
 provider is set.</li>
 <li>Default voice template/settings now favor OpenAI TTS and Whisper STT in
