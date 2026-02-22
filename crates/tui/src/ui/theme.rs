@@ -27,6 +27,21 @@ pub struct Theme {
     pub session_replying: Style,
     pub border: Style,
     pub border_focused: Style,
+    // New Phase 1 fields
+    pub footer_key: Style,
+    pub footer_desc: Style,
+    pub header_title: Style,
+    pub header_tab_active: Style,
+    pub header_tab_inactive: Style,
+    pub zebra_odd: Style,
+    pub input_bg: Style,
+    pub modal_surface: Style,
+    pub modal_border: Style,
+    pub msg_card_user: Style,
+    pub msg_card_assistant: Style,
+    pub msg_card_system: Style,
+    pub status_dot_active: Style,
+    pub status_dot_inactive: Style,
 }
 
 impl Default for Theme {
@@ -70,7 +85,26 @@ impl Default for Theme {
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::DIM),
             border: Style::default().fg(Color::DarkGray),
-            border_focused: Style::default().fg(Color::Cyan),
+            border_focused: Style::default().fg(Color::Yellow),
+            // New fields
+            footer_key: Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            footer_desc: Style::default().fg(Color::DarkGray),
+            header_title: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            header_tab_active: Style::default().bg(Color::Yellow).fg(Color::Black),
+            header_tab_inactive: Style::default().fg(Color::DarkGray),
+            zebra_odd: Style::default().bg(Color::Rgb(30, 30, 40)),
+            input_bg: Style::default().bg(Color::Rgb(40, 40, 40)),
+            modal_surface: Style::default().fg(Color::White).bg(Color::Rgb(24, 28, 40)),
+            modal_border: Style::default().fg(Color::Cyan),
+            msg_card_user: Style::default().bg(Color::Rgb(25, 30, 40)),
+            msg_card_assistant: Style::default().bg(Color::Rgb(20, 30, 35)),
+            msg_card_system: Style::default().bg(Color::Rgb(30, 25, 25)),
+            status_dot_active: Style::default().fg(Color::Green),
+            status_dot_inactive: Style::default().fg(Color::DarkGray),
         }
     }
 }

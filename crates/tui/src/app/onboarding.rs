@@ -2,11 +2,11 @@ use {
     super::{App, InitialData},
     crate::{
         onboarding::{
-            AuthStatus, EditTarget, OnboardingState, OnboardingStep, ProviderConfigurePhase,
-            ProviderConfigureState, ProviderEntry, SecurityState, configured_provider_badges,
-            parse_channels, parse_identity, parse_local_backend_note, parse_local_models,
-            parse_local_recommended_backend, parse_model_options, parse_providers,
-            parse_voice_providers, supports_endpoint,
+            AuthStatus, ChannelProvider, EditTarget, OnboardingState, OnboardingStep,
+            ProviderConfigurePhase, ProviderConfigureState, ProviderEntry, SecurityState,
+            configured_provider_badges, parse_channels, parse_identity, parse_local_backend_note,
+            parse_local_models, parse_local_recommended_backend, parse_model_options,
+            parse_providers, parse_voice_providers, supports_endpoint,
         },
         rpc::RpcClient,
         state::{DisplayMessage, InputMode, MessageRole, SessionEntry},
@@ -158,6 +158,16 @@ impl App {
             OnboardingStep::Summary => {
                 self.handle_summary_step_key(key, rpc).await;
             },
+        }
+
+        // Auto-refresh summary when navigating into the Summary step.
+        if step != OnboardingStep::Summary
+            && self
+                .onboarding
+                .as_ref()
+                .is_some_and(|o| o.current_step() == OnboardingStep::Summary)
+        {
+            self.refresh_summary(rpc).await;
         }
     }
 
@@ -1382,6 +1392,71 @@ impl App {
         rpc: &Arc<RpcClient>,
         textarea: &mut TextArea<'_>,
     ) {
+        if self
+            .onboarding
+            .as_ref()
+            .is_some_and(|onboarding| onboarding.channel.configuring)
+        {
+            self.handle_channel_config_key(key, rpc, textarea).await;
+            return;
+        }
+
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let next = onboarding.channel.selected_provider.saturating_add(1);
+                onboarding.channel.selected_provider = next.min(ChannelProvider::ALL.len() - 1);
+                self.state.dirty = true;
+            },
+            KeyCode::Char('k') | KeyCode::Up => {
+                onboarding.channel.selected_provider =
+                    onboarding.channel.selected_provider.saturating_sub(1);
+                self.state.dirty = true;
+            },
+            KeyCode::Char('e') | KeyCode::Enter => {
+                let provider = ChannelProvider::from_index(onboarding.channel.selected_provider);
+                if provider.available() {
+                    onboarding.channel.configuring = true;
+                    onboarding.channel.field_index = 0;
+                    onboarding.clear_messages();
+                } else {
+                    onboarding
+                        .set_status(format!("{} onboarding is coming soon.", provider.name()));
+                }
+                self.state.dirty = true;
+            },
+            KeyCode::Char('c') => {
+                if onboarding.channel.connected {
+                    onboarding.go_next();
+                    onboarding.clear_messages();
+                } else {
+                    onboarding.set_error("Connect a channel first, or press s to skip.");
+                }
+                self.state.dirty = true;
+            },
+            KeyCode::Char('s') => {
+                onboarding.go_next();
+                onboarding.clear_messages();
+                self.state.dirty = true;
+            },
+            KeyCode::Char('b') => {
+                onboarding.go_back();
+                onboarding.clear_messages();
+                self.state.dirty = true;
+            },
+            _ => {},
+        }
+    }
+
+    async fn handle_channel_config_key(
+        &mut self,
+        key: KeyEvent,
+        rpc: &Arc<RpcClient>,
+        textarea: &mut TextArea<'_>,
+    ) {
         if key.code == KeyCode::Char('x') {
             self.connect_telegram_channel(rpc).await;
             return;
@@ -1391,25 +1466,12 @@ impl App {
             return;
         };
 
-        if onboarding.channel.connected {
-            match key.code {
-                KeyCode::Char('c') | KeyCode::Enter => {
-                    onboarding.go_next();
-                    onboarding.clear_messages();
-                    self.state.dirty = true;
-                },
-                KeyCode::Char('b') => {
-                    onboarding.go_back();
-                    onboarding.clear_messages();
-                    self.state.dirty = true;
-                },
-                KeyCode::Char('s') => {
-                    onboarding.go_next();
-                    onboarding.clear_messages();
-                    self.state.dirty = true;
-                },
-                _ => {},
-            }
+        if ChannelProvider::from_index(onboarding.channel.selected_provider)
+            != ChannelProvider::Telegram
+        {
+            onboarding.channel.configuring = false;
+            onboarding.set_error("Selected channel cannot be configured yet.");
+            self.state.dirty = true;
             return;
         }
 
@@ -1425,27 +1487,21 @@ impl App {
             KeyCode::Char('e') | KeyCode::Enter => {
                 if let Some(target) = channel_edit_target(onboarding.channel.field_index) {
                     self.start_onboarding_edit(target, textarea);
+                } else if onboarding.channel.field_index == 2 {
+                    onboarding.channel.dm_policy = next_dm_policy(&onboarding.channel.dm_policy);
+                    self.state.dirty = true;
                 }
             },
-            KeyCode::Char('[') => {
+            KeyCode::Char('[') | KeyCode::Left if onboarding.channel.field_index == 2 => {
                 onboarding.channel.dm_policy = previous_dm_policy(&onboarding.channel.dm_policy);
                 self.state.dirty = true;
             },
-            KeyCode::Char(']') => {
+            KeyCode::Char(']') | KeyCode::Right if onboarding.channel.field_index == 2 => {
                 onboarding.channel.dm_policy = next_dm_policy(&onboarding.channel.dm_policy);
                 self.state.dirty = true;
             },
-            KeyCode::Char('c') => {
-                onboarding.set_error("Connect the bot first, or press s to skip.");
-                self.state.dirty = true;
-            },
-            KeyCode::Char('s') => {
-                onboarding.go_next();
-                onboarding.clear_messages();
-                self.state.dirty = true;
-            },
-            KeyCode::Char('b') => {
-                onboarding.go_back();
+            KeyCode::Esc => {
+                onboarding.channel.configuring = false;
                 onboarding.clear_messages();
                 self.state.dirty = true;
             },
@@ -1503,6 +1559,7 @@ impl App {
                 Ok(_) => {
                     onboarding.channel.connected = true;
                     onboarding.channel.connected_name = channel.account_id.trim().to_string();
+                    onboarding.channel.configuring = false;
                     onboarding.set_status("Telegram bot connected.");
                 },
                 Err(error) => {
@@ -1673,7 +1730,7 @@ impl App {
 
     async fn finish_onboarding(&mut self, rpc: &Arc<RpcClient>) {
         self.onboarding = None;
-        self.state.input_mode = InputMode::Normal;
+        self.state.input_mode = InputMode::Insert;
         self.state.sidebar_visible = true;
         self.state.dirty = true;
 

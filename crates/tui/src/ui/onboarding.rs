@@ -1,8 +1,9 @@
 use {
-    super::theme::Theme,
+    super::{common, theme::Theme},
     crate::{
         onboarding::{
-            EditTarget, OnboardingState, OnboardingStep, ProviderConfigurePhase, supports_endpoint,
+            ChannelProvider, EditTarget, OnboardingState, OnboardingStep, ProviderConfigurePhase,
+            supports_endpoint,
         },
         state::InputMode,
     },
@@ -11,7 +12,9 @@ use {
         layout::{Constraint, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+        widgets::{
+            Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap,
+        },
     },
     tui_textarea::TextArea,
 };
@@ -24,9 +27,28 @@ pub fn draw(
     textarea: &mut TextArea<'_>,
     theme: &Theme,
 ) {
-    if onboarding.current_step() == OnboardingStep::Llm {
-        draw_llm_screen(frame, area, onboarding, input_mode, textarea, theme);
-        return;
+    match onboarding.current_step() {
+        OnboardingStep::Llm => {
+            draw_llm_screen(frame, area, onboarding, input_mode, textarea, theme);
+            return;
+        },
+        OnboardingStep::Voice => {
+            draw_voice_screen(frame, area, onboarding, input_mode, textarea, theme);
+            return;
+        },
+        OnboardingStep::Channel => {
+            draw_channel_screen(frame, area, onboarding, input_mode, textarea, theme);
+            return;
+        },
+        OnboardingStep::Identity => {
+            draw_identity_screen(frame, area, onboarding, input_mode, textarea, theme);
+            return;
+        },
+        OnboardingStep::Summary => {
+            draw_summary_screen(frame, area, onboarding, theme);
+            return;
+        },
+        _ => {},
     }
 
     let mut lines: Vec<Line<'_>> = vec![
@@ -44,38 +66,18 @@ pub fn draw(
     match onboarding.current_step() {
         OnboardingStep::Security => draw_security(&mut lines, onboarding, theme),
         OnboardingStep::Llm => draw_llm_compact(&mut lines, onboarding, theme),
-        OnboardingStep::Voice => draw_voice(&mut lines, onboarding, theme),
-        OnboardingStep::Channel => draw_channel(&mut lines, onboarding, theme),
-        OnboardingStep::Identity => draw_identity(&mut lines, onboarding, theme),
+        OnboardingStep::Voice => draw_voice_compact(&mut lines, onboarding, theme),
+        OnboardingStep::Channel => draw_channel_compact(&mut lines, onboarding, theme),
+        OnboardingStep::Identity => draw_identity_compact(&mut lines, onboarding, theme),
         OnboardingStep::Summary => draw_summary(&mut lines, onboarding, theme),
     }
 
-    if let Some(error) = onboarding.error_message.as_deref() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Error: ", theme.tool_error.add_modifier(Modifier::BOLD)),
-            Span::styled(error, theme.tool_error),
-        ]));
-    }
-
-    if let Some(status) = onboarding.status_message.as_deref() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Status: ", theme.tool_success.add_modifier(Modifier::BOLD)),
-            Span::styled(status, theme.tool_success),
-        ]));
-    }
-
+    append_feedback(&mut lines, onboarding, theme);
     lines.push(Line::from(""));
     lines.push(hints_line(onboarding, theme));
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme.border_focused)
-        .title(" Onboarding ");
-
     let paragraph = Paragraph::new(lines)
-        .block(block)
+        .block(onboarding_block(theme))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
@@ -85,82 +87,96 @@ pub fn draw(
     }
 }
 
-fn draw_llm_screen(
+fn onboarding_block(theme: &Theme) -> Block<'_> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.border_focused)
+        .title(" Onboarding ")
+}
+
+fn render_step_compact<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &'a OnboardingState,
+    theme: &Theme,
+    draw_content: impl FnOnce(&mut Vec<Line<'a>>),
+) {
+    let mut lines: Vec<Line<'a>> = vec![
+        step_indicator(onboarding, theme),
+        Line::from(""),
+        onboarding_intro_line(theme),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            onboarding.current_step().title(),
+            theme.heading,
+        )]),
+        Line::from(""),
+    ];
+    draw_content(&mut lines);
+    append_feedback(&mut lines, onboarding, theme);
+    lines.push(Line::from(""));
+    lines.push(hints_line(onboarding, theme));
+
+    let paragraph = Paragraph::new(lines)
+        .block(onboarding_block(theme))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
+fn append_feedback<'a>(lines: &mut Vec<Line<'a>>, onboarding: &'a OnboardingState, theme: &Theme) {
+    if let Some(error) = onboarding.error_message.as_deref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Error: ", theme.tool_error.add_modifier(Modifier::BOLD)),
+            Span::styled(error, theme.tool_error),
+        ]));
+    }
+    if let Some(status) = onboarding.status_message.as_deref() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Status: ", theme.tool_success.add_modifier(Modifier::BOLD)),
+            Span::styled(status, theme.tool_success),
+        ]));
+    }
+}
+
+fn feedback_line<'a>(onboarding: &'a OnboardingState, theme: &Theme) -> Line<'a> {
+    if let Some(error) = onboarding.error_message.as_deref() {
+        Line::from(vec![
+            Span::styled("Error: ", theme.tool_error.add_modifier(Modifier::BOLD)),
+            Span::styled(error, theme.tool_error),
+        ])
+    } else if let Some(status) = onboarding.status_message.as_deref() {
+        Line::from(vec![
+            Span::styled("Status: ", theme.tool_success.add_modifier(Modifier::BOLD)),
+            Span::styled(status, theme.tool_success),
+        ])
+    } else {
+        Line::from("")
+    }
+}
+
+fn render_wide_header(
     frame: &mut Frame,
     area: Rect,
     onboarding: &OnboardingState,
-    input_mode: InputMode,
-    textarea: &mut TextArea<'_>,
     theme: &Theme,
-) {
-    if area.width < 90 || area.height < 16 {
-        let mut lines: Vec<Line<'_>> = vec![
-            step_indicator(onboarding, theme),
-            Line::from(""),
-            onboarding_intro_line(theme),
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                onboarding.current_step().title(),
-                theme.heading,
-            )]),
-            Line::from(""),
-        ];
-        draw_llm_compact(&mut lines, onboarding, theme);
-
-        if let Some(error) = onboarding.error_message.as_deref() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("Error: ", theme.tool_error.add_modifier(Modifier::BOLD)),
-                Span::styled(error, theme.tool_error),
-            ]));
-        }
-        if let Some(status) = onboarding.status_message.as_deref() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("Status: ", theme.tool_success.add_modifier(Modifier::BOLD)),
-                Span::styled(status, theme.tool_success),
-            ]));
-        }
-        lines.push(Line::from(""));
-        lines.push(hints_line(onboarding, theme));
-
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(theme.border_focused)
-                    .title(" Onboarding "),
-            )
-            .wrap(Wrap { trim: false });
-
-        frame.render_widget(paragraph, area);
-        if onboarding.llm.configuring.is_some() {
-            draw_llm_config_modal(frame, area, onboarding, textarea, theme);
-        }
-        if onboarding.editing.is_some() && provider_inline_edit_target(onboarding).is_none() {
-            draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
-        }
-        return;
-    }
-
-    let llm = &onboarding.llm;
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(theme.border_focused)
-        .title(" Onboarding ");
-
+    summary_line: Line<'_>,
+) -> std::rc::Rc<[Rect]> {
+    let block = onboarding_block(theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let sections = Layout::vertical([
-        Constraint::Length(1), // step indicator
-        Constraint::Length(1), // intro
-        Constraint::Length(1), // title
-        Constraint::Length(1), // provider summary
-        Constraint::Min(8),    // body
-        Constraint::Length(1), // status/error
-        Constraint::Length(1), // actions
-        Constraint::Length(1), // keys
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(8),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(inner);
 
@@ -176,14 +192,59 @@ fn draw_llm_screen(
         )])),
         sections[2],
     );
-    frame.render_widget(Paragraph::new(llm_summary_line(onboarding)), sections[3]);
+    frame.render_widget(Paragraph::new(summary_line), sections[3]);
 
+    sections
+}
+
+fn render_wide_footer(
+    frame: &mut Frame,
+    sections: &[Rect],
+    onboarding: &OnboardingState,
+    theme: &Theme,
+    actions_hint: &str,
+) {
+    frame.render_widget(
+        Paragraph::new(feedback_line(onboarding, theme)),
+        sections[5],
+    );
+    frame.render_widget(Paragraph::new(actions_hint), sections[6]);
+    frame.render_widget(Paragraph::new(hints_line(onboarding, theme)), sections[7]);
+}
+
+fn draw_llm_screen(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &OnboardingState,
+    input_mode: InputMode,
+    textarea: &mut TextArea<'_>,
+    theme: &Theme,
+) {
+    if area.width < 90 || area.height < 16 {
+        render_step_compact(frame, area, onboarding, theme, |lines| {
+            draw_llm_compact(lines, onboarding, theme);
+        });
+        if onboarding.llm.configuring.is_some() {
+            draw_llm_config_modal(frame, area, onboarding, textarea, theme);
+        }
+        if onboarding.editing.is_some() && provider_inline_edit_target(onboarding).is_none() {
+            draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+        }
+        return;
+    }
+
+    let sections = render_wide_header(frame, area, onboarding, theme, llm_summary_line(onboarding));
     let body = Layout::horizontal([Constraint::Percentage(63), Constraint::Percentage(37)])
         .split(sections[4]);
 
+    let llm = &onboarding.llm;
     if llm.providers.is_empty() {
-        let empty = Paragraph::new("No providers returned by gateway. Press r to refresh.")
-            .block(Block::default().borders(Borders::ALL).title(" Providers "));
+        let empty = Paragraph::new("No providers returned by gateway. Press r to refresh.").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Providers "),
+        );
         frame.render_widget(empty, body[0]);
     } else {
         let rows = llm
@@ -216,7 +277,12 @@ fn draw_llm_screen(
             Constraint::Length(16),
         ])
         .header(Row::new(vec!["Provider", "Auth", "Status"]).style(theme.bold))
-        .block(Block::default().borders(Borders::ALL).title(" Providers "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Providers "),
+        )
         .row_highlight_style(theme.mode_insert.add_modifier(Modifier::BOLD))
         .highlight_symbol("▶ ");
 
@@ -289,7 +355,7 @@ fn draw_llm_screen(
                     } else {
                         " "
                     },
-                    mask_secret(&config.api_key)
+                    common::mask_secret(&config.api_key)
                 )));
 
                 if supports_endpoint(&config.provider_name) {
@@ -400,27 +466,22 @@ fn draw_llm_screen(
     }
 
     let details_widget = Paragraph::new(details)
-        .block(Block::default().borders(Borders::ALL).title(" Details "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Details "),
+        )
         .wrap(Wrap { trim: false });
     frame.render_widget(details_widget, body[1]);
 
-    let feedback = if let Some(error) = onboarding.error_message.as_deref() {
-        Line::from(vec![
-            Span::styled("Error: ", theme.tool_error.add_modifier(Modifier::BOLD)),
-            Span::styled(error, theme.tool_error),
-        ])
-    } else if let Some(status) = onboarding.status_message.as_deref() {
-        Line::from(vec![
-            Span::styled("Status: ", theme.tool_success.add_modifier(Modifier::BOLD)),
-            Span::styled(status, theme.tool_success),
-        ])
-    } else {
-        Line::from("")
-    };
-    frame.render_widget(Paragraph::new(feedback), sections[5]);
-
-    frame.render_widget(Paragraph::new(llm_actions_hint(onboarding)), sections[6]);
-    frame.render_widget(Paragraph::new(hints_line(onboarding, theme)), sections[7]);
+    render_wide_footer(
+        frame,
+        &sections,
+        onboarding,
+        theme,
+        llm_actions_hint(onboarding),
+    );
 
     if onboarding.llm.configuring.is_some() {
         draw_llm_config_modal(frame, area, onboarding, textarea, theme);
@@ -474,6 +535,757 @@ fn llm_actions_hint(onboarding: &OnboardingState) -> &'static str {
     }
 }
 
+fn draw_voice_screen(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &OnboardingState,
+    input_mode: InputMode,
+    textarea: &mut TextArea<'_>,
+    theme: &Theme,
+) {
+    if area.width < 90 || area.height < 16 {
+        render_step_compact(frame, area, onboarding, theme, |lines| {
+            draw_voice_compact(lines, onboarding, theme);
+        });
+        if onboarding.editing.is_some() {
+            draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+        }
+        return;
+    }
+
+    let sections = render_wide_header(
+        frame,
+        area,
+        onboarding,
+        theme,
+        voice_summary_line(onboarding),
+    );
+    let body = Layout::horizontal([Constraint::Percentage(63), Constraint::Percentage(37)])
+        .split(sections[4]);
+
+    let voice = &onboarding.voice;
+    if voice.providers.is_empty() {
+        let empty = Paragraph::new("No voice providers returned by gateway. Press r to refresh.")
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title(" Providers "),
+            );
+        frame.render_widget(empty, body[0]);
+    } else {
+        let rows = voice
+            .providers
+            .iter()
+            .map(|provider| {
+                let (status_text, status_style) = if !provider.available {
+                    ("needs key", theme.tool_error)
+                } else if provider.enabled {
+                    ("enabled", theme.tool_success)
+                } else {
+                    ("available", theme.system_msg)
+                };
+
+                Row::new(vec![
+                    Cell::from(provider.name.clone()),
+                    Cell::from(provider.provider_type.clone()),
+                    Cell::from(provider.category.clone()),
+                    Cell::from(status_text).style(status_style),
+                ])
+            })
+            .collect::<Vec<Row>>();
+
+        let table = Table::new(rows, [
+            Constraint::Percentage(42),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(12),
+        ])
+        .header(Row::new(vec!["Provider", "Type", "Mode", "Status"]).style(theme.bold))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Providers "),
+        )
+        .row_highlight_style(theme.mode_insert.add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
+
+        let mut table_state = TableState::default();
+        table_state.select(Some(voice.selected_provider.min(voice.providers.len() - 1)));
+        frame.render_stateful_widget(table, body[0], &mut table_state);
+    }
+
+    let mut details: Vec<Line<'_>> = Vec::new();
+    if let Some(provider) = voice.providers.get(voice.selected_provider) {
+        details.push(Line::from(vec![
+            Span::styled("Selected: ", theme.bold),
+            Span::raw(provider.name.clone()),
+        ]));
+        details.push(Line::from(format!("ID: {}", provider.id)));
+        details.push(Line::from(format!("Type: {}", provider.provider_type)));
+        details.push(Line::from(format!("Mode: {}", provider.category)));
+        details.push(Line::from(if provider.enabled {
+            "Status: enabled"
+        } else {
+            "Status: disabled"
+        }));
+        details.push(Line::from(if provider.available {
+            "Availability: ready"
+        } else {
+            "Availability: API key required"
+        }));
+
+        if let Some(source) = provider.key_source.as_deref() {
+            details.push(Line::from(format!("Key source: {source}")));
+        }
+
+        if let Some(description) = provider.description.as_deref() {
+            details.push(Line::from(""));
+            details.push(Line::from(description.to_string()));
+        }
+
+        details.push(Line::from(""));
+        details.push(Line::from(format!(
+            "Pending API key: {}",
+            common::mask_secret(&voice.pending_api_key)
+        )));
+        details.push(Line::from(""));
+        details.push(Line::from(vec![
+            Span::styled("Next: ", theme.bold),
+            Span::raw("e edit key  v save key  t toggle provider"),
+        ]));
+    } else {
+        details.push(Line::from("Select a provider to view details."));
+    }
+
+    let details_widget = Paragraph::new(details)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Details "),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(details_widget, body[1]);
+
+    render_wide_footer(frame, &sections, onboarding, theme, voice_actions_hint());
+
+    if onboarding.editing.is_some() {
+        draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+    }
+}
+
+fn voice_summary_line(onboarding: &OnboardingState) -> Line<'static> {
+    let voice = &onboarding.voice;
+    let enabled = voice
+        .providers
+        .iter()
+        .filter(|provider| provider.enabled)
+        .map(|provider| provider.name.clone())
+        .collect::<Vec<String>>();
+
+    if enabled.is_empty() {
+        return Line::from(format!(
+            "Voice providers: {}/{} enabled",
+            0,
+            voice.providers.len()
+        ));
+    }
+
+    Line::from(format!(
+        "Voice providers: {}/{} enabled ({})",
+        enabled.len(),
+        voice.providers.len(),
+        enabled.join(", ")
+    ))
+}
+
+fn voice_actions_hint() -> &'static str {
+    "Actions: t toggle  e edit key  v save key  r refresh  c continue  s skip  b back"
+}
+
+fn draw_channel_screen(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &OnboardingState,
+    input_mode: InputMode,
+    textarea: &mut TextArea<'_>,
+    theme: &Theme,
+) {
+    if area.width < 90 || area.height < 16 {
+        render_step_compact(frame, area, onboarding, theme, |lines| {
+            draw_channel_compact(lines, onboarding, theme);
+        });
+        if onboarding.channel.configuring {
+            draw_channel_config_modal(frame, area, onboarding, textarea, theme);
+        }
+        if onboarding.editing.is_some() && channel_inline_edit_target(onboarding).is_none() {
+            draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+        }
+        return;
+    }
+
+    let sections = render_wide_header(
+        frame,
+        area,
+        onboarding,
+        theme,
+        channel_summary_line(onboarding),
+    );
+    let body = Layout::horizontal([Constraint::Percentage(63), Constraint::Percentage(37)])
+        .split(sections[4]);
+
+    let channel = &onboarding.channel;
+
+    let rows = ChannelProvider::ALL
+        .iter()
+        .map(|provider| {
+            let (status, status_style) = match provider {
+                ChannelProvider::Telegram => {
+                    if channel.connected {
+                        ("connected", theme.tool_success)
+                    } else {
+                        ("not configured", theme.system_msg)
+                    }
+                },
+                ChannelProvider::Slack | ChannelProvider::Discord => {
+                    ("coming soon", theme.system_msg)
+                },
+            };
+
+            Row::new(vec![
+                Cell::from(provider.name()),
+                Cell::from(provider.auth()),
+                Cell::from(status).style(status_style),
+            ])
+        })
+        .collect::<Vec<Row>>();
+
+    let table = Table::new(rows, [
+        Constraint::Percentage(52),
+        Constraint::Length(12),
+        Constraint::Length(16),
+    ])
+    .header(Row::new(vec!["Channel", "Auth", "Status"]).style(theme.bold))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Providers "),
+    )
+    .row_highlight_style(theme.mode_insert.add_modifier(Modifier::BOLD))
+    .highlight_symbol("▶ ");
+
+    let mut table_state = TableState::default();
+    table_state.select(Some(
+        channel
+            .selected_provider
+            .min(ChannelProvider::ALL.len() - 1),
+    ));
+    frame.render_stateful_widget(table, body[0], &mut table_state);
+
+    let selected = ChannelProvider::from_index(channel.selected_provider);
+    let mut details: Vec<Line<'_>> = Vec::new();
+    details.push(Line::from(vec![
+        Span::styled("Selected: ", theme.bold),
+        Span::raw(selected.name()),
+    ]));
+    details.push(Line::from(format!("Auth: {}", selected.auth())));
+    details.push(Line::from(if selected.available() {
+        "Status: available"
+    } else {
+        "Status: coming soon"
+    }));
+    details.push(Line::from(""));
+    details.push(Line::from(selected.description()));
+
+    if selected == ChannelProvider::Telegram {
+        details.push(Line::from(""));
+        details.push(Line::from(format!(
+            "Bot username: {}",
+            if channel.account_id.trim().is_empty() {
+                "(empty)"
+            } else {
+                channel.account_id.as_str()
+            }
+        )));
+        details.push(Line::from(format!(
+            "Bot token: {}",
+            common::mask_secret(&channel.token)
+        )));
+        details.push(Line::from(format!("DM policy: {}", channel.dm_policy)));
+        if channel.connected {
+            details.push(Line::from(format!(
+                "Connected as: @{}",
+                channel.connected_name
+            )));
+        }
+        details.push(Line::from(""));
+        details.push(Line::from(vec![
+            Span::styled("Next: ", theme.bold),
+            Span::raw("Press Enter to configure Telegram."),
+        ]));
+    } else {
+        details.push(Line::from(""));
+        details.push(Line::from(
+            "This channel is not yet available in TUI onboarding.",
+        ));
+    }
+
+    let details_widget = Paragraph::new(details)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(" Details "),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(details_widget, body[1]);
+
+    render_wide_footer(
+        frame,
+        &sections,
+        onboarding,
+        theme,
+        channel_actions_hint(onboarding),
+    );
+
+    if onboarding.channel.configuring {
+        draw_channel_config_modal(frame, area, onboarding, textarea, theme);
+    }
+    if onboarding.editing.is_some() && channel_inline_edit_target(onboarding).is_none() {
+        draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+    }
+}
+
+fn channel_summary_line(onboarding: &OnboardingState) -> Line<'static> {
+    let channel = &onboarding.channel;
+    if channel.connected {
+        return Line::from(format!(
+            "Channels: 1/{} connected (Telegram: @{})",
+            ChannelProvider::ALL.len(),
+            channel.connected_name
+        ));
+    }
+
+    Line::from(format!(
+        "Channels: 0/{} connected",
+        ChannelProvider::ALL.len()
+    ))
+}
+
+fn channel_actions_hint(onboarding: &OnboardingState) -> &'static str {
+    if onboarding.channel.configuring {
+        "Actions: j/k move  e edit  [ ] change DM policy  x connect  Esc close"
+    } else {
+        "Actions: Enter configure  c continue  s skip  b back"
+    }
+}
+
+fn draw_channel_config_modal(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &OnboardingState,
+    textarea: &mut TextArea<'_>,
+    theme: &Theme,
+) {
+    if !onboarding.channel.configuring {
+        return;
+    }
+    if ChannelProvider::from_index(onboarding.channel.selected_provider)
+        != ChannelProvider::Telegram
+    {
+        return;
+    }
+
+    let popup = common::centered_rect(60, 58, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(theme.border_focused)
+        .title(" Configure Telegram ");
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let mut lines: Vec<Line<'_>> = Vec::new();
+    let channel = &onboarding.channel;
+    let editing_target = channel_inline_edit_target(onboarding);
+    let mut inline_input = None;
+
+    lines.push(Line::from("Insert Telegram bot credentials, then connect."));
+    lines.push(Line::from(""));
+
+    {
+        let mut push_row = |label: &str, target: EditTarget, active: bool, value: String| {
+            let marker = if active {
+                "▶"
+            } else {
+                " "
+            };
+            let prefix = format!("{marker} {label}: ");
+
+            if editing_target == Some(target) {
+                inline_input = Some(InlineProviderField {
+                    line_index: lines.len() as u16,
+                    value_column: prefix.chars().count() as u16,
+                    placeholder: target.placeholder(),
+                });
+                let padding_width = inner
+                    .width
+                    .saturating_sub(prefix.chars().count() as u16)
+                    .saturating_sub(1) as usize;
+                lines.push(Line::from(format!(
+                    "{}{}",
+                    prefix,
+                    " ".repeat(padding_width)
+                )));
+            } else {
+                lines.push(Line::from(format!("{prefix}{value}")));
+            }
+        };
+
+        push_row(
+            "Bot username",
+            EditTarget::ChannelAccountId,
+            channel.field_index == 0,
+            if channel.account_id.trim().is_empty() {
+                "(empty)".to_string()
+            } else {
+                channel.account_id.clone()
+            },
+        );
+        push_row(
+            "Bot token",
+            EditTarget::ChannelToken,
+            channel.field_index == 1,
+            common::mask_secret(&channel.token),
+        );
+    }
+
+    lines.push(Line::from(format!(
+        "{} DM policy: {}",
+        if channel.field_index == 2 {
+            "▶"
+        } else {
+            " "
+        },
+        channel.dm_policy
+    )));
+
+    lines.push(Line::from(format!(
+        "{} Allowlist: {}",
+        if channel.field_index == 3 {
+            "▶"
+        } else {
+            " "
+        },
+        if channel.allowlist.trim().is_empty() {
+            "(empty)".to_string()
+        } else {
+            format!(
+                "{} entries",
+                channel
+                    .allowlist
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count()
+            )
+        }
+    )));
+
+    if channel.connected {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!(
+            "Connected as @{}",
+            channel.connected_name
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Actions: j/k move  e edit  [ ] change DM policy  x connect  Esc close",
+    ));
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, inner);
+
+    if let Some(input) = inline_input {
+        let x = inner.x.saturating_add(input.value_column);
+        let y = inner.y.saturating_add(input.line_index);
+        let width = inner
+            .width
+            .saturating_sub(input.value_column)
+            .saturating_sub(1);
+
+        if width > 0 {
+            let input_rect = Rect {
+                x,
+                y,
+                width,
+                height: 1,
+            };
+            let input_style = Style::default().add_modifier(Modifier::UNDERLINED);
+            textarea.set_style(input_style);
+            textarea.set_placeholder_text(input.placeholder);
+            textarea.set_cursor_line_style(input_style);
+            textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+            textarea.set_block(Block::default());
+            frame.render_widget(&*textarea, input_rect);
+        }
+    }
+}
+
+fn channel_inline_edit_target(onboarding: &OnboardingState) -> Option<EditTarget> {
+    let target = onboarding.editing?;
+    let is_channel_target = matches!(
+        target,
+        EditTarget::ChannelAccountId | EditTarget::ChannelToken
+    );
+    if is_channel_target && onboarding.channel.configuring {
+        Some(target)
+    } else {
+        None
+    }
+}
+
+fn draw_identity_screen(
+    frame: &mut Frame,
+    area: Rect,
+    onboarding: &OnboardingState,
+    input_mode: InputMode,
+    textarea: &mut TextArea<'_>,
+    theme: &Theme,
+) {
+    if area.width < 90 || area.height < 16 {
+        render_step_compact(frame, area, onboarding, theme, |lines| {
+            draw_identity_compact(lines, onboarding, theme);
+        });
+        if onboarding.editing.is_some() && identity_inline_edit_target(onboarding).is_none() {
+            draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+        }
+        return;
+    }
+
+    let sections = render_wide_header(
+        frame,
+        area,
+        onboarding,
+        theme,
+        identity_summary_line(onboarding),
+    );
+    let body = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(sections[4]);
+
+    let identity = &onboarding.identity;
+
+    let field_rows = [
+        (
+            EditTarget::IdentityUserName,
+            "Your name",
+            identity.user_name.clone(),
+        ),
+        (
+            EditTarget::IdentityAgentName,
+            "Agent name",
+            identity.agent_name.clone(),
+        ),
+        (EditTarget::IdentityEmoji, "Emoji", identity.emoji.clone()),
+        (
+            EditTarget::IdentityCreature,
+            "Creature",
+            identity.creature.clone(),
+        ),
+        (EditTarget::IdentityVibe, "Vibe", identity.vibe.clone()),
+    ];
+
+    // --- Left column: field list ---
+    let editing_target = identity_inline_edit_target(onboarding);
+    let mut inline_input = None;
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    for (index, (target, label, value)) in field_rows.iter().enumerate() {
+        let active = index == identity.field_index;
+        let marker = if active {
+            "▶ "
+        } else {
+            "  "
+        };
+        let label_text = format!("{:<12}", label);
+
+        if editing_target == Some(*target) && active {
+            let prefix_len = (marker.len() + label_text.trim_end().len() + 2) as u16;
+            inline_input = Some(InlineProviderField {
+                line_index: lines.len() as u16,
+                value_column: prefix_len,
+                placeholder: target.placeholder(),
+            });
+            lines.push(Line::from(vec![
+                Span::styled(marker, theme.sidebar_active),
+                Span::styled(label_text, theme.bold),
+                Span::raw("  "),
+            ]));
+        } else {
+            let (display, value_style) = if value.trim().is_empty() {
+                ("(empty)".to_string(), theme.system_msg)
+            } else {
+                (value.clone(), Style::default())
+            };
+            let marker_style = if active {
+                theme.sidebar_active
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, marker_style),
+                Span::styled(label_text, theme.bold),
+                Span::styled(display, value_style),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("  e", theme.footer_key),
+        Span::styled(" edit field  ", theme.footer_desc),
+        Span::styled("j/k", theme.footer_key),
+        Span::styled(" navigate", theme.footer_desc),
+    ]));
+
+    let fields_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Fields ");
+    let fields_inner = fields_block.inner(body[0]);
+    let fields_widget = Paragraph::new(lines)
+        .block(fields_block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(fields_widget, body[0]);
+
+    if let Some(input) = inline_input {
+        let x = fields_inner.x.saturating_add(input.value_column);
+        let y = fields_inner.y.saturating_add(input.line_index);
+        let width = fields_inner
+            .width
+            .saturating_sub(input.value_column)
+            .saturating_sub(1);
+
+        if width > 0 {
+            let input_rect = Rect {
+                x,
+                y,
+                width,
+                height: 1,
+            };
+            let input_style = Style::default().add_modifier(Modifier::UNDERLINED);
+            textarea.set_style(input_style);
+            textarea.set_placeholder_text(input.placeholder);
+            textarea.set_cursor_line_style(input_style);
+            textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+            textarea.set_block(Block::default());
+            frame.render_widget(&*textarea, input_rect);
+        }
+    }
+
+    // --- Right column: agent preview ---
+    let emoji = if identity.emoji.trim().is_empty() {
+        "🤖"
+    } else {
+        identity.emoji.trim()
+    };
+    let name = if identity.agent_name.trim().is_empty() {
+        "Moltis"
+    } else {
+        identity.agent_name.trim()
+    };
+    let vibe = if identity.vibe.trim().is_empty() {
+        "default"
+    } else {
+        identity.vibe.trim()
+    };
+
+    let mut preview: Vec<Line<'_>> = Vec::new();
+    preview.push(Line::from(""));
+    preview.push(Line::from(vec![Span::styled(
+        format!("  {emoji}  {name}"),
+        theme.heading,
+    )]));
+    preview.push(Line::from(""));
+
+    if !identity.user_name.trim().is_empty() {
+        preview.push(Line::from(vec![
+            Span::styled("  Owner     ", theme.bold),
+            Span::raw(identity.user_name.trim().to_string()),
+        ]));
+    }
+    preview.push(Line::from(vec![
+        Span::styled("  Vibe      ", theme.bold),
+        Span::raw(vibe.to_string()),
+    ]));
+    if !identity.creature.trim().is_empty() {
+        preview.push(Line::from(vec![
+            Span::styled("  Creature  ", theme.bold),
+            Span::raw(identity.creature.trim().to_string()),
+        ]));
+    }
+
+    let preview_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Agent Preview ");
+    frame.render_widget(
+        Paragraph::new(preview)
+            .block(preview_block)
+            .wrap(Wrap { trim: false }),
+        body[1],
+    );
+
+    render_wide_footer(frame, &sections, onboarding, theme, identity_actions_hint());
+
+    if onboarding.editing.is_some() && identity_inline_edit_target(onboarding).is_none() {
+        draw_edit_modal(frame, area, onboarding, input_mode, textarea, theme);
+    }
+}
+
+fn identity_summary_line(onboarding: &OnboardingState) -> Line<'static> {
+    let identity = &onboarding.identity;
+    let values = [
+        identity.user_name.as_str(),
+        identity.agent_name.as_str(),
+        identity.emoji.as_str(),
+        identity.creature.as_str(),
+        identity.vibe.as_str(),
+    ];
+    let filled = values
+        .iter()
+        .filter(|value| !value.trim().is_empty())
+        .count();
+    Line::from(format!("Identity fields: {filled}/5 filled"))
+}
+
+fn identity_actions_hint() -> &'static str {
+    "Actions: j/k move  e edit field  c save and continue  b back"
+}
+
+fn identity_inline_edit_target(onboarding: &OnboardingState) -> Option<EditTarget> {
+    let target = onboarding.editing?;
+    let is_identity_target = matches!(
+        target,
+        EditTarget::IdentityUserName
+            | EditTarget::IdentityAgentName
+            | EditTarget::IdentityEmoji
+            | EditTarget::IdentityCreature
+            | EditTarget::IdentityVibe
+    );
+    if is_identity_target {
+        Some(target)
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Copy)]
 struct InlineProviderField {
     line_index: u16,
@@ -492,11 +1304,12 @@ fn draw_llm_config_modal(
         return;
     };
 
-    let popup = centered_rect(56, 58, area);
+    let popup = common::centered_rect(56, 58, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(theme.border_focused)
         .title(format!(" Configure {} ", config.provider_display_name));
     let inner = block.inner(popup);
@@ -547,7 +1360,7 @@ fn draw_llm_config_modal(
                 "API key",
                 EditTarget::ProviderApiKey,
                 config.field_index == row_index,
-                mask_secret(&config.api_key),
+                common::mask_secret(&config.api_key),
             );
 
             if supports_endpoint(&config.provider_name) {
@@ -712,11 +1525,12 @@ fn draw_edit_modal(
 
     let surface = Color::Rgb(46, 58, 78);
     let content_style = Style::default().fg(Color::White).bg(surface);
-    let popup = centered_rect(62, 44, area);
+    let popup = common::centered_rect(62, 44, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(theme.border_focused)
         .style(content_style)
         .title(" Edit Field ");
@@ -749,6 +1563,7 @@ fn draw_edit_modal(
     textarea.set_block(
         Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(theme.mode_insert)
             .style(input_style)
             .title(" Value "),
@@ -761,22 +1576,6 @@ fn draw_edit_modal(
         "Press Enter to save or Esc to cancel"
     };
     frame.render_widget(Paragraph::new(footer).style(content_style), layout[2]);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
 }
 
 fn onboarding_intro_line(theme: &Theme) -> Line<'static> {
@@ -831,7 +1630,7 @@ fn step_indicator(onboarding: &OnboardingState, theme: &Theme) -> Line<'static> 
     Line::from(spans)
 }
 
-fn draw_security(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme: &Theme) {
+fn draw_security<'a>(lines: &mut Vec<Line<'a>>, onboarding: &'a OnboardingState, theme: &Theme) {
     let security = &onboarding.security;
 
     if security.setup_complete {
@@ -896,7 +1695,7 @@ fn draw_security(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme:
     }
 }
 
-fn draw_llm_compact(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme: &Theme) {
+fn draw_llm_compact<'a>(lines: &mut Vec<Line<'a>>, onboarding: &'a OnboardingState, theme: &Theme) {
     let llm = &onboarding.llm;
 
     if llm.providers.is_empty() {
@@ -1076,12 +1875,14 @@ fn draw_llm_compact(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, the
     }
 }
 
-fn draw_voice(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme: &Theme) {
+fn draw_voice_compact(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme: &Theme) {
     let voice = &onboarding.voice;
 
     if voice.providers.is_empty() {
         lines.push(Line::from("No voice providers available."));
-        lines.push(Line::from("Press c to continue or s to skip."));
+        lines.push(Line::from(
+            "Press r to refresh, c to continue, or s to skip.",
+        ));
         return;
     }
 
@@ -1121,78 +1922,74 @@ fn draw_voice(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme: &
 
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Actions: t toggle provider, e edit API key, v save key, c continue, s skip",
+        "Actions: t toggle provider, e edit API key, v save key, r refresh, c continue, s skip, b back",
     ));
 }
 
-fn draw_channel(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme: &Theme) {
+fn draw_channel_compact(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme: &Theme) {
     let channel = &onboarding.channel;
 
-    lines.push(Line::from(
-        "Connect a Telegram bot so you can chat from your phone.",
-    ));
+    let selected = ChannelProvider::from_index(channel.selected_provider);
+    lines.push(Line::from("Choose a channel integration for onboarding."));
 
-    if channel.connected {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Connected: ", theme.tool_success),
-            Span::styled(
-                format!("@{}", channel.connected_name),
-                theme.tool_success.add_modifier(Modifier::BOLD),
-            ),
-        ]));
-        lines.push(Line::from("Press c to continue."));
-        return;
+    for (idx, provider) in ChannelProvider::ALL.iter().enumerate() {
+        let marker = if idx == channel.selected_provider {
+            ">"
+        } else {
+            " "
+        };
+        let status = match provider {
+            ChannelProvider::Telegram => {
+                if channel.connected {
+                    "connected"
+                } else {
+                    "not configured"
+                }
+            },
+            ChannelProvider::Slack | ChannelProvider::Discord => "coming soon",
+        };
+        lines.push(Line::from(format!(
+            "{marker} {} [{}] {status}",
+            provider.name(),
+            provider.auth()
+        )));
     }
 
-    lines.push(Line::from("1) Create a bot with @BotFather (/newbot)."));
-    lines.push(Line::from("2) Paste bot username and token below."));
     lines.push(Line::from(""));
+    lines.push(Line::from(selected.description()));
+    if selected == ChannelProvider::Telegram {
+        lines.push(Line::from(format!(
+            "Telegram user: {}",
+            if channel.account_id.trim().is_empty() {
+                "(empty)"
+            } else {
+                channel.account_id.as_str()
+            }
+        )));
+        lines.push(Line::from(format!(
+            "Telegram token: {}",
+            common::mask_secret(&channel.token)
+        )));
+    }
 
-    editable_row(
-        lines,
-        channel.field_index == 0,
-        "Bot username",
-        &channel.account_id,
-        false,
-        theme,
-    );
-    editable_row(
-        lines,
-        channel.field_index == 1,
-        "Bot token",
-        &channel.token,
-        true,
-        theme,
-    );
-
-    let dm_active = channel.field_index == 2;
-    let dm_prefix = if dm_active {
-        ">"
+    if channel.configuring {
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            "Actions: j/k move fields, e edit, [ ] DM policy, x connect, Esc close",
+        ));
     } else {
-        " "
-    };
-    lines.push(Line::from(format!(
-        "{dm_prefix} DM policy: {}",
-        channel.dm_policy
-    )));
-
-    editable_row(
-        lines,
-        channel.field_index == 3,
-        "Allowlist",
-        &channel.allowlist,
-        false,
-        theme,
-    );
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Actions: e edit field, [ ] change DM policy, x connect bot, c continue, s skip",
-    ));
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            "Actions: enter configure, c continue, s skip, b back",
+        ));
+    }
 }
 
-fn draw_identity(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme: &Theme) {
+fn draw_identity_compact<'a>(
+    lines: &mut Vec<Line<'a>>,
+    onboarding: &'a OnboardingState,
+    theme: &Theme,
+) {
     let identity = &onboarding.identity;
 
     lines.push(Line::from(
@@ -1247,11 +2044,11 @@ fn draw_identity(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme:
     ));
 }
 
-fn draw_summary(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme: &Theme) {
+fn draw_summary(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, theme: &Theme) {
     let summary = &onboarding.summary;
 
     lines.push(Line::from(
-        "Overview of your setup. You can change these later in Settings.",
+        "Review your setup, then finish onboarding to open chat.",
     ));
     lines.push(Line::from(""));
 
@@ -1296,38 +2093,206 @@ fn draw_summary(lines: &mut Vec<Line<'_>>, onboarding: &OnboardingState, _theme:
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Actions: r refresh summary, f finish onboarding, b back",
-    ));
+    lines.push(Line::from(vec![Span::styled(
+        " Finish Onboarding (Enter) ",
+        theme.mode_insert.add_modifier(Modifier::BOLD),
+    )]));
+    lines.push(Line::from("Secondary actions: r refresh summary, b back"));
 }
 
-fn editable_row(
-    lines: &mut Vec<Line<'_>>,
-    active: bool,
-    label: &str,
-    value: &str,
-    secret: bool,
-    _theme: &Theme,
-) {
-    let marker = if active {
-        ">"
-    } else {
-        " "
-    };
-    let display = if secret {
-        mask_secret(value)
-    } else {
-        value.to_string()
-    };
-
-    lines.push(Line::from(format!("{marker} {label}: {display}")));
-}
-
-fn mask_secret(value: &str) -> String {
-    if value.is_empty() {
-        return "(empty)".into();
+fn draw_summary_screen(frame: &mut Frame, area: Rect, onboarding: &OnboardingState, theme: &Theme) {
+    if area.width < 90 || area.height < 16 {
+        render_step_compact(frame, area, onboarding, theme, |lines| {
+            draw_summary(lines, onboarding, theme);
+        });
+        return;
     }
-    "*".repeat(value.chars().count().min(32))
+
+    let sections = render_wide_header(
+        frame,
+        area,
+        onboarding,
+        theme,
+        summary_summary_line(onboarding),
+    );
+    let body = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(sections[4]);
+
+    // --- Left column: Setup Review ---
+    let summary = &onboarding.summary;
+    let mut lines: Vec<Line<'_>> = Vec::new();
+
+    // Identity section
+    let (identity_icon, identity_style) = if summary.identity_line.is_some() {
+        ("\u{2713}", theme.tool_success) // checkmark
+    } else {
+        ("\u{2717}", theme.system_msg) // cross
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {identity_icon} "), identity_style),
+        Span::styled("Identity", theme.bold),
+    ]));
+    if let Some(line) = summary.identity_line.as_deref() {
+        lines.push(Line::from(format!("     {line}")));
+    } else {
+        lines.push(Line::from(vec![Span::styled(
+            "     Not configured",
+            theme.system_msg,
+        )]));
+    }
+    lines.push(Line::from(""));
+
+    // LLMs section
+    let (llm_icon, llm_style) = if !summary.provider_badges.is_empty() {
+        ("\u{2713}", theme.tool_success)
+    } else {
+        ("\u{2717}", theme.system_msg)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {llm_icon} "), llm_style),
+        Span::styled("LLMs", theme.bold),
+    ]));
+    if summary.provider_badges.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "     No providers configured",
+            theme.system_msg,
+        )]));
+    } else {
+        lines.push(Line::from(format!(
+            "     {}",
+            summary.provider_badges.join(", ")
+        )));
+    }
+    lines.push(Line::from(""));
+
+    // Channels section
+    let has_channels = !summary.channels.is_empty();
+    let (ch_icon, ch_style) = if has_channels {
+        ("\u{2713}", theme.tool_success)
+    } else {
+        ("\u{2717}", theme.system_msg)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {ch_icon} "), ch_style),
+        Span::styled("Channels", theme.bold),
+    ]));
+    if summary.channels.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "     No channels configured",
+            theme.system_msg,
+        )]));
+    } else {
+        for channel in &summary.channels {
+            lines.push(Line::from(format!(
+                "     {} ({})",
+                channel.name, channel.status
+            )));
+        }
+    }
+    lines.push(Line::from(""));
+
+    // Voice section
+    let (voice_icon, voice_style) = if !summary.voice_enabled.is_empty() {
+        ("\u{2713}", theme.tool_success)
+    } else {
+        ("\u{2717}", theme.system_msg)
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {voice_icon} "), voice_style),
+        Span::styled("Voice", theme.bold),
+    ]));
+    if summary.voice_enabled.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "     No voice providers enabled",
+            theme.system_msg,
+        )]));
+    } else {
+        lines.push(Line::from(format!(
+            "     {}",
+            summary.voice_enabled.join(", ")
+        )));
+    }
+
+    let review_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Setup Review ");
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(review_block)
+            .wrap(Wrap { trim: false }),
+        body[0],
+    );
+
+    // --- Right column: Get Started ---
+    let right: Vec<Line<'_>> = vec![
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "  Finish Onboarding (Enter) ",
+            theme.mode_insert.add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from("  This will save your configuration and open chat."),
+        Line::from("  You can change settings any time from the"),
+        Line::from("  Settings tab."),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  r", theme.footer_key),
+            Span::styled(" refresh summary  ", theme.footer_desc),
+            Span::styled("b", theme.footer_key),
+            Span::styled(" back", theme.footer_desc),
+        ]),
+    ];
+
+    let started_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Get Started ");
+    frame.render_widget(
+        Paragraph::new(right)
+            .block(started_block)
+            .wrap(Wrap { trim: false }),
+        body[1],
+    );
+
+    render_wide_footer(
+        frame,
+        &sections,
+        onboarding,
+        theme,
+        "Actions: Enter finish  r refresh  b back",
+    );
+}
+
+fn summary_summary_line(onboarding: &OnboardingState) -> Line<'static> {
+    let summary = &onboarding.summary;
+    let mut configured = 0u8;
+
+    if summary.identity_line.is_some() {
+        configured += 1;
+    }
+    if !summary.provider_badges.is_empty() {
+        configured += 1;
+    }
+    if !summary.channels.is_empty() {
+        configured += 1;
+    }
+    if !summary.voice_enabled.is_empty() {
+        configured += 1;
+    }
+
+    Line::from(format!("{configured}/4 sections configured"))
+}
+
+fn editable_row<'a>(
+    lines: &mut Vec<Line<'a>>,
+    active: bool,
+    label: &'a str,
+    value: &'a str,
+    secret: bool,
+    theme: &Theme,
+) {
+    lines.extend(common::form_field(label, value, active, "", secret, theme));
 }
 
 fn hints_line(onboarding: &OnboardingState, theme: &Theme) -> Line<'static> {
@@ -1340,7 +2305,10 @@ fn hints_line(onboarding: &OnboardingState, theme: &Theme) -> Line<'static> {
 
     if onboarding.busy {
         parts.push(Span::styled("working...", theme.thinking));
-    } else if onboarding.llm.configuring.is_some() || onboarding.editing.is_some() {
+    } else if onboarding.llm.configuring.is_some()
+        || onboarding.channel.configuring
+        || onboarding.editing.is_some()
+    {
         parts.push(Span::raw("Esc close modal"));
     } else {
         parts.push(Span::raw("Esc quit"));

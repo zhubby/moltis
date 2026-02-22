@@ -29,9 +29,52 @@ impl OnboardingStep {
             Self::Security => "Secure your instance",
             Self::Llm => "Add LLMs",
             Self::Voice => "Voice (optional)",
-            Self::Channel => "Connect Telegram",
+            Self::Channel => "Connect Channels",
             Self::Identity => "Set up your identity",
             Self::Summary => "Setup Summary",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelProvider {
+    Telegram,
+    Slack,
+    Discord,
+}
+
+impl ChannelProvider {
+    pub const ALL: [Self; 3] = [Self::Telegram, Self::Slack, Self::Discord];
+
+    pub fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::Telegram)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Telegram => "Telegram",
+            Self::Slack => "Slack",
+            Self::Discord => "Discord",
+        }
+    }
+
+    pub fn auth(self) -> &'static str {
+        match self {
+            Self::Telegram => "bot-token",
+            Self::Slack => "oauth",
+            Self::Discord => "bot-token",
+        }
+    }
+
+    pub fn available(self) -> bool {
+        matches!(self, Self::Telegram)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Telegram => "Chat from your phone using a Telegram bot.",
+            Self::Slack => "Workspace channels and DMs (coming soon).",
+            Self::Discord => "Guild channels and DMs (coming soon).",
         }
     }
 }
@@ -201,6 +244,8 @@ pub struct VoiceState {
 
 #[derive(Debug, Clone)]
 pub struct ChannelState {
+    pub selected_provider: usize,
+    pub configuring: bool,
     pub account_id: String,
     pub token: String,
     pub dm_policy: String,
@@ -213,6 +258,8 @@ pub struct ChannelState {
 impl Default for ChannelState {
     fn default() -> Self {
         Self {
+            selected_provider: 0,
+            configuring: false,
             account_id: String::new(),
             token: String::new(),
             dm_policy: "allowlist".into(),

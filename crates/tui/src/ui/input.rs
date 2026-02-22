@@ -5,7 +5,7 @@ use {
         Frame,
         layout::Rect,
         style::{Color, Modifier, Style},
-        widgets::{Block, Borders},
+        widgets::{Block, BorderType, Borders},
     },
     tui_textarea::TextArea,
 };
@@ -26,7 +26,9 @@ pub fn draw(
             textarea.set_block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(theme.border_focused)
+                    .style(theme.input_bg)
                     .title(" Input (Enter to send, Shift+Enter for newline) "),
             );
         },
@@ -36,8 +38,9 @@ pub fn draw(
             textarea.set_block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(theme.border)
-                    .title(" Press 'i' to type "),
+                    .title(" Navigate (i to type) "),
             );
         },
         InputMode::Command => {
@@ -46,7 +49,9 @@ pub fn draw(
             textarea.set_block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(theme.border_focused)
+                    .style(theme.input_bg)
                     .title(format!(" :{} ", state.command_buffer)),
             );
         },

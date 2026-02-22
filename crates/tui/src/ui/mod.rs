@@ -1,22 +1,29 @@
 pub mod chat;
+pub mod common;
+pub mod crons;
+pub mod footer;
+pub mod header;
 pub mod input;
 pub mod markdown;
+pub mod model_switcher;
 pub mod onboarding;
+pub mod projects;
 pub mod sessions;
+pub mod settings;
 pub mod status_bar;
 pub mod theme;
 
 use {
     crate::{
         onboarding::OnboardingState,
-        state::{AppState, Panel},
+        state::{AppState, MainTab, ModelSwitcherState, Panel},
     },
     ratatui::{
         Frame,
         layout::{Constraint, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Clear, Paragraph, Wrap},
+        widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     },
     status_bar::ConnectionDisplay,
     theme::Theme,
@@ -28,6 +35,7 @@ pub fn draw(
     frame: &mut Frame,
     state: &AppState,
     onboarding_state: Option<&OnboardingState>,
+    model_switcher_state: Option<&ModelSwitcherState>,
     onboarding_check_pending: bool,
     connection: &ConnectionDisplay,
     textarea: &mut TextArea<'_>,
@@ -35,40 +43,68 @@ pub fn draw(
 ) {
     let area = frame.area();
 
-    // Vertical: main content + input + status bar
+    // 5-row layout: Header | Main content | Input | Footer | Status bar
+    let show_input = matches!(state.active_tab, MainTab::Chat);
     let vertical = Layout::vertical([
-        Constraint::Min(5),    // main content (chat + optional sidebar)
-        Constraint::Length(3), // input area
+        Constraint::Length(1), // header
+        Constraint::Min(5),    // main content
+        Constraint::Length(if show_input {
+            3
+        } else {
+            0
+        }), // input area (Chat only)
+        Constraint::Length(1), // footer help
         Constraint::Length(1), // status bar
     ])
     .split(area);
 
-    // Main content: optional sidebar + chat
-    if state.sidebar_visible {
-        let horizontal = Layout::horizontal([
-            Constraint::Length(25), // sidebar
-            Constraint::Min(30),    // chat
-        ])
-        .split(vertical[0]);
+    // Header
+    header::draw(frame, vertical[0], state, theme);
 
-        let sidebar_focused = state.active_panel == Panel::Sessions;
-        sessions::draw(frame, horizontal[0], state, sidebar_focused, theme);
-        chat::draw(frame, horizontal[1], state, theme);
-    } else {
-        chat::draw(frame, vertical[0], state, theme);
+    // Main content: tab-dependent
+    match state.active_tab {
+        MainTab::Chat => {
+            if state.sidebar_visible {
+                let sidebar_width = (vertical[1].width / 4).clamp(20, 35);
+                let horizontal =
+                    Layout::horizontal([Constraint::Length(sidebar_width), Constraint::Min(30)])
+                        .split(vertical[1]);
+
+                let sidebar_focused = state.active_panel == Panel::Sessions;
+                sessions::draw(frame, horizontal[0], state, sidebar_focused, theme);
+                chat::draw(frame, horizontal[1], state, theme);
+            } else {
+                chat::draw(frame, vertical[1], state, theme);
+            }
+        },
+        MainTab::Settings => {
+            settings::draw(frame, vertical[1], state, theme);
+        },
+        MainTab::Projects => {
+            projects::draw(frame, vertical[1], state, theme);
+        },
+        MainTab::Crons => {
+            crons::draw(frame, vertical[1], state, theme);
+        },
     }
 
-    // Input area
-    input::draw(frame, vertical[1], state, textarea, theme);
+    // Input area (Chat tab only)
+    if show_input {
+        input::draw(frame, vertical[2], state, textarea, theme);
+    }
+
+    // Footer help
+    footer::draw(frame, vertical[3], state, theme);
 
     // Status bar
-    status_bar::draw(frame, vertical[2], state, connection, theme);
+    status_bar::draw(frame, vertical[4], state, connection, theme);
 
+    // Modals overlay
     if let Some(onboarding) = onboarding_state {
-        // Onboarding is blocking, but appears as an intentional overlay above
-        // the main app chrome so startup does not feel like a rendering glitch.
-        let modal = centered_rect(94, 92, area);
+        let modal = common::centered_rect(94, 92, area);
         onboarding::draw(frame, modal, onboarding, state.input_mode, textarea, theme);
+    } else if let Some(switcher) = model_switcher_state {
+        model_switcher::draw(frame, area, state, switcher, theme);
     } else if onboarding_check_pending {
         draw_onboarding_pending_modal(frame, area, connection, theme);
     }
@@ -80,7 +116,7 @@ fn draw_onboarding_pending_modal(
     connection: &ConnectionDisplay,
     theme: &Theme,
 ) {
-    let popup = centered_rect(74, 46, area);
+    let popup = common::centered_rect(74, 46, area);
     let surface = Style::default().fg(Color::White).bg(Color::Rgb(24, 28, 40));
     let status_line = match connection {
         ConnectionDisplay::Connecting => "Connecting to gateway and checking setup status...",
@@ -103,6 +139,7 @@ fn draw_onboarding_pending_modal(
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(theme.border_focused)
         .style(surface)
         .title(" Onboarding ");
@@ -113,22 +150,6 @@ fn draw_onboarding_pending_modal(
     frame.render_widget(paragraph, popup);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(vertical[1])[1]
-}
-
 #[cfg(test)]
 mod tests {
     use {
@@ -136,9 +157,9 @@ mod tests {
         crate::{
             onboarding::{
                 EditTarget, ModelOption, OnboardingState, ProviderConfigurePhase,
-                ProviderConfigureState, ProviderEntry,
+                ProviderConfigureState, ProviderEntry, VoiceProviderEntry,
             },
-            state::InputMode,
+            state::{InputMode, ModelSwitchItem, ModelSwitcherState, SessionEntry},
         },
         ratatui::{Terminal, backend::TestBackend},
         status_bar::ConnectionDisplay,
@@ -148,6 +169,7 @@ mod tests {
     fn render_to_text_with_size(
         state: &AppState,
         onboarding: Option<&OnboardingState>,
+        model_switcher: Option<&crate::state::ModelSwitcherState>,
         onboarding_pending: bool,
         connection: &ConnectionDisplay,
         width: u16,
@@ -166,6 +188,7 @@ mod tests {
                 frame,
                 state,
                 onboarding,
+                model_switcher,
                 onboarding_pending,
                 connection,
                 &mut textarea,
@@ -192,10 +215,19 @@ mod tests {
     fn render_to_text(
         state: &AppState,
         onboarding: Option<&OnboardingState>,
+        model_switcher: Option<&crate::state::ModelSwitcherState>,
         onboarding_pending: bool,
         connection: &ConnectionDisplay,
     ) -> String {
-        render_to_text_with_size(state, onboarding, onboarding_pending, connection, 80, 24)
+        render_to_text_with_size(
+            state,
+            onboarding,
+            model_switcher,
+            onboarding_pending,
+            connection,
+            80,
+            26, // +2 for header + footer
+        )
     }
 
     #[test]
@@ -206,6 +238,7 @@ mod tests {
         let text = render_to_text(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
         );
@@ -217,17 +250,17 @@ mod tests {
     #[test]
     fn regular_mode_shows_input_and_status() {
         let state = AppState::default();
-        let text = render_to_text(&state, None, false, &ConnectionDisplay::Connecting);
+        let text = render_to_text(&state, None, None, false, &ConnectionDisplay::Connecting);
 
-        assert!(text.contains("Press 'i' to type"));
-        assert!(text.contains(" NORMAL "));
+        assert!(text.contains("Enter to send"));
+        assert!(text.contains(" INSERT "));
         assert!(text.contains("Connecting..."));
     }
 
     #[test]
     fn startup_pending_shows_onboarding_gate_modal() {
         let state = AppState::default();
-        let text = render_to_text(&state, None, true, &ConnectionDisplay::Connecting);
+        let text = render_to_text(&state, None, None, true, &ConnectionDisplay::Connecting);
 
         assert!(text.contains("Please proceed to onboarding"));
         assert!(text.contains("checking setup status"));
@@ -253,6 +286,7 @@ mod tests {
         let text = render_to_text(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
         );
@@ -287,6 +321,7 @@ mod tests {
         let text = render_to_text(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
         );
@@ -307,6 +342,7 @@ mod tests {
         let text = render_to_text(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
         );
@@ -338,6 +374,7 @@ mod tests {
         let text = render_to_text(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
         );
@@ -365,11 +402,290 @@ mod tests {
         let text = render_to_text_with_size(
             &state,
             Some(&onboarding),
+            None,
             false,
             &ConnectionDisplay::Connected,
             120,
-            32,
+            34,
         );
         assert!(text.contains("Next:"));
+    }
+
+    #[test]
+    fn voice_step_renders_provider_listing_layout() {
+        let state = AppState::default();
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = 1;
+        onboarding.voice.providers = vec![
+            VoiceProviderEntry {
+                id: "whisper-openai".into(),
+                name: "OpenAI Whisper".into(),
+                provider_type: "stt".into(),
+                category: "cloud".into(),
+                available: true,
+                enabled: true,
+                key_source: Some("config".into()),
+                description: Some("Speech-to-text provider".into()),
+            },
+            VoiceProviderEntry {
+                id: "openai-tts".into(),
+                name: "OpenAI TTS".into(),
+                provider_type: "tts".into(),
+                category: "cloud".into(),
+                available: false,
+                enabled: false,
+                key_source: None,
+                description: Some("Text-to-speech provider".into()),
+            },
+        ];
+        onboarding.voice.selected_provider = 0;
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Voice (optional)"));
+        assert!(text.contains("Providers"));
+        assert!(text.contains("Details"));
+        assert!(text.contains("OpenAI Whisper"));
+        assert!(text.contains("Actions: t toggle"));
+    }
+
+    #[test]
+    fn channel_step_renders_provider_listing_layout() {
+        let state = AppState::default();
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = 2;
+        onboarding.channel.selected_provider = 0;
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Connect Channels"));
+        assert!(text.contains("Providers"));
+        assert!(text.contains("Details"));
+        assert!(text.contains("Telegram"));
+        assert!(text.contains("Actions: Enter configure"));
+    }
+
+    #[test]
+    fn channel_step_opens_telegram_config_modal() {
+        let state = AppState::default();
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = 2;
+        onboarding.channel.selected_provider = 0;
+        onboarding.channel.configuring = true;
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Configure Telegram"));
+        assert!(text.contains("Bot username"));
+        assert!(text.contains("Bot token"));
+    }
+
+    #[test]
+    fn identity_step_renders_fields_and_details_layout() {
+        let state = AppState::default();
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = 3;
+        onboarding.identity.user_name = "Alice".into();
+        onboarding.identity.agent_name = "Moltis".into();
+        onboarding.identity.emoji = "🤖".into();
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Set up your identity"));
+        assert!(text.contains("Fields"));
+        assert!(text.contains("Your name"));
+        assert!(text.contains("Actions: j/k move"));
+        assert!(text.contains("Agent Preview"));
+    }
+
+    #[test]
+    fn identity_edit_uses_inline_textfield_not_generic_modal() {
+        let state = AppState {
+            input_mode: InputMode::Insert,
+            ..AppState::default()
+        };
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = 3;
+        onboarding.identity.field_index = 0;
+        onboarding.editing = Some(EditTarget::IdentityUserName);
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Agent Preview"));
+        assert!(text.contains("Fields"));
+        assert!(!text.contains("Edit Field"));
+    }
+
+    #[test]
+    fn summary_step_highlights_primary_finish_action() {
+        let state = AppState::default();
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.step_index = onboarding.steps.len().saturating_sub(1);
+        onboarding.summary.provider_badges = vec!["OpenAI".into()];
+
+        let text = render_to_text_with_size(
+            &state,
+            Some(&onboarding),
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Finish Onboarding (Enter)"));
+        assert!(text.contains("Setup Review"));
+        assert!(text.contains("Get Started"));
+    }
+
+    #[test]
+    fn sessions_panel_shows_active_model_and_switch_hint() {
+        let state = AppState {
+            provider: Some("openai".into()),
+            model: Some("openai/gpt-5".into()),
+            sessions: vec![SessionEntry {
+                key: "main".into(),
+                label: Some("Main".into()),
+                model: Some("openai/gpt-5".into()),
+                message_count: 2,
+                replying: false,
+            }],
+            ..AppState::default()
+        };
+
+        let text = render_to_text_with_size(
+            &state,
+            None,
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Active:"));
+        assert!(text.contains("openai"));
+        assert!(text.contains("gpt-5"));
+        assert!(text.contains("[m]"));
+    }
+
+    #[test]
+    fn model_switcher_modal_renders_filter_and_actions() {
+        let state = AppState {
+            provider: Some("openai".into()),
+            model: Some("openai/gpt-5".into()),
+            ..AppState::default()
+        };
+        let switcher = ModelSwitcherState {
+            query: "gpt".into(),
+            selected: 0,
+            items: vec![
+                ModelSwitchItem {
+                    provider_name: "openai".into(),
+                    provider_display: "OpenAI".into(),
+                    model_id: "openai/gpt-5".into(),
+                    model_display: "GPT-5".into(),
+                },
+                ModelSwitchItem {
+                    provider_name: "anthropic".into(),
+                    provider_display: "Anthropic".into(),
+                    model_id: "anthropic/claude-sonnet-4".into(),
+                    model_display: "Claude Sonnet 4".into(),
+                },
+            ],
+            error_message: None,
+        };
+
+        let text = render_to_text_with_size(
+            &state,
+            None,
+            Some(&switcher),
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("Switch Provider/Model"));
+        assert!(text.contains("Search:"));
+        assert!(text.contains("GPT-5"));
+        assert!(text.contains("Enter switch"));
+    }
+
+    #[test]
+    fn header_shows_tabs_and_model_info() {
+        let state = AppState {
+            provider: Some("openai".into()),
+            model: Some("openai/gpt-5".into()),
+            ..AppState::default()
+        };
+        let text = render_to_text_with_size(
+            &state,
+            None,
+            None,
+            false,
+            &ConnectionDisplay::Connected,
+            120,
+            34,
+        );
+
+        assert!(text.contains("moltis"));
+        assert!(text.contains("Chat"));
+        assert!(text.contains("Settings"));
+        assert!(text.contains("Projects"));
+        assert!(text.contains("Crons"));
+    }
+
+    #[test]
+    fn settings_tab_renders_sections() {
+        let state = AppState {
+            active_tab: MainTab::Settings,
+            ..AppState::default()
+        };
+        let text = render_to_text(&state, None, None, false, &ConnectionDisplay::Connected);
+
+        assert!(text.contains("Sections"));
+        assert!(text.contains("Identity"));
+        assert!(text.contains("Providers"));
     }
 }

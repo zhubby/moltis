@@ -1,10 +1,13 @@
 use serde_json::Value;
 
-/// Vim-like input modes.
+/// Input modes for the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
+    /// Navigation mode: scrolling, switching tabs, quitting.
     Normal,
+    /// Default typing mode: text input is active.
     Insert,
+    /// Command-line mode (`:quit`, `:model`, etc.).
     Command,
 }
 
@@ -13,6 +16,106 @@ pub enum InputMode {
 pub enum Panel {
     Chat,
     Sessions,
+}
+
+/// Top-level tab navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainTab {
+    Chat,
+    Settings,
+    Projects,
+    Crons,
+}
+
+/// Settings navigation sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsSection {
+    Identity,
+    Providers,
+    Voice,
+    Channels,
+    EnvVars,
+    McpServers,
+    Memory,
+}
+
+impl SettingsSection {
+    pub const ALL: [Self; 7] = [
+        Self::Identity,
+        Self::Providers,
+        Self::Voice,
+        Self::Channels,
+        Self::EnvVars,
+        Self::McpServers,
+        Self::Memory,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Identity => "Identity",
+            Self::Providers => "Providers",
+            Self::Voice => "Voice",
+            Self::Channels => "Channels",
+            Self::EnvVars => "Env Vars",
+            Self::McpServers => "MCP Servers",
+            Self::Memory => "Memory",
+        }
+    }
+}
+
+/// State for the Settings tab.
+#[derive(Debug, Clone)]
+pub struct SettingsState {
+    pub active_section: SettingsSection,
+    pub sections: Vec<SettingsSection>,
+    #[allow(dead_code)] // Used when Settings tab loads data via RPC
+    pub section_data: Option<Value>,
+    #[allow(dead_code)] // Used when Settings form editing is implemented
+    pub editing_field: Option<usize>,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            active_section: SettingsSection::Identity,
+            sections: SettingsSection::ALL.to_vec(),
+            section_data: None,
+            editing_field: None,
+        }
+    }
+}
+
+/// Entry in the projects list.
+#[derive(Debug, Clone)]
+pub struct ProjectEntry {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub active: bool,
+}
+
+/// State for the Projects tab.
+#[derive(Debug, Clone, Default)]
+pub struct ProjectsState {
+    pub projects: Vec<ProjectEntry>,
+    pub selected: usize,
+}
+
+/// Entry in the cron jobs list.
+#[derive(Debug, Clone)]
+pub struct CronJobEntry {
+    pub name: String,
+    pub schedule: String,
+    pub last_run: Option<String>,
+    pub next_run: Option<String>,
+    pub enabled: bool,
+}
+
+/// State for the Crons tab.
+#[derive(Debug, Clone, Default)]
+pub struct CronsState {
+    pub jobs: Vec<CronJobEntry>,
+    pub selected: usize,
 }
 
 /// Role of a chat message.
@@ -75,10 +178,63 @@ impl SessionEntry {
     }
 }
 
+/// Selectable model option for the session model switcher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSwitchItem {
+    pub provider_name: String,
+    pub provider_display: String,
+    pub model_id: String,
+    pub model_display: String,
+}
+
+/// Modal state for provider/model switching with search.
+#[derive(Debug, Clone, Default)]
+pub struct ModelSwitcherState {
+    pub query: String,
+    pub selected: usize,
+    pub items: Vec<ModelSwitchItem>,
+    pub error_message: Option<String>,
+}
+
+impl ModelSwitcherState {
+    #[must_use]
+    pub fn filtered_indices(&self) -> Vec<usize> {
+        let q = self.query.trim().to_lowercase();
+        if q.is_empty() {
+            return (0..self.items.len()).collect();
+        }
+
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                let provider = item.provider_display.to_lowercase();
+                let model = item.model_display.to_lowercase();
+                let model_id = item.model_id.to_lowercase();
+                if provider.contains(&q) || model.contains(&q) || model_id.contains(&q) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn reset_selection_to_visible(&mut self) {
+        let filtered = self.filtered_indices();
+        if let Some(first) = filtered.first().copied() {
+            self.selected = first;
+        } else {
+            self.selected = 0;
+        }
+    }
+}
+
 /// Full application state.
 pub struct AppState {
     pub input_mode: InputMode,
     pub active_panel: Panel,
+    pub active_tab: MainTab,
     pub messages: Vec<DisplayMessage>,
     pub stream_buffer: String,
     pub thinking_active: bool,
@@ -88,6 +244,8 @@ pub struct AppState {
     pub sidebar_visible: bool,
     pub sessions: Vec<SessionEntry>,
     pub active_session: String,
+    pub selected_session: usize,
+    pub session_scroll_offset: usize,
     pub model: Option<String>,
     pub provider: Option<String>,
     pub token_usage: TokenUsage,
@@ -95,13 +253,17 @@ pub struct AppState {
     pub command_buffer: String,
     pub dirty: bool,
     pub server_version: Option<String>,
+    pub settings: SettingsState,
+    pub projects: ProjectsState,
+    pub crons: CronsState,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            input_mode: InputMode::Normal,
+            input_mode: InputMode::Insert,
             active_panel: Panel::Chat,
+            active_tab: MainTab::Chat,
             messages: Vec::new(),
             stream_buffer: String::new(),
             thinking_active: false,
@@ -111,6 +273,8 @@ impl Default for AppState {
             sidebar_visible: true,
             sessions: Vec::new(),
             active_session: "main".into(),
+            selected_session: 0,
+            session_scroll_offset: 0,
             model: None,
             provider: None,
             token_usage: TokenUsage::default(),
@@ -118,6 +282,9 @@ impl Default for AppState {
             command_buffer: String::new(),
             dirty: true,
             server_version: None,
+            settings: SettingsState::default(),
+            projects: ProjectsState::default(),
+            crons: CronsState::default(),
         }
     }
 }
@@ -198,7 +365,7 @@ mod tests {
     #[test]
     fn default_state() {
         let state = AppState::default();
-        assert_eq!(state.input_mode, InputMode::Normal);
+        assert_eq!(state.input_mode, InputMode::Insert);
         assert_eq!(state.active_panel, Panel::Chat);
         assert!(state.messages.is_empty());
         assert!(!state.is_streaming());
@@ -252,5 +419,37 @@ mod tests {
             replying: true,
         };
         assert_eq!(s2.display_name(), "My Chat");
+    }
+
+    #[test]
+    fn model_switcher_filters_by_query() {
+        let mut switcher = ModelSwitcherState {
+            query: "openai".into(),
+            selected: 0,
+            items: vec![
+                ModelSwitchItem {
+                    provider_name: "openai".into(),
+                    provider_display: "OpenAI".into(),
+                    model_id: "openai/gpt-5".into(),
+                    model_display: "GPT-5".into(),
+                },
+                ModelSwitchItem {
+                    provider_name: "anthropic".into(),
+                    provider_display: "Anthropic".into(),
+                    model_id: "anthropic/claude-sonnet-4".into(),
+                    model_display: "Claude Sonnet 4".into(),
+                },
+            ],
+            error_message: None,
+        };
+
+        let filtered = switcher.filtered_indices();
+        assert_eq!(filtered, vec![0]);
+
+        switcher.query = "claude".into();
+        assert_eq!(switcher.filtered_indices(), vec![1]);
+
+        switcher.query = "missing".into();
+        assert!(switcher.filtered_indices().is_empty());
     }
 }

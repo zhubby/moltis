@@ -1,5 +1,5 @@
 use {
-    super::theme::Theme,
+    super::{common, theme::Theme},
     crate::state::{AppState, InputMode},
     ratatui::{
         Frame,
@@ -43,12 +43,28 @@ pub fn draw(
     // Status info
     let mut parts: Vec<Span<'_>> = Vec::new();
 
-    // Connection
-    let (conn_text, conn_style) = match connection {
-        ConnectionDisplay::Disconnected => (" Disconnected", theme.status_disconnected),
-        ConnectionDisplay::Connecting => (" Connecting...", theme.status_connecting),
-        ConnectionDisplay::Connected => (" Connected", theme.status_connected),
+    // Connection with status dot
+    let (dot, dot_style, conn_text, conn_style) = match connection {
+        ConnectionDisplay::Disconnected => (
+            "○",
+            theme.status_dot_inactive,
+            " Disconnected",
+            theme.status_disconnected,
+        ),
+        ConnectionDisplay::Connecting => (
+            "●",
+            theme.status_connecting,
+            " Connecting...",
+            theme.status_connecting,
+        ),
+        ConnectionDisplay::Connected => (
+            "●",
+            theme.status_dot_active,
+            " Connected",
+            theme.status_connected,
+        ),
     };
+    parts.push(Span::styled(format!(" {dot}"), dot_style));
     parts.push(Span::styled(conn_text, conn_style));
 
     // Server version
@@ -66,15 +82,15 @@ pub fn draw(
     // Session
     parts.push(Span::raw(format!(" | {} ", state.active_session)));
 
-    // Token usage
+    // Token usage with format_count
     let total = state.token_usage.session_input + state.token_usage.session_output;
     if total > 0 || state.token_usage.context_window > 0 {
-        let total_k = total / 1000;
-        let window_k = state.token_usage.context_window / 1000;
-        if window_k > 0 {
-            parts.push(Span::raw(format!("| {total_k}K/{window_k}K tokens ")));
+        let total_fmt = common::format_count(total);
+        let window_fmt = common::format_count(state.token_usage.context_window);
+        if state.token_usage.context_window > 0 {
+            parts.push(Span::raw(format!("| {total_fmt}/{window_fmt} tokens ")));
         } else {
-            parts.push(Span::raw(format!("| {total_k}K tokens ")));
+            parts.push(Span::raw(format!("| {total_fmt} tokens ")));
         }
     }
 

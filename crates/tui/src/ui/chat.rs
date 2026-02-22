@@ -1,12 +1,12 @@
 use {
-    super::{markdown, theme::Theme},
+    super::{common, markdown, theme::Theme},
     crate::state::{AppState, DisplayMessage, MessageRole},
     ratatui::{
         Frame,
         layout::Rect,
         style::{Modifier, Style},
         text::{Line, Span},
-        widgets::{Block, Borders, Paragraph, Wrap},
+        widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     },
 };
 
@@ -47,10 +47,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         // Streaming text
         if !state.stream_buffer.is_empty() {
             all_lines.push(Line::from(vec![Span::styled(
-                "assistant ",
-                Style::default()
-                    .fg(ratatui::style::Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                " assistant ",
+                theme.msg_card_assistant.add_modifier(Modifier::BOLD),
             )]));
             let stream_lines = markdown::render_markdown(&state.stream_buffer, theme);
             all_lines.extend(stream_lines);
@@ -98,20 +96,32 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         .collect();
 
     let title = format!(" Chat: {} ", state.active_session);
+    let block = common::rounded_block_focused(&title, true, theme);
     let chat = Paragraph::new(visible)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(block)
         .wrap(Wrap { trim: false });
 
     frame.render_widget(chat, area);
+
+    // Scrollbar
+    if max_scroll > 0 {
+        let mut scrollbar_state =
+            ScrollbarState::new(max_scroll).position(max_scroll.saturating_sub(effective_scroll));
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            area,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 /// Render a single message into lines.
 fn render_message<'a>(lines: &mut Vec<Line<'a>>, msg: &'a DisplayMessage, theme: &Theme) {
-    // Role header
-    let (role_label, role_style) = match msg.role {
-        MessageRole::User => ("you ", theme.user_msg),
-        MessageRole::Assistant => ("assistant ", theme.assistant_msg),
-        MessageRole::System => ("system ", theme.system_msg),
+    // Role header with background strip
+    let (role_label, role_style, _card_bg) = match msg.role {
+        MessageRole::User => (" you ", theme.user_msg, theme.msg_card_user),
+        MessageRole::Assistant => (" assistant ", theme.assistant_msg, theme.msg_card_assistant),
+        MessageRole::System => (" system ", theme.system_msg, theme.msg_card_system),
     };
     lines.push(Line::from(vec![Span::styled(
         role_label,
@@ -133,8 +143,19 @@ fn render_message<'a>(lines: &mut Vec<Line<'a>>, msg: &'a DisplayMessage, theme:
 
     // Tool calls
     for tool in &msg.tool_calls {
+        let status_icon = match tool.success {
+            Some(true) => "✓",
+            Some(false) => "✗",
+            None => "…",
+        };
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
+            Span::styled(status_icon, match tool.success {
+                Some(true) => theme.tool_success,
+                Some(false) => theme.tool_error,
+                None => theme.thinking,
+            }),
+            Span::raw(" "),
             Span::styled(&tool.name, theme.tool_name),
             if let Some(ref mode) = tool.execution_mode {
                 Span::raw(format!(" ({mode})"))
@@ -149,18 +170,9 @@ fn render_message<'a>(lines: &mut Vec<Line<'a>>, msg: &'a DisplayMessage, theme:
         lines.push(Line::from(Span::raw(format!("    {args_preview}"))));
 
         // Result
-        if let Some(success) = tool.success {
-            let (icon, style) = if success {
-                ("done", theme.tool_success)
-            } else {
-                ("failed", theme.tool_error)
-            };
-            let mut result_span = vec![Span::styled(format!("    {icon}"), style)];
-            if let Some(ref summary) = tool.result_summary {
-                let preview: String = summary.chars().take(120).collect();
-                result_span.push(Span::raw(format!(": {preview}")));
-            }
-            lines.push(Line::from(result_span));
+        if let Some(ref summary) = tool.result_summary {
+            let preview: String = summary.chars().take(120).collect();
+            lines.push(Line::from(Span::raw(format!("    {preview}"))));
         }
     }
 }

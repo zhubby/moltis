@@ -5,10 +5,11 @@ use {
         Error,
         connection::{ConnectionEvent, ConnectionManager},
         events,
-        onboarding::OnboardingState,
+        onboarding::{OnboardingState, ProviderEntry, parse_providers},
         rpc::RpcClient,
         state::{
-            AppState, DisplayMessage, InputMode, MessageRole, Panel, SessionEntry, TokenUsage,
+            AppState, DisplayMessage, InputMode, MainTab, MessageRole, ModelSwitchItem,
+            ModelSwitcherState, Panel, SessionEntry, TokenUsage,
         },
         ui::{self, status_bar::ConnectionDisplay, theme::Theme},
     },
@@ -16,7 +17,7 @@ use {
     futures::StreamExt,
     moltis_protocol::ConnectAuth,
     ratatui::DefaultTerminal,
-    std::{sync::Arc, time::Duration},
+    std::{collections::HashSet, sync::Arc, time::Duration},
     tokio::sync::mpsc,
     tracing::{debug, warn},
     tui_textarea::TextArea,
@@ -52,6 +53,7 @@ pub struct InitialData {
 pub struct App {
     state: AppState,
     onboarding: Option<OnboardingState>,
+    model_switcher: Option<ModelSwitcherState>,
     onboarding_check_pending: bool,
     connection_display: ConnectionDisplay,
     connection: Option<Arc<ConnectionManager>>,
@@ -66,6 +68,7 @@ impl App {
         Self {
             state: AppState::default(),
             onboarding: None,
+            model_switcher: None,
             onboarding_check_pending: true,
             connection_display: ConnectionDisplay::Connecting,
             connection: None,
@@ -153,7 +156,7 @@ impl App {
 
         // Text input area
         let mut textarea = TextArea::default();
-        textarea.set_placeholder_text("Press 'i' to type a message...");
+        textarea.set_placeholder_text("Type a message...");
 
         // Main loop
         while !self.should_quit {
@@ -163,6 +166,7 @@ impl App {
                         frame,
                         &self.state,
                         self.onboarding.as_ref(),
+                        self.model_switcher.as_ref(),
                         self.onboarding_check_pending,
                         &self.connection_display,
                         &mut textarea,
@@ -224,8 +228,6 @@ impl App {
                 if self.initialize_onboarding(rpc).await {
                     // Load sessions and history in background (non-blocking).
                     spawn_initial_data_load(Arc::clone(rpc), event_tx.clone());
-                } else {
-                    self.state.input_mode = InputMode::Normal;
                 }
                 self.onboarding_check_pending = false;
                 self.state.dirty = true;
@@ -315,6 +317,11 @@ impl App {
             return;
         }
 
+        if self.model_switcher.is_some() {
+            self.handle_model_switcher_key(key, rpc).await;
+            return;
+        }
+
         match self.state.input_mode {
             InputMode::Normal => self.handle_normal_key(key, rpc, textarea).await,
             InputMode::Insert => self.handle_insert_key(key, rpc, textarea).await,
@@ -368,6 +375,11 @@ impl App {
                 self.state.dirty = true;
             },
 
+            // Model/provider switcher
+            (KeyCode::Char('m'), KeyModifiers::NONE) => {
+                self.open_model_switcher(rpc).await;
+            },
+
             // Scrolling
             (KeyCode::Char('j') | KeyCode::Down, _) => {
                 self.state.scroll_down(1);
@@ -396,15 +408,35 @@ impl App {
                 self.state.dirty = true;
             },
 
-            // Tab: cycle focus
+            // Tab: cycle focus (Chat tab only)
             (KeyCode::Tab, _) => {
-                self.state.active_panel = match self.state.active_panel {
-                    Panel::Chat => Panel::Sessions,
-                    Panel::Sessions => Panel::Chat,
-                };
-                if self.state.active_panel == Panel::Sessions {
-                    self.state.sidebar_visible = true;
+                if matches!(self.state.active_tab, MainTab::Chat) {
+                    self.state.active_panel = match self.state.active_panel {
+                        Panel::Chat => Panel::Sessions,
+                        Panel::Sessions => Panel::Chat,
+                    };
+                    if self.state.active_panel == Panel::Sessions {
+                        self.state.sidebar_visible = true;
+                    }
                 }
+                self.state.dirty = true;
+            },
+
+            // Tab navigation: 1-4 switch tabs
+            (KeyCode::Char('1'), _) if self.state.pending_approval.is_none() => {
+                self.state.active_tab = MainTab::Chat;
+                self.state.dirty = true;
+            },
+            (KeyCode::Char('2'), _) if self.state.pending_approval.is_none() => {
+                self.state.active_tab = MainTab::Settings;
+                self.state.dirty = true;
+            },
+            (KeyCode::Char('3'), _) if self.state.pending_approval.is_none() => {
+                self.state.active_tab = MainTab::Projects;
+                self.state.dirty = true;
+            },
+            (KeyCode::Char('4'), _) if self.state.pending_approval.is_none() => {
+                self.state.active_tab = MainTab::Crons;
                 self.state.dirty = true;
             },
 
@@ -438,6 +470,173 @@ impl App {
         }
     }
 
+    async fn open_model_switcher(&mut self, rpc: &Arc<RpcClient>) {
+        let (providers_res, models_res) = tokio::join!(
+            rpc.call("providers.available", serde_json::json!({})),
+            rpc.call("models.list", serde_json::json!({})),
+        );
+
+        let providers = providers_res
+            .ok()
+            .map(|payload| parse_providers(&payload))
+            .unwrap_or_default();
+        let models = models_res
+            .ok()
+            .map(|payload| parse_model_list(&payload))
+            .unwrap_or_default();
+        let items = build_model_switch_items(&providers, &models);
+
+        if items.is_empty() {
+            self.state.messages.push(DisplayMessage {
+                role: MessageRole::System,
+                content: "No configured providers with visible models. Configure a provider first."
+                    .to_string(),
+                tool_calls: Vec::new(),
+                thinking: None,
+            });
+            self.state.dirty = true;
+            return;
+        }
+
+        let current_provider = self
+            .state
+            .provider
+            .as_deref()
+            .unwrap_or_default()
+            .to_string();
+        let current_model = self.state.model.as_deref().unwrap_or_default().to_string();
+        let selected = items
+            .iter()
+            .position(|item| {
+                item.model_id == current_model
+                    && (current_provider.is_empty()
+                        || provider_names_match(&item.provider_name, &current_provider)
+                        || item
+                            .provider_display
+                            .eq_ignore_ascii_case(&current_provider))
+            })
+            .or_else(|| items.iter().position(|item| item.model_id == current_model))
+            .unwrap_or(0);
+
+        self.model_switcher = Some(ModelSwitcherState {
+            query: String::new(),
+            selected,
+            items,
+            error_message: None,
+        });
+        self.state.dirty = true;
+    }
+
+    async fn handle_model_switcher_key(&mut self, key: KeyEvent, rpc: &Arc<RpcClient>) {
+        if is_force_quit_key(key) {
+            self.should_quit = true;
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.model_switcher = None;
+                self.state.dirty = true;
+                return;
+            },
+            KeyCode::Enter => {
+                self.apply_model_switch_selection(rpc).await;
+                return;
+            },
+            _ => {},
+        }
+
+        let Some(switcher) = self.model_switcher.as_mut() else {
+            return;
+        };
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Backspace, _) => {
+                switcher.query.pop();
+                switcher.error_message = None;
+                sync_model_switcher_selection(switcher);
+                self.state.dirty = true;
+            },
+            (KeyCode::Char('j') | KeyCode::Down, _) => {
+                move_model_switcher_selection(switcher, true);
+                self.state.dirty = true;
+            },
+            (KeyCode::Char('k') | KeyCode::Up, _) => {
+                move_model_switcher_selection(switcher, false);
+                self.state.dirty = true;
+            },
+            (KeyCode::Char(c), modifiers)
+                if !c.is_control()
+                    && !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
+                switcher.query.push(c);
+                switcher.error_message = None;
+                switcher.reset_selection_to_visible();
+                self.state.dirty = true;
+            },
+            _ => {},
+        }
+    }
+
+    async fn apply_model_switch_selection(&mut self, rpc: &Arc<RpcClient>) {
+        let selected = self.model_switcher.as_ref().and_then(|switcher| {
+            let filtered = switcher.filtered_indices();
+            if filtered.is_empty() {
+                return None;
+            }
+
+            let selected_index = if filtered.contains(&switcher.selected) {
+                switcher.selected
+            } else {
+                filtered[0]
+            };
+
+            switcher.items.get(selected_index).cloned()
+        });
+
+        let Some(selected) = selected else {
+            if let Some(switcher) = self.model_switcher.as_mut() {
+                switcher.error_message = Some("No model matches the current search.".to_string());
+            }
+            self.state.dirty = true;
+            return;
+        };
+
+        let result = rpc
+            .call(
+                "sessions.patch",
+                serde_json::json!({
+                    "key": self.state.active_session,
+                    "model": selected.model_id,
+                }),
+            )
+            .await;
+
+        match result {
+            Ok(_) => {
+                self.state.model = Some(selected.model_id.clone());
+                self.state.provider = Some(selected.provider_name.clone());
+                if let Some(session) = self
+                    .state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.key == self.state.active_session)
+                {
+                    session.model = Some(selected.model_id);
+                }
+                self.model_switcher = None;
+                self.state.dirty = true;
+            },
+            Err(error) => {
+                if let Some(switcher) = self.model_switcher.as_mut() {
+                    switcher.error_message = Some(format!("Failed to switch model: {error}"));
+                }
+                self.state.dirty = true;
+            },
+        }
+    }
+
     async fn handle_insert_key(
         &mut self,
         key: KeyEvent,
@@ -464,11 +663,10 @@ impl App {
 
                     rpc.fire_and_forget("chat.send", serde_json::json!({"text": trimmed}));
 
-                    // Clear textarea
+                    // Clear textarea, stay in Insert mode
                     *textarea = TextArea::default();
-                    textarea.set_placeholder_text("Press 'i' to type a message...");
+                    textarea.set_placeholder_text("Type a message...");
                 }
-                self.state.input_mode = InputMode::Normal;
                 self.state.dirty = true;
             },
             (KeyCode::Enter, KeyModifiers::SHIFT) => {
@@ -562,7 +760,9 @@ impl App {
 }
 
 fn onboarding_modal_open(onboarding: &OnboardingState) -> bool {
-    onboarding.llm.configuring.is_some() || onboarding.editing.is_some()
+    onboarding.llm.configuring.is_some()
+        || onboarding.channel.configuring
+        || onboarding.editing.is_some()
 }
 
 fn should_quit_onboarding(key: KeyEvent, modal_open: bool) -> bool {
@@ -572,6 +772,188 @@ fn should_quit_onboarding(key: KeyEvent, modal_open: bool) -> bool {
 fn is_force_quit_key(key: KeyEvent) -> bool {
     key.code == KeyCode::Char('q')
         || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+}
+
+#[derive(Debug, Clone)]
+struct ModelCatalogEntry {
+    provider_name: String,
+    model_id: String,
+    model_display: String,
+}
+
+fn parse_model_list(payload: &serde_json::Value) -> Vec<ModelCatalogEntry> {
+    payload
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let model_id = row.get("id").and_then(serde_json::Value::as_str)?.trim();
+                    if model_id.is_empty() {
+                        return None;
+                    }
+
+                    let provider_name = row
+                        .get("provider")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|provider| !provider.is_empty())
+                        .map(ToOwned::to_owned)
+                        .or_else(|| infer_provider_from_model_id(model_id).map(ToOwned::to_owned))
+                        .unwrap_or_default();
+                    if provider_name.is_empty() {
+                        return None;
+                    }
+
+                    let model_display = row
+                        .get("displayName")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|display| !display.is_empty())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| fallback_model_display(model_id));
+
+                    Some(ModelCatalogEntry {
+                        provider_name,
+                        model_id: model_id.to_string(),
+                        model_display,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_model_switch_items(
+    providers: &[ProviderEntry],
+    models: &[ModelCatalogEntry],
+) -> Vec<ModelSwitchItem> {
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+
+    for provider in providers.iter().filter(|provider| provider.configured) {
+        let mut has_live_models = false;
+
+        for model in models
+            .iter()
+            .filter(|model| provider_names_match(&provider.name, &model.provider_name))
+        {
+            has_live_models = true;
+            push_model_switch_item(
+                &mut items,
+                &mut seen,
+                provider,
+                &model.model_id,
+                &model.model_display,
+            );
+        }
+
+        if has_live_models {
+            continue;
+        }
+
+        for model_id in &provider.models {
+            if model_id.trim().is_empty() {
+                continue;
+            }
+            push_model_switch_item(
+                &mut items,
+                &mut seen,
+                provider,
+                model_id,
+                &fallback_model_display(model_id),
+            );
+        }
+    }
+
+    items
+}
+
+fn push_model_switch_item(
+    items: &mut Vec<ModelSwitchItem>,
+    seen: &mut HashSet<(String, String)>,
+    provider: &ProviderEntry,
+    model_id: &str,
+    model_display: &str,
+) {
+    let normalized_provider = normalize_provider_name(&provider.name);
+    let normalized_model = model_id.trim().to_ascii_lowercase();
+    if normalized_provider.is_empty() || normalized_model.is_empty() {
+        return;
+    }
+
+    if !seen.insert((normalized_provider, normalized_model)) {
+        return;
+    }
+
+    items.push(ModelSwitchItem {
+        provider_name: provider.name.clone(),
+        provider_display: provider.display_name.clone(),
+        model_id: model_id.trim().to_string(),
+        model_display: if model_display.trim().is_empty() {
+            fallback_model_display(model_id)
+        } else {
+            model_display.trim().to_string()
+        },
+    });
+}
+
+fn sync_model_switcher_selection(switcher: &mut ModelSwitcherState) {
+    let filtered = switcher.filtered_indices();
+    if filtered.is_empty() {
+        switcher.selected = 0;
+        return;
+    }
+    if !filtered.contains(&switcher.selected) {
+        switcher.selected = filtered[0];
+    }
+}
+
+fn move_model_switcher_selection(switcher: &mut ModelSwitcherState, forward: bool) {
+    let filtered = switcher.filtered_indices();
+    if filtered.is_empty() {
+        switcher.selected = 0;
+        return;
+    }
+
+    let current_pos = filtered
+        .iter()
+        .position(|index| *index == switcher.selected)
+        .unwrap_or(0);
+    let next_pos = if forward {
+        (current_pos + 1).min(filtered.len().saturating_sub(1))
+    } else {
+        current_pos.saturating_sub(1)
+    };
+    switcher.selected = filtered[next_pos];
+}
+
+fn infer_provider_from_model_id(model_id: &str) -> Option<&str> {
+    model_id
+        .split_once("::")
+        .or_else(|| model_id.split_once('/'))
+        .or_else(|| model_id.split_once(':'))
+        .map(|(provider, _)| provider)
+}
+
+fn fallback_model_display(model_id: &str) -> String {
+    model_id
+        .split_once("::")
+        .or_else(|| model_id.split_once('/'))
+        .or_else(|| model_id.split_once(':'))
+        .map(|(_, model)| model.to_string())
+        .unwrap_or_else(|| model_id.to_string())
+}
+
+fn provider_names_match(left: &str, right: &str) -> bool {
+    normalize_provider_name(left) == normalize_provider_name(right)
+}
+
+fn normalize_provider_name(name: &str) -> String {
+    let normalized = name.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "z.ai" => "zai".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Load initial data (sessions, history, context) in a background task.
@@ -688,7 +1070,13 @@ fn spawn_initial_data_load(rpc: Arc<RpcClient>, event_tx: mpsc::UnboundedSender<
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        crate::{
+            onboarding::{OnboardingState, ProviderEntry},
+            state::ModelSwitcherState,
+        },
+    };
 
     #[test]
     fn onboarding_escape_quits_only_without_modal() {
@@ -716,5 +1104,121 @@ mod tests {
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
             false
         ));
+    }
+
+    #[test]
+    fn channel_config_modal_counts_as_open_modal() {
+        let mut onboarding = OnboardingState::new(false, false, true, None);
+        onboarding.channel.configuring = true;
+        assert!(onboarding_modal_open(&onboarding));
+    }
+
+    #[test]
+    fn parse_model_list_uses_provider_field_and_fallback_display() {
+        let payload = serde_json::json!([
+            {
+                "id": "openai/gpt-5",
+                "provider": "openai",
+                "displayName": "GPT-5"
+            },
+            {
+                "id": "anthropic::claude-sonnet-4",
+                "displayName": ""
+            }
+        ]);
+
+        let parsed = parse_model_list(&payload);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].provider_name, "openai");
+        assert_eq!(parsed[0].model_display, "GPT-5");
+        assert_eq!(parsed[1].provider_name, "anthropic");
+        assert_eq!(parsed[1].model_display, "claude-sonnet-4");
+    }
+
+    #[test]
+    fn build_model_switch_items_uses_live_models_then_provider_saved_models() {
+        let providers = vec![
+            ProviderEntry {
+                name: "openai".into(),
+                display_name: "OpenAI".into(),
+                auth_type: "api-key".into(),
+                configured: true,
+                default_base_url: None,
+                base_url: None,
+                models: vec!["openai/gpt-4.1".into()],
+                requires_model: false,
+                key_optional: false,
+            },
+            ProviderEntry {
+                name: "anthropic".into(),
+                display_name: "Anthropic".into(),
+                auth_type: "api-key".into(),
+                configured: true,
+                default_base_url: None,
+                base_url: None,
+                models: vec!["anthropic/claude-sonnet-4".into()],
+                requires_model: false,
+                key_optional: false,
+            },
+            ProviderEntry {
+                name: "openrouter".into(),
+                display_name: "OpenRouter".into(),
+                auth_type: "api-key".into(),
+                configured: false,
+                default_base_url: None,
+                base_url: None,
+                models: vec!["openrouter/meta-llama-3.1-8b-instruct".into()],
+                requires_model: false,
+                key_optional: false,
+            },
+        ];
+
+        let models = vec![ModelCatalogEntry {
+            provider_name: "openai".into(),
+            model_id: "openai/gpt-5".into(),
+            model_display: "GPT-5".into(),
+        }];
+
+        let items = build_model_switch_items(&providers, &models);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].provider_name, "openai");
+        assert_eq!(items[0].model_id, "openai/gpt-5");
+        assert_eq!(items[1].provider_name, "anthropic");
+        assert_eq!(items[1].model_id, "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn provider_alias_matching_supports_zai() {
+        assert!(provider_names_match("z.ai", "zai"));
+        assert!(provider_names_match("ZAI", "z.ai"));
+    }
+
+    #[test]
+    fn model_switcher_selection_stays_in_filtered_list() {
+        let mut switcher = ModelSwitcherState {
+            query: "claude".into(),
+            selected: 0,
+            items: vec![
+                ModelSwitchItem {
+                    provider_name: "openai".into(),
+                    provider_display: "OpenAI".into(),
+                    model_id: "openai/gpt-5".into(),
+                    model_display: "GPT-5".into(),
+                },
+                ModelSwitchItem {
+                    provider_name: "anthropic".into(),
+                    provider_display: "Anthropic".into(),
+                    model_id: "anthropic/claude-sonnet-4".into(),
+                    model_display: "Claude Sonnet 4".into(),
+                },
+            ],
+            error_message: None,
+        };
+
+        sync_model_switcher_selection(&mut switcher);
+        assert_eq!(switcher.selected, 1);
+
+        move_model_switcher_selection(&mut switcher, true);
+        assert_eq!(switcher.selected, 1);
     }
 }
