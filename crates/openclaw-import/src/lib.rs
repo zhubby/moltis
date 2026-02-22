@@ -1,0 +1,482 @@
+//! Import data from an existing OpenClaw installation into Moltis.
+//!
+//! Provides detection, scanning, and selective import of:
+//! - User/agent identity
+//! - LLM provider keys and model preferences
+//! - Skills (SKILL.md format)
+//! - Memory (MEMORY.md and daily logs)
+//! - Telegram channel configuration
+//! - Chat sessions (JSONL format)
+//! - MCP server configuration
+
+pub mod channels;
+pub mod detect;
+pub mod identity;
+pub mod mcp_servers;
+pub mod memory;
+pub mod providers;
+pub mod report;
+pub mod sessions;
+pub mod skills;
+pub mod types;
+
+use std::path::Path;
+
+use {
+    report::{CategoryReport, ImportCategory, ImportReport},
+    serde::{Deserialize, Serialize},
+};
+
+pub use detect::{OpenClawDetection, detect};
+
+/// What the user chose to import.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportSelection {
+    pub identity: bool,
+    pub providers: bool,
+    pub skills: bool,
+    pub memory: bool,
+    pub channels: bool,
+    pub sessions: bool,
+    pub mcp_servers: bool,
+}
+
+impl ImportSelection {
+    /// Select all categories.
+    pub fn all() -> Self {
+        Self {
+            identity: true,
+            providers: true,
+            skills: true,
+            memory: true,
+            channels: true,
+            sessions: true,
+            mcp_servers: true,
+        }
+    }
+}
+
+/// Summary of what data is available for import.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportScan {
+    pub identity_available: bool,
+    pub providers_available: bool,
+    pub skills_count: usize,
+    pub memory_available: bool,
+    pub daily_logs_count: usize,
+    pub channels_available: bool,
+    pub telegram_accounts: usize,
+    pub sessions_count: usize,
+    pub mcp_servers_count: usize,
+    pub unsupported_channels: Vec<String>,
+    pub agent_ids: Vec<String>,
+}
+
+/// Scan an OpenClaw installation without importing anything.
+pub fn scan(detection: &OpenClawDetection) -> ImportScan {
+    let skills = skills::discover_skills(detection);
+    let daily_logs_count = count_daily_logs(&detection.workspace_dir);
+
+    let (_, channels_result) = channels::import_channels(detection);
+    let telegram_accounts = channels_result.telegram.len();
+
+    // Check for provider keys
+    let (_, providers_result) = providers::import_providers(detection);
+    let providers_available = !providers_result.providers.is_empty();
+
+    ImportScan {
+        identity_available: detection.has_config,
+        providers_available,
+        skills_count: skills.len(),
+        memory_available: detection.has_memory,
+        daily_logs_count,
+        channels_available: telegram_accounts > 0,
+        telegram_accounts,
+        sessions_count: detection.session_count,
+        mcp_servers_count: count_mcp_servers(&detection.home_dir),
+        unsupported_channels: detection.unsupported_channels.clone(),
+        agent_ids: detection.agent_ids.clone(),
+    }
+}
+
+/// Perform a selective import from OpenClaw into Moltis.
+///
+/// Each category is independent — partial failures don't block others.
+/// Returns a detailed report of what was imported, skipped, and failed.
+pub fn import(
+    detection: &OpenClawDetection,
+    selection: &ImportSelection,
+    config_dir: &Path,
+    data_dir: &Path,
+) -> ImportReport {
+    let mut report = ImportReport::new();
+
+    // Identity
+    if selection.identity {
+        let (cat_report, _imported_identity) = identity::import_identity(detection);
+        report.add_category(cat_report);
+    }
+
+    // Providers
+    if selection.providers {
+        let (cat_report, imported_providers) = providers::import_providers(detection);
+        if !imported_providers.providers.is_empty() {
+            let keys_path = config_dir.join("provider_keys.json");
+            if let Err(e) =
+                providers::write_provider_keys(&imported_providers.providers, &keys_path)
+            {
+                report.add_category(CategoryReport::failed(
+                    ImportCategory::Providers,
+                    format!("failed to write provider keys: {e}"),
+                ));
+            } else {
+                report.add_category(cat_report);
+            }
+        } else {
+            report.add_category(cat_report);
+        }
+    }
+
+    // Skills
+    if selection.skills {
+        let skills_dir = data_dir.join("skills");
+        report.add_category(skills::import_skills(detection, &skills_dir));
+    }
+
+    // Memory
+    if selection.memory {
+        report.add_category(memory::import_memory(detection, data_dir));
+    }
+
+    // Channels
+    if selection.channels {
+        let (cat_report, _imported_channels) = channels::import_channels(detection);
+        report.add_category(cat_report);
+    }
+
+    // Sessions
+    if selection.sessions {
+        let sessions_dir = data_dir.join("sessions");
+        report.add_category(sessions::import_sessions(detection, &sessions_dir));
+    }
+
+    // MCP Servers
+    if selection.mcp_servers {
+        let mcp_path = config_dir.join("mcp-servers.json");
+        report.add_category(mcp_servers::import_mcp_servers(detection, &mcp_path));
+    }
+
+    // Always add TODO items for unsupported features
+    add_todos(&mut report, detection);
+
+    // Save import state
+    let state_path = data_dir.join("openclaw-import-state.json");
+    let _ = save_import_state(&state_path, &report);
+
+    report
+}
+
+/// Persistent import state for idempotency tracking.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImportState {
+    pub last_import_at: Option<u64>,
+    pub categories_imported: Vec<ImportCategory>,
+}
+
+/// Load previously saved import state.
+pub fn load_import_state(data_dir: &Path) -> Option<ImportState> {
+    let path = data_dir.join("openclaw-import-state.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_import_state(path: &Path, report: &ImportReport) -> anyhow::Result<()> {
+    let imported: Vec<ImportCategory> = report
+        .categories
+        .iter()
+        .filter(|c| {
+            c.status == report::ImportStatus::Success || c.status == report::ImportStatus::Partial
+        })
+        .map(|c| c.category)
+        .collect();
+
+    let state = ImportState {
+        last_import_at: Some(now_ms()),
+        categories_imported: imported,
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&state)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+fn add_todos(report: &mut ImportReport, detection: &OpenClawDetection) {
+    if detection.agent_ids.len() > 1 {
+        report.add_todo(
+            "Multi-agent",
+            "OpenClaw supports multiple agents; Moltis currently has a single agent identity.",
+        );
+    }
+
+    report.add_todo(
+        "Sub-agents",
+        "OpenClaw's agent delegation/sub-agent spawning is not yet supported in Moltis.",
+    );
+
+    for channel in &detection.unsupported_channels {
+        report.add_todo(
+            format!("{channel} channel"),
+            format!("The {channel} channel is not yet implemented in Moltis."),
+        );
+    }
+
+    if detection.has_memory {
+        report.add_todo(
+            "Vector embeddings",
+            "OpenClaw's SQLite embedding database is not portable across embedding models. Memory files were imported but re-indexing may be needed.",
+        );
+    }
+
+    report.add_todo(
+        "Tool policies",
+        "OpenClaw's tool policy format differs from Moltis's configuration.",
+    );
+}
+
+fn count_daily_logs(workspace_dir: &Path) -> usize {
+    let daily_dir = workspace_dir.join("memory");
+    if !daily_dir.is_dir() {
+        return 0;
+    }
+    std::fs::read_dir(&daily_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn count_mcp_servers(home_dir: &Path) -> usize {
+    let path = home_dir.join("mcp-servers.json");
+    if !path.is_file() {
+        return 0;
+    }
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content)
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn setup_full_openclaw(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+
+        // Config
+        std::fs::write(
+            dir.join("openclaw.json"),
+            r#"{
+                "agents": {
+                    "defaults": {
+                        "model": {"primary": "anthropic/claude-opus-4-6"},
+                        "userTimezone": "America/New_York"
+                    },
+                    "list": [{"id": "main", "default": true, "name": "Claude"}]
+                },
+                "ui": {"assistant": {"name": "Claude"}},
+                "channels": {
+                    "telegram": {"botToken": "123:ABC", "allowFrom": [111]}
+                }
+            }"#,
+        )
+        .unwrap();
+
+        // Auth profiles
+        let agent_dir = dir.join("agents").join("main").join("agent");
+        std::fs::create_dir_all(agent_dir.join("sessions")).unwrap();
+        std::fs::write(
+            agent_dir.join("auth-profiles.json"),
+            r#"{"version":1,"profiles":{"anth":{"type":"api_key","provider":"anthropic","key":"sk-test"}}}"#,
+        )
+        .unwrap();
+
+        // Session
+        std::fs::write(
+            agent_dir.join("sessions").join("main.jsonl"),
+            r#"{"type":"message","message":{"role":"user","content":"Hello"}}"#,
+        )
+        .unwrap();
+
+        // Workspace
+        let ws = dir.join("workspace");
+        std::fs::create_dir_all(ws.join("memory")).unwrap();
+        std::fs::create_dir_all(ws.join("skills").join("test-skill")).unwrap();
+        std::fs::write(ws.join("MEMORY.md"), "# Memory").unwrap();
+        std::fs::write(ws.join("memory").join("2024-01-15.md"), "log").unwrap();
+        std::fs::write(
+            ws.join("skills").join("test-skill").join("SKILL.md"),
+            "---\nname: test-skill\n---\nDo stuff.",
+        )
+        .unwrap();
+
+        // MCP servers
+        std::fs::write(
+            dir.join("mcp-servers.json"),
+            r#"{"test-mcp":{"command":"test","args":[],"env":{},"enabled":true}}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn scan_returns_available_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let detection = detect::detect_at(home).unwrap();
+        let scan_result = scan(&detection);
+
+        assert!(scan_result.identity_available);
+        assert!(scan_result.providers_available);
+        assert_eq!(scan_result.skills_count, 1);
+        assert!(scan_result.memory_available);
+        assert_eq!(scan_result.daily_logs_count, 1);
+        assert!(scan_result.channels_available);
+        assert_eq!(scan_result.telegram_accounts, 1);
+        assert_eq!(scan_result.sessions_count, 1);
+        assert_eq!(scan_result.mcp_servers_count, 1);
+    }
+
+    #[test]
+    fn full_import_all_categories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+        let report = import(&detection, &ImportSelection::all(), &config_dir, &data_dir);
+
+        // Check that all categories have a report
+        assert!(report.categories.len() >= 6);
+
+        // Check specific imports
+        assert!(config_dir.join("provider_keys.json").is_file());
+        assert!(data_dir.join("MEMORY.md").is_file());
+        assert!(
+            data_dir
+                .join("skills")
+                .join("test-skill")
+                .join("SKILL.md")
+                .is_file()
+        );
+        assert!(config_dir.join("mcp-servers.json").is_file());
+
+        // Check import state saved
+        assert!(data_dir.join("openclaw-import-state.json").is_file());
+
+        // Check TODOs generated
+        assert!(!report.todos.is_empty());
+        assert!(report.todos.iter().any(|t| t.feature == "Sub-agents"));
+    }
+
+    #[test]
+    fn selective_import() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+
+        // Only import memory
+        let selection = ImportSelection {
+            memory: true,
+            ..Default::default()
+        };
+
+        let report = import(&detection, &selection, &config_dir, &data_dir);
+
+        assert_eq!(report.categories.len(), 1);
+        assert_eq!(report.categories[0].category, ImportCategory::Memory);
+
+        // Provider keys should NOT be written
+        assert!(!config_dir.join("provider_keys.json").exists());
+    }
+
+    #[test]
+    fn import_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        setup_full_openclaw(&home);
+
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let detection = detect::detect_at(home).unwrap();
+
+        // First import
+        let report1 = import(&detection, &ImportSelection::all(), &config_dir, &data_dir);
+        let _total1 = report1.total_imported();
+
+        // Second import — should skip most things
+        let report2 = import(&detection, &ImportSelection::all(), &config_dir, &data_dir);
+
+        // Skills and sessions should be skipped on second run
+        let skills_report = report2
+            .categories
+            .iter()
+            .find(|c| c.category == ImportCategory::Skills);
+        if let Some(sr) = skills_report {
+            assert!(sr.items_skipped > 0 || sr.items_imported == 0);
+        }
+    }
+
+    #[test]
+    fn load_import_state_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+
+        // No state file → None
+        assert!(load_import_state(data_dir).is_none());
+
+        // Write state
+        let state = ImportState {
+            last_import_at: Some(12345),
+            categories_imported: vec![ImportCategory::Memory, ImportCategory::Skills],
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        std::fs::write(data_dir.join("openclaw-import-state.json"), json).unwrap();
+
+        let loaded = load_import_state(data_dir).unwrap();
+        assert_eq!(loaded.last_import_at, Some(12345));
+        assert_eq!(loaded.categories_imported.len(), 2);
+    }
+}

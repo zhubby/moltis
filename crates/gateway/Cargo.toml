@@ -38,7 +38,8 @@ moltis-media       = { workspace = true }
 moltis-memory      = { workspace = true }
 moltis-metrics     = { optional = true, workspace = true }
 moltis-oauth       = { workspace = true }
-moltis-onboarding  = { workspace = true }
+moltis-onboarding        = { workspace = true }
+moltis-openclaw-import   = { optional = true, workspace = true }
 moltis-plugins     = { workspace = true }
 moltis-projects    = { workspace = true }
 moltis-protocol    = { workspace = true }
@@ -92,6 +93,7 @@ default = [
   "graphql",
   "local-llm",
   "metrics",
+  "openclaw-import",
   "prometheus",
   "push-notifications",
   "qmd",
@@ -107,6 +109,7 @@ local-llm = ["moltis-agents/local-llm"]
 local-llm-cuda = ["moltis-agents/local-llm-cuda"]
 local-llm-metal = ["moltis-agents/local-llm-metal"]
 metrics = ["dep:moltis-metrics", "moltis-metrics/sqlite"]
+openclaw-import = ["dep:moltis-openclaw-import"]
 prometheus = ["metrics", "moltis-metrics/prometheus"]
 push-notifications = ["dep:chrono", "dep:p256", "dep:web-push"]
 qmd = ["dep:moltis-qmd"]

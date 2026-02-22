@@ -1,0 +1,26 @@
+[package]
+name        = "moltis-openclaw-import"
+description = "Import data from an existing OpenClaw installation into Moltis"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow     = { workspace = true }
+dirs-next  = { workspace = true }
+json5      = { workspace = true }
+secrecy    = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror  = { workspace = true }
+time       = { workspace = true }
+tokio      = { workspace = true }
+tracing    = { workspace = true }
+walkdir    = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -1191,6 +1191,53 @@ fn log_startup_config_storage_diagnostics() {
     }
 }
 
+#[cfg(feature = "openclaw-import")]
+fn log_startup_openclaw_detection() -> String {
+    match moltis_openclaw_import::detect() {
+        Some(detection) => {
+            info!(
+                openclaw_home = %detection.home_dir.display(),
+                openclaw_workspace = %detection.workspace_dir.display(),
+                has_config = detection.has_config,
+                has_credentials = detection.has_credentials,
+                has_memory = detection.has_memory,
+                has_skills = detection.has_skills,
+                has_mcp_servers = detection.has_mcp_servers,
+                sessions = detection.session_count,
+                agents = detection.agent_ids.len(),
+                agent_ids = ?detection.agent_ids,
+                unsupported_channels = ?detection.unsupported_channels,
+                "startup OpenClaw installation detected"
+            );
+            format!("detected ({})", detection.home_dir.display())
+        },
+        None => {
+            info!(
+                openclaw_home_env = %env_var_or_unset("OPENCLAW_HOME"),
+                openclaw_profile_env = %env_var_or_unset("OPENCLAW_PROFILE"),
+                "startup OpenClaw installation not detected (checked OPENCLAW_HOME and ~/.openclaw)"
+            );
+            "not detected".to_string()
+        },
+    }
+}
+
+#[cfg(not(feature = "openclaw-import"))]
+fn log_startup_openclaw_detection() -> String {
+    info!("startup OpenClaw import feature disabled; detection skipped");
+    "feature disabled".to_string()
+}
+
+#[cfg(feature = "openclaw-import")]
+fn openclaw_detected_for_ui() -> bool {
+    moltis_openclaw_import::detect().is_some()
+}
+
+#[cfg(not(feature = "openclaw-import"))]
+fn openclaw_detected_for_ui() -> bool {
+    false
+}
+
 /// Start the gateway HTTP + WebSocket server.
 #[allow(clippy::expect_used)] // Startup fail-fast: DB, migrations, credential store must succeed.
 pub async fn start_gateway(
@@ -1474,6 +1521,8 @@ pub async fn start_gateway(
         )
     });
     log_startup_config_storage_diagnostics();
+
+    let openclaw_startup_status = log_startup_openclaw_detection();
 
     // Enable log persistence so entries survive restarts.
     if let Some(ref buf) = log_buffer {
@@ -3225,6 +3274,7 @@ pub async fn start_gateway(
             moltis_config::find_or_default_config_path().display()
         ),
         format!("data: {}", data_dir.display()),
+        format!("openclaw: {openclaw_startup_status}"),
     ];
     lines.extend(startup_passkey_origin_lines(&passkey_origins));
     // Hint about Apple Container on macOS when using Docker.
@@ -4802,6 +4852,8 @@ struct GonData {
     routes: SpaRoutes,
     /// Unix epoch (milliseconds) when the server process started.
     started_at: u64,
+    /// Whether an OpenClaw installation was detected (for import UI).
+    openclaw_detected: bool,
 }
 
 /// Sandbox runtime snapshot included in gon data so the settings page
@@ -4964,6 +5016,7 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         sandbox,
         routes: SPA_ROUTES.clone(),
         started_at: *PROCESS_STARTED_AT_MS,
+        openclaw_detected: openclaw_detected_for_ui(),
     }
 }
 
