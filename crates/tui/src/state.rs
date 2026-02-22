@@ -230,6 +230,13 @@ impl ModelSwitcherState {
     }
 }
 
+/// Slash command suggestion item shown above the input box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlashMenuItem {
+    pub name: String,
+    pub description: String,
+}
+
 /// Full application state.
 pub struct AppState {
     pub input_mode: InputMode,
@@ -248,9 +255,12 @@ pub struct AppState {
     pub session_scroll_offset: usize,
     pub model: Option<String>,
     pub provider: Option<String>,
+    pub shell_mode_enabled: bool,
     pub token_usage: TokenUsage,
     pub pending_approval: Option<ApprovalRequest>,
     pub command_buffer: String,
+    pub slash_menu_items: Vec<SlashMenuItem>,
+    pub slash_menu_selected: usize,
     pub dirty: bool,
     pub server_version: Option<String>,
     pub settings: SettingsState,
@@ -277,9 +287,12 @@ impl Default for AppState {
             session_scroll_offset: 0,
             model: None,
             provider: None,
+            shell_mode_enabled: false,
             token_usage: TokenUsage::default(),
             pending_approval: None,
             command_buffer: String::new(),
+            slash_menu_items: Vec::new(),
+            slash_menu_selected: 0,
             dirty: true,
             server_version: None,
             settings: SettingsState::default(),
@@ -368,6 +381,8 @@ mod tests {
         assert_eq!(state.input_mode, InputMode::Insert);
         assert_eq!(state.active_panel, Panel::Chat);
         assert!(state.messages.is_empty());
+        assert!(!state.shell_mode_enabled);
+        assert!(state.slash_menu_items.is_empty());
         assert!(!state.is_streaming());
     }
 

@@ -1801,21 +1801,8 @@ impl App {
             );
         }
 
-        if let Ok(context) = context_res
-            && let Some(session) = context.get("session")
-        {
-            data.active_session = session
-                .get("key")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned);
-            data.model = session
-                .get("model")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned);
-            data.provider = session
-                .get("provider")
-                .and_then(|value| value.as_str())
-                .map(ToOwned::to_owned);
+        if let Ok(context) = context_res {
+            super::parse_context_initial_data(&mut data, &context);
         }
 
         self.apply_initial_data(data);

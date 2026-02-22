@@ -82,6 +82,11 @@ pub fn draw(
     // Session
     parts.push(Span::raw(format!(" | {} ", state.active_session)));
 
+    // Shell mode
+    if state.shell_mode_enabled {
+        parts.push(Span::styled(" | /sh mode ", theme.mode_command));
+    }
+
     // Token usage with format_count
     let total = state.token_usage.session_input + state.token_usage.session_output;
     if total > 0 || state.token_usage.context_window > 0 {

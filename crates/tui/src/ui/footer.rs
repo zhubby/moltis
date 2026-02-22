@@ -16,11 +16,20 @@ fn footer_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
         return vec![("y", "Approve"), ("n", "Deny"), ("Esc", "Normal")];
     }
 
+    if matches!(state.input_mode, InputMode::Insert) && !state.slash_menu_items.is_empty() {
+        return vec![
+            ("Up/Down", "Select"),
+            ("Enter/Tab", "Run"),
+            ("Esc", "Close"),
+        ];
+    }
+
     match state.input_mode {
         InputMode::Insert => {
             return vec![
                 ("Enter", "Send"),
                 ("S+Enter", "Newline"),
+                ("/help", "Commands"),
                 ("Esc", "Navigate"),
             ];
         },

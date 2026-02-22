@@ -45,16 +45,22 @@ pub fn draw(
 
     // 5-row layout: Header | Main content | Input | Footer | Status bar
     let show_input = matches!(state.active_tab, MainTab::Chat);
-    let vertical = Layout::vertical([
-        Constraint::Length(1), // header
-        Constraint::Min(5),    // main content
-        Constraint::Length(if show_input {
-            3
+    let slash_menu_lines = state.slash_menu_items.len().min(4) as u16;
+    let input_height = if show_input {
+        if slash_menu_lines > 0 {
+            3 + slash_menu_lines + 2
         } else {
-            0
-        }), // input area (Chat only)
-        Constraint::Length(1), // footer help
-        Constraint::Length(1), // status bar
+            3
+        }
+    } else {
+        0
+    };
+    let vertical = Layout::vertical([
+        Constraint::Length(1),            // header
+        Constraint::Min(5),               // main content
+        Constraint::Length(input_height), // input area (Chat only)
+        Constraint::Length(1),            // footer help
+        Constraint::Length(1),            // status bar
     ])
     .split(area);
 
@@ -159,7 +165,7 @@ mod tests {
                 EditTarget, ModelOption, OnboardingState, ProviderConfigurePhase,
                 ProviderConfigureState, ProviderEntry, VoiceProviderEntry,
             },
-            state::{InputMode, ModelSwitchItem, ModelSwitcherState, SessionEntry},
+            state::{InputMode, ModelSwitchItem, ModelSwitcherState, SessionEntry, SlashMenuItem},
         },
         ratatui::{Terminal, backend::TestBackend},
         status_bar::ConnectionDisplay,
@@ -255,6 +261,29 @@ mod tests {
         assert!(text.contains("Enter to send"));
         assert!(text.contains(" INSERT "));
         assert!(text.contains("Connecting..."));
+    }
+
+    #[test]
+    fn slash_menu_renders_command_suggestions() {
+        let state = AppState {
+            slash_menu_items: vec![
+                SlashMenuItem {
+                    name: "context".into(),
+                    description: "Show session context and project info".into(),
+                },
+                SlashMenuItem {
+                    name: "compact".into(),
+                    description: "Summarize conversation to save tokens".into(),
+                },
+            ],
+            slash_menu_selected: 0,
+            ..AppState::default()
+        };
+        let text = render_to_text(&state, None, None, false, &ConnectionDisplay::Connected);
+
+        assert!(text.contains("Slash Commands"));
+        assert!(text.contains("/context"));
+        assert!(text.contains("/compact"));
     }
 
     #[test]
