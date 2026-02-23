@@ -929,6 +929,53 @@ fn log_directory_write_probe(dir: &FsPath) {
     }
 }
 
+#[cfg(feature = "openclaw-import")]
+fn log_startup_openclaw_detection() -> String {
+    match moltis_openclaw_import::detect() {
+        Some(detection) => {
+            info!(
+                openclaw_home = %detection.home_dir.display(),
+                openclaw_workspace = %detection.workspace_dir.display(),
+                has_config = detection.has_config,
+                has_credentials = detection.has_credentials,
+                has_memory = detection.has_memory,
+                has_skills = detection.has_skills,
+                has_mcp_servers = detection.has_mcp_servers,
+                sessions = detection.session_count,
+                agents = detection.agent_ids.len(),
+                agent_ids = ?detection.agent_ids,
+                unsupported_channels = ?detection.unsupported_channels,
+                "startup OpenClaw installation detected"
+            );
+            format!("detected ({})", detection.home_dir.display())
+        },
+        None => {
+            info!(
+                openclaw_home_env = %env_var_or_unset("OPENCLAW_HOME"),
+                openclaw_profile_env = %env_var_or_unset("OPENCLAW_PROFILE"),
+                "startup OpenClaw installation not detected (checked OPENCLAW_HOME and ~/.openclaw)"
+            );
+            "not detected".to_string()
+        },
+    }
+}
+
+#[cfg(not(feature = "openclaw-import"))]
+fn log_startup_openclaw_detection() -> String {
+    info!("startup OpenClaw import feature disabled; detection skipped");
+    "feature disabled".to_string()
+}
+
+#[cfg(feature = "openclaw-import")]
+pub fn openclaw_detected_for_ui() -> bool {
+    moltis_openclaw_import::detect().is_some()
+}
+
+#[cfg(not(feature = "openclaw-import"))]
+pub fn openclaw_detected_for_ui() -> bool {
+    false
+}
+
 fn log_startup_config_storage_diagnostics() {
     let config_dir = moltis_config::config_dir().unwrap_or_else(|| PathBuf::from(".moltis"));
     let discovered_config = moltis_config::loader::find_config_file();
@@ -1301,6 +1348,8 @@ pub async fn start_gateway(
         )
     });
     log_startup_config_storage_diagnostics();
+
+    let openclaw_startup_status = log_startup_openclaw_detection();
 
     // Enable log persistence so entries survive restarts.
     if let Some(ref buf) = log_buffer {
@@ -3061,6 +3110,7 @@ pub async fn start_gateway(
             moltis_config::find_or_default_config_path().display()
         ),
         format!("data: {}", data_dir.display()),
+        format!("openclaw: {openclaw_startup_status}"),
     ];
     lines.extend(startup_passkey_origin_lines(&passkey_origins));
     // Hint about Apple Container on macOS when using Docker.

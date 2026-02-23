@@ -33,34 +33,35 @@ name = "moltis"
 path = "src/main.rs"
 
 [dependencies]
-anyhow             = { workspace = true }
-clap               = { workspace = true }
-dotenvy            = { workspace = true }
-moltis-agents      = { workspace = true }
-moltis-browser     = { workspace = true }
-moltis-common      = { workspace = true }
-moltis-config      = { workspace = true }
-moltis-cron        = { workspace = true }
-moltis-gateway     = { workspace = true }
-moltis-memory      = { workspace = true }
-moltis-oauth       = { workspace = true }
-moltis-onboarding  = { workspace = true }
-moltis-plugins     = { workspace = true }
-moltis-projects    = { workspace = true }
-moltis-sessions    = { workspace = true }
-moltis-skills      = { workspace = true }
-moltis-tools       = { workspace = true }
-moltis-web         = { optional = true, workspace = true }
-open               = { workspace = true }
-reqwest            = { workspace = true }
-secrecy            = { workspace = true }
-serde_json         = { workspace = true }
-sqlx               = { workspace = true }
-time               = { workspace = true }
-tokio              = { workspace = true }
-tracing            = { workspace = true }
-tracing-subscriber = { workspace = true }
-which              = { workspace = true }
+anyhow                 = { workspace = true }
+clap                   = { workspace = true }
+dotenvy                = { workspace = true }
+moltis-agents          = { workspace = true }
+moltis-browser         = { workspace = true }
+moltis-common          = { workspace = true }
+moltis-config          = { workspace = true }
+moltis-cron            = { workspace = true }
+moltis-gateway         = { workspace = true }
+moltis-memory          = { workspace = true }
+moltis-oauth           = { workspace = true }
+moltis-onboarding      = { workspace = true }
+moltis-openclaw-import = { optional = true, workspace = true }
+moltis-plugins         = { workspace = true }
+moltis-projects        = { workspace = true }
+moltis-sessions        = { workspace = true }
+moltis-skills          = { workspace = true }
+moltis-tools           = { workspace = true }
+moltis-web             = { optional = true, workspace = true }
+open                   = { workspace = true }
+reqwest                = { workspace = true }
+secrecy                = { workspace = true }
+serde_json             = { workspace = true }
+sqlx                   = { workspace = true }
+time                   = { workspace = true }
+tokio                  = { workspace = true }
+tracing                = { workspace = true }
+tracing-subscriber     = { workspace = true }
+which                  = { workspace = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 tikv-jemallocator = { optional = true, workspace = true }
@@ -75,6 +76,7 @@ default = [
   "jemalloc",
   "local-llm",
   "metrics",
+  "openclaw-import",
   "prometheus",
   "push-notifications",
   "qmd",
@@ -91,6 +93,7 @@ jemalloc           = ["dep:tikv-jemallocator"]
 lightweight        = ["jemalloc", "tls", "web-ui"]
 local-llm          = ["moltis-gateway/local-llm"]
 metrics            = ["moltis-gateway/metrics"]
+openclaw-import    = ["dep:moltis-openclaw-import", "moltis-gateway/openclaw-import"]
 prometheus         = ["moltis-gateway/prometheus"]
 push-notifications = ["moltis-gateway/push-notifications"]
 qmd                = ["moltis-gateway/qmd"]

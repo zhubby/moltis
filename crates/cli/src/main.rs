@@ -8,6 +8,8 @@ mod config_commands;
 mod db_commands;
 mod doctor_commands;
 mod hooks_commands;
+#[cfg(feature = "openclaw-import")]
+mod import_commands;
 mod memory_commands;
 mod sandbox_commands;
 #[cfg(feature = "tailscale")]
@@ -135,6 +137,12 @@ enum Commands {
     Memory {
         #[command(subcommand)]
         action: memory_commands::MemoryAction,
+    },
+    #[cfg(feature = "openclaw-import")]
+    /// Import data from an OpenClaw installation.
+    Import {
+        #[command(subcommand)]
+        action: import_commands::ImportAction,
     },
     /// Tailscale Serve/Funnel management.
     #[cfg(feature = "tailscale")]
@@ -402,6 +410,8 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Browser { action }) => browser_commands::handle_browser(action),
         Some(Commands::Db { action }) => db_commands::handle_db(action).await,
         Some(Commands::Memory { action }) => memory_commands::handle_memory(action).await,
+        #[cfg(feature = "openclaw-import")]
+        Some(Commands::Import { action }) => import_commands::handle_import(action).await,
         #[cfg(feature = "tailscale")]
         Some(Commands::Tailscale { action }) => tailscale_commands::handle_tailscale(action).await,
         Some(Commands::Skills { action }) => handle_skills(action).await,
