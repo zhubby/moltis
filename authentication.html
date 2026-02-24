@@ -451,8 +451,16 @@ header snippet and passkey migration guidance.</p>
 <tr><td>Register passkey</td><td><code>POST /api/auth/passkey/register/*</code></td><td>Session</td></tr>
 <tr><td>Remove passkey</td><td><code>DELETE /api/auth/passkeys/{id}</code></td><td>Session</td></tr>
 <tr><td>Remove all auth</td><td><code>POST /api/auth/reset</code></td><td>Session</td></tr>
+<tr><td>Vault status</td><td><code>GET /api/auth/vault/status</code></td><td>No</td></tr>
+<tr><td>Vault unlock</td><td><code>POST /api/auth/vault/unlock</code></td><td>No</td></tr>
+<tr><td>Vault recovery</td><td><code>POST /api/auth/vault/recovery</code></td><td>No</td></tr>
 </tbody></table>
 </div>
+<h2 id="encryption-at-rest"><a class="header" href="#encryption-at-rest">Encryption at Rest</a></h2>
+<p>Environment variables and other sensitive data are encrypted at rest using
+the vault. The vault initializes automatically during password setup and
+unseals on login. See <a href="vault.html">Encryption at Rest (Vault)</a> for details.</p>
+
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
@@ -461,7 +469,7 @@ header snippet and passkey migration guidance.</p>
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="security.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="vault.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -475,7 +483,7 @@ header snippet and passkey migration guidance.</p>
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="security.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="vault.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>

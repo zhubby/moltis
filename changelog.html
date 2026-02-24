@@ -190,6 +190,8 @@ and this project adheres to <a href="https://semver.org/spec/v2.0.0.html">Semant
 <h2 id="unreleased"><a class="header" href="#unreleased">[Unreleased]</a></h2>
 <h3 id="added"><a class="header" href="#added">Added</a></h3>
 <ul>
+<li><strong>Vault UI</strong>: recovery key display during onboarding password setup, vault status/unlock controls in Settings &gt; Security, encrypted/plaintext badges on environment variables</li>
+<li><strong>Encryption-at-rest vault</strong> (<code>vault</code> feature, default on) — environment variables are encrypted with XChaCha20-Poly1305 AEAD using Argon2id-derived keys. Vault is initialized on first password setup and auto-unsealed on login. Recovery key provided at initialization for emergency access. API: <code>/api/auth/vault/status</code>, <code>/api/auth/vault/unlock</code>, <code>/api/auth/vault/recovery</code></li>
 <li><code>send_image</code> tool for sending local image files (PNG, JPEG, GIF, WebP) to channel targets like Telegram, with optional caption support</li>
 <li>GraphQL API at <code>/graphql</code> (GET serves GraphiQL playground and WebSocket subscriptions, POST handles queries/mutations) exposing all RPC methods as typed operations</li>
 <li>New <code>moltis-graphql</code> crate with queries, mutations, subscriptions, custom <code>Json</code> scalar, and <code>ServiceCaller</code> trait abstraction</li>
@@ -231,6 +233,7 @@ centered spinner.</li>
 <li>GraphQL WebSocket upgrade detection now accepts clients that provide <code>Upgrade</code>/<code>Sec-WebSocket-Key</code> without <code>Connection: upgrade</code></li>
 <li>GraphQL channel and memory status bridges now return schema-compatible shapes for <code>channels.status</code>, <code>channels.list</code>, and <code>memory.status</code></li>
 <li>Provider errors with <code>insufficient_quota</code> now surface as explicit quota/billing failures (with the upstream message) instead of generic retrying/rate-limit behavior</li>
+<li>Linux <code>aarch64</code> builds now skip <code>jemalloc</code> to prevent startup aborts on 16 KiB page-size kernels (for example Raspberry Pi 5 Debian images)</li>
 <li>Gateway startup now blocks the common reverse-proxy TLS mismatch (<code>MOLTIS_BEHIND_PROXY=true</code> with Moltis TLS enabled) and explains using <code>--no-tls</code>; HTTPS-upstream proxy setups can explicitly opt in with <code>MOLTIS_ALLOW_TLS_BEHIND_PROXY=true</code></li>
 <li>WebSocket same-origin checks now accept proxy deployments that rewrite <code>Host</code> by using <code>X-Forwarded-Host</code> in proxy mode, and treat implicit <code>:443</code>/<code>:80</code> as equivalent to default ports</li>
 </ul>

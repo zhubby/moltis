@@ -365,6 +365,18 @@ read status and logs, don’t grant <code>operator.write</code>.</p>
 <h4 id="backward-compatibility"><a class="header" href="#backward-compatibility">Backward Compatibility</a></h4>
 <p>Existing API keys created without scopes will be <strong>denied access</strong> until
 scopes are added. Re-create keys with explicit scopes to restore access.</p>
+<h2 id="encryption-at-rest"><a class="header" href="#encryption-at-rest">Encryption at Rest</a></h2>
+<p>Sensitive data in the SQLite database (environment variables containing
+API keys, tokens, etc.) is encrypted at rest using XChaCha20-Poly1305.
+The encryption key is derived from the user’s password via Argon2id.</p>
+<p>The vault initializes when a first password is set (during setup or later
+in Settings &gt; Authentication), unseals automatically on login, and
+re-seals on server restart. A recovery key is provided at initialization
+for emergency access.</p>
+<p>When the vault is sealed, a middleware layer blocks API requests with
+<code>423 Locked</code> to prevent serving stale data.</p>
+<p>For full details on the key hierarchy, vault states, API endpoints, and
+cryptographic parameters, see <a href="vault.html">Encryption at Rest (Vault)</a>.</p>
 <h2 id="network-security"><a class="header" href="#network-security">Network Security</a></h2>
 <h3 id="tls-encryption"><a class="header" href="#tls-encryption">TLS Encryption</a></h3>
 <p>HTTPS is enabled by default with auto-generated certificates:</p>
@@ -579,7 +591,7 @@ public issues for security bugs.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="authentication.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="vault.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
@@ -593,7 +605,7 @@ public issues for security bugs.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="authentication.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="vault.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <i class="fa fa-angle-left"></i>
                     </a>
 
