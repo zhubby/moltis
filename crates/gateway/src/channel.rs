@@ -11,6 +11,7 @@ use {
     moltis_channels::{
         ChannelPlugin, ChannelType,
         message_log::MessageLog,
+        plugin::ChannelHealthSnapshot,
         store::{ChannelStore, StoredChannel},
     },
     moltis_msteams::MsTeamsPlugin,
@@ -99,6 +100,126 @@ impl LiveChannelService {
             },
         }
     }
+
+    /// Build a status entry for a single channel account.
+    async fn channel_status_entry(
+        &self,
+        channel_type: ChannelType,
+        display_name: &str,
+        account_id: &str,
+        snap: ChannelHealthSnapshot,
+        config: Option<Value>,
+    ) -> Value {
+        let mut entry = serde_json::json!({
+            "type": channel_type.as_str(),
+            "name": format!("{display_name} ({account_id})"),
+            "account_id": account_id,
+            "status": if snap.connected { "connected" } else { "disconnected" },
+            "details": snap.details,
+        });
+        if let Some(cfg) = config {
+            entry["config"] = cfg;
+        }
+
+        let ct = channel_type.as_str();
+        let bound = self.session_metadata.list_account_sessions(ct, account_id).await;
+        let active_map = self.session_metadata.list_active_sessions(ct, account_id).await;
+        let sessions: Vec<_> = bound
+            .iter()
+            .map(|s| {
+                let is_active = active_map.iter().any(|(_, sk)| sk == &s.key);
+                serde_json::json!({
+                    "key": s.key,
+                    "label": s.label,
+                    "messageCount": s.message_count,
+                    "active": is_active,
+                })
+            })
+            .collect();
+        if !sessions.is_empty() {
+            entry["sessions"] = serde_json::json!(sessions);
+        }
+        entry
+    }
+
+    /// Start an account on the appropriate plugin.
+    async fn start_plugin_account(
+        &self,
+        channel_type: ChannelType,
+        account_id: &str,
+        config: Value,
+    ) -> Result<(), String> {
+        match channel_type {
+            ChannelType::Telegram => {
+                let mut tg = self.telegram.write().await;
+                tg.start_account(account_id, config).await
+            },
+            ChannelType::MsTeams => {
+                let mut ms = self.msteams.write().await;
+                ms.start_account(account_id, config).await
+            },
+        }
+        .map_err(|e| {
+            error!(error = %e, account_id, channel_type = channel_type.as_str(), "failed to start account");
+            e.to_string()
+        })
+    }
+
+    /// Stop an account on the appropriate plugin.
+    async fn stop_plugin_account(
+        &self,
+        channel_type: ChannelType,
+        account_id: &str,
+    ) -> Result<(), String> {
+        match channel_type {
+            ChannelType::Telegram => {
+                let mut tg = self.telegram.write().await;
+                tg.stop_account(account_id).await
+            },
+            ChannelType::MsTeams => {
+                let mut ms = self.msteams.write().await;
+                ms.stop_account(account_id).await
+            },
+        }
+        .map_err(|e| {
+            error!(error = %e, account_id, channel_type = channel_type.as_str(), "failed to stop account");
+            e.to_string()
+        })
+    }
+
+    /// Hot-update account config on the live plugin.
+    async fn hot_update_config(&self, channel_type: ChannelType, account_id: &str, config: Value) {
+        let result = match channel_type {
+            ChannelType::Telegram => {
+                let tg = self.telegram.read().await;
+                tg.update_account_config(account_id, config)
+            },
+            ChannelType::MsTeams => {
+                let ms = self.msteams.read().await;
+                ms.update_account_config(account_id, config)
+            },
+        };
+        if let Err(e) = result {
+            warn!(error = %e, account_id, channel_type = channel_type.as_str(), "failed to hot-update config");
+        }
+    }
+
+    /// Read the allowlist from a live plugin account config.
+    async fn read_allowlist(&self, channel_type: ChannelType, account_id: &str) -> Vec<String> {
+        let cfg = match channel_type {
+            ChannelType::Telegram => {
+                let tg = self.telegram.read().await;
+                tg.account_config(account_id)
+            },
+            ChannelType::MsTeams => {
+                let ms = self.msteams.read().await;
+                ms.account_config(account_id)
+            },
+        };
+        cfg.and_then(|c| c.get("allowlist").cloned())
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default()
+    }
 }
 
 #[async_trait]
@@ -113,40 +234,15 @@ impl ChannelService for LiveChannelService {
                 for aid in &account_ids {
                     match status.probe(aid).await {
                         Ok(snap) => {
-                            let mut entry = serde_json::json!({
-                                "type": "telegram",
-                                "name": format!("Telegram ({aid})"),
-                                "account_id": aid,
-                                "status": if snap.connected { "connected" } else { "disconnected" },
-                                "details": snap.details,
-                            });
-                            if let Some(cfg) = tg.account_config(aid) {
-                                entry["config"] = cfg;
-                            }
-
-                            let bound = self
-                                .session_metadata
-                                .list_account_sessions(ChannelType::Telegram.as_str(), aid)
+                            let entry = self
+                                .channel_status_entry(
+                                    ChannelType::Telegram,
+                                    "Telegram",
+                                    aid,
+                                    snap,
+                                    tg.account_config(aid),
+                                )
                                 .await;
-                            let active_map = self
-                                .session_metadata
-                                .list_active_sessions(ChannelType::Telegram.as_str(), aid)
-                                .await;
-                            let sessions: Vec<_> = bound
-                                .iter()
-                                .map(|s| {
-                                    let is_active = active_map.iter().any(|(_, sk)| sk == &s.key);
-                                    serde_json::json!({
-                                        "key": s.key,
-                                        "label": s.label,
-                                        "messageCount": s.message_count,
-                                        "active": is_active,
-                                    })
-                                })
-                                .collect();
-                            if !sessions.is_empty() {
-                                entry["sessions"] = serde_json::json!(sessions);
-                            }
                             channels.push(entry);
                         },
                         Err(e) => channels.push(serde_json::json!({
@@ -168,40 +264,15 @@ impl ChannelService for LiveChannelService {
                 for aid in &account_ids {
                     match status.probe(aid).await {
                         Ok(snap) => {
-                            let mut entry = serde_json::json!({
-                                "type": "msteams",
-                                "name": format!("Microsoft Teams ({aid})"),
-                                "account_id": aid,
-                                "status": if snap.connected { "connected" } else { "disconnected" },
-                                "details": snap.details,
-                            });
-                            if let Some(cfg) = ms.account_config(aid) {
-                                entry["config"] = cfg;
-                            }
-
-                            let bound = self
-                                .session_metadata
-                                .list_account_sessions(ChannelType::MsTeams.as_str(), aid)
+                            let entry = self
+                                .channel_status_entry(
+                                    ChannelType::MsTeams,
+                                    "Microsoft Teams",
+                                    aid,
+                                    snap,
+                                    ms.account_config(aid),
+                                )
                                 .await;
-                            let active_map = self
-                                .session_metadata
-                                .list_active_sessions(ChannelType::MsTeams.as_str(), aid)
-                                .await;
-                            let sessions: Vec<_> = bound
-                                .iter()
-                                .map(|s| {
-                                    let is_active = active_map.iter().any(|(_, sk)| sk == &s.key);
-                                    serde_json::json!({
-                                        "key": s.key,
-                                        "label": s.label,
-                                        "messageCount": s.message_count,
-                                        "active": is_active,
-                                    })
-                                })
-                                .collect();
-                            if !sessions.is_empty() {
-                                entry["sessions"] = serde_json::json!(sessions);
-                            }
                             channels.push(entry);
                         },
                         Err(e) => channels.push(serde_json::json!({
@@ -232,28 +303,9 @@ impl ChannelService for LiveChannelService {
             .cloned()
             .unwrap_or(Value::Object(Default::default()));
 
-        match channel_type {
-            ChannelType::Telegram => {
-                info!(account_id, "adding telegram channel account");
-                let mut tg = self.telegram.write().await;
-                tg.start_account(account_id, config.clone())
-                    .await
-                    .map_err(|e| {
-                        error!(error = %e, account_id, "failed to start telegram account");
-                        e.to_string()
-                    })?;
-            },
-            ChannelType::MsTeams => {
-                info!(account_id, "adding microsoft teams channel account");
-                let mut ms = self.msteams.write().await;
-                ms.start_account(account_id, config.clone())
-                    .await
-                    .map_err(|e| {
-                        error!(error = %e, account_id, "failed to start teams account");
-                        e.to_string()
-                    })?;
-            },
-        }
+        info!(account_id, channel_type = channel_type.as_str(), "adding channel account");
+        self.start_plugin_account(channel_type, account_id, config.clone())
+            .await?;
 
         let now = unix_now();
         if let Err(e) = self
@@ -285,24 +337,8 @@ impl ChannelService for LiveChannelService {
             .resolve_channel_type(&params, account_id, ChannelType::Telegram)
             .await?;
 
-        match channel_type {
-            ChannelType::Telegram => {
-                info!(account_id, "removing telegram channel account");
-                let mut tg = self.telegram.write().await;
-                tg.stop_account(account_id).await.map_err(|e| {
-                    error!(error = %e, account_id, "failed to stop telegram account");
-                    e.to_string()
-                })?;
-            },
-            ChannelType::MsTeams => {
-                info!(account_id, "removing microsoft teams channel account");
-                let mut ms = self.msteams.write().await;
-                ms.stop_account(account_id).await.map_err(|e| {
-                    error!(error = %e, account_id, "failed to stop teams account");
-                    e.to_string()
-                })?;
-            },
-        }
+        info!(account_id, channel_type = channel_type.as_str(), "removing channel account");
+        self.stop_plugin_account(channel_type, account_id).await?;
 
         if let Err(e) = self.store.delete(channel_type.as_str(), account_id).await {
             warn!(error = %e, account_id, "failed to delete channel from store");
@@ -331,44 +367,10 @@ impl ChannelService for LiveChannelService {
             .cloned()
             .ok_or_else(|| "missing 'config'".to_string())?;
 
-        match channel_type {
-            ChannelType::Telegram => {
-                info!(account_id, "updating telegram channel account");
-                let mut tg = self.telegram.write().await;
-                tg.stop_account(account_id).await.map_err(|e| {
-                    error!(error = %e, account_id, "failed to stop telegram account for update");
-                    e.to_string()
-                })?;
-                tg.start_account(account_id, config.clone())
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            error = %e,
-                            account_id,
-                            "failed to restart telegram account after update"
-                        );
-                        e.to_string()
-                    })?;
-            },
-            ChannelType::MsTeams => {
-                info!(account_id, "updating microsoft teams channel account");
-                let mut ms = self.msteams.write().await;
-                ms.stop_account(account_id).await.map_err(|e| {
-                    error!(error = %e, account_id, "failed to stop teams account for update");
-                    e.to_string()
-                })?;
-                ms.start_account(account_id, config.clone())
-                    .await
-                    .map_err(|e| {
-                        error!(
-                            error = %e,
-                            account_id,
-                            "failed to restart teams account after update"
-                        );
-                        e.to_string()
-                    })?;
-            },
-        }
+        info!(account_id, channel_type = channel_type.as_str(), "updating channel account");
+        self.stop_plugin_account(channel_type, account_id).await?;
+        self.start_plugin_account(channel_type, account_id, config.clone())
+            .await?;
 
         let created_at = self
             .store
@@ -417,22 +419,7 @@ impl ChannelService for LiveChannelService {
             .await
             .map_err(|e| e.to_string())?;
 
-        let allowlist: Vec<String> = match channel_type {
-            ChannelType::Telegram => {
-                let tg = self.telegram.read().await;
-                tg.account_config(account_id)
-                    .and_then(|cfg| cfg.get("allowlist").cloned())
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default()
-            },
-            ChannelType::MsTeams => {
-                let ms = self.msteams.read().await;
-                ms.account_config(account_id)
-                    .and_then(|cfg| cfg.get("allowlist").cloned())
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default()
-            },
-        };
+        let allowlist = self.read_allowlist(channel_type, account_id).await;
 
         let otp_challenges = if channel_type == ChannelType::Telegram {
             let tg = self.telegram.read().await;
@@ -539,20 +526,8 @@ impl ChannelService for LiveChannelService {
             warn!(error = %e, account_id, "failed to persist sender approval");
         }
 
-        match channel_type {
-            ChannelType::Telegram => {
-                let tg = self.telegram.read().await;
-                if let Err(e) = tg.update_account_config(account_id, config) {
-                    warn!(error = %e, account_id, "failed to hot-update telegram config");
-                }
-            },
-            ChannelType::MsTeams => {
-                let ms = self.msteams.read().await;
-                if let Err(e) = ms.update_account_config(account_id, config) {
-                    warn!(error = %e, account_id, "failed to hot-update teams config");
-                }
-            },
-        }
+        self.hot_update_config(channel_type, account_id, config)
+            .await;
 
         info!(
             account_id,
@@ -616,20 +591,8 @@ impl ChannelService for LiveChannelService {
             warn!(error = %e, account_id, "failed to persist sender denial");
         }
 
-        match channel_type {
-            ChannelType::Telegram => {
-                let tg = self.telegram.read().await;
-                if let Err(e) = tg.update_account_config(account_id, config) {
-                    warn!(error = %e, account_id, "failed to hot-update telegram config");
-                }
-            },
-            ChannelType::MsTeams => {
-                let ms = self.msteams.read().await;
-                if let Err(e) = ms.update_account_config(account_id, config) {
-                    warn!(error = %e, account_id, "failed to hot-update teams config");
-                }
-            },
-        }
+        self.hot_update_config(channel_type, account_id, config)
+            .await;
 
         info!(
             account_id,

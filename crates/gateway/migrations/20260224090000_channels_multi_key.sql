@@ -1,6 +1,6 @@
-PRAGMA foreign_keys = OFF;
-
-BEGIN TRANSACTION;
+-- SQLx wraps migrations in a transaction automatically.
+-- PRAGMA foreign_keys cannot be toggled inside a transaction, but the
+-- table-swap pattern below does not need it because no FK references channels.
 
 CREATE TABLE channels_new (
     channel_type TEXT    NOT NULL DEFAULT 'telegram',
@@ -26,7 +26,3 @@ ALTER TABLE channels_new RENAME TO channels;
 DROP INDEX IF EXISTS idx_message_log_account_created;
 CREATE INDEX IF NOT EXISTS idx_message_log_channel_account_created
     ON message_log (channel_type, account_id, created_at DESC);
-
-COMMIT;
-
-PRAGMA foreign_keys = ON;

@@ -8,16 +8,17 @@ use {
     moltis_telegram::TelegramPlugin,
 };
 
-enum OutboundKind {
-    Telegram,
-    MsTeams,
-}
-
+/// Routes outbound messages to the correct channel plugin based on account_id.
+///
+/// Implements both [`ChannelOutbound`] and [`ChannelStreamOutbound`] by resolving
+/// the account_id to a plugin at call time.
 pub struct MultiChannelOutbound {
     telegram_plugin: Arc<RwLock<TelegramPlugin>>,
     msteams_plugin: Arc<RwLock<MsTeamsPlugin>>,
     telegram_outbound: Arc<dyn ChannelOutbound>,
     msteams_outbound: Arc<dyn ChannelOutbound>,
+    telegram_stream: Arc<dyn ChannelStreamOutbound>,
+    msteams_stream: Arc<dyn ChannelStreamOutbound>,
 }
 
 impl MultiChannelOutbound {
@@ -26,26 +27,46 @@ impl MultiChannelOutbound {
         msteams_plugin: Arc<RwLock<MsTeamsPlugin>>,
         telegram_outbound: Arc<dyn ChannelOutbound>,
         msteams_outbound: Arc<dyn ChannelOutbound>,
+        telegram_stream: Arc<dyn ChannelStreamOutbound>,
+        msteams_stream: Arc<dyn ChannelStreamOutbound>,
     ) -> Self {
         Self {
             telegram_plugin,
             msteams_plugin,
             telegram_outbound,
             msteams_outbound,
+            telegram_stream,
+            msteams_stream,
         }
     }
 
-    async fn resolve_kind(&self, account_id: &str) -> Result<OutboundKind> {
+    async fn resolve_outbound(&self, account_id: &str) -> Result<&dyn ChannelOutbound> {
         let (tg_has, ms_has) = {
             let tg = self.telegram_plugin.read().await;
             let ms = self.msteams_plugin.read().await;
             (tg.has_account(account_id), ms.has_account(account_id))
         };
         match (tg_has, ms_has) {
-            (true, false) => Ok(OutboundKind::Telegram),
-            (false, true) => Ok(OutboundKind::MsTeams),
+            (true, false) => Ok(self.telegram_outbound.as_ref()),
+            (false, true) => Ok(self.msteams_outbound.as_ref()),
             (true, true) => Err(anyhow::anyhow!(
-                "account_id '{account_id}' exists in multiple channels; explicit channel routing required"
+                "account_id '{account_id}' exists in multiple channels; explicit routing required"
+            )),
+            (false, false) => Err(anyhow::anyhow!("unknown channel account: {account_id}")),
+        }
+    }
+
+    async fn resolve_stream(&self, account_id: &str) -> Result<&dyn ChannelStreamOutbound> {
+        let (tg_has, ms_has) = {
+            let tg = self.telegram_plugin.read().await;
+            let ms = self.msteams_plugin.read().await;
+            (tg.has_account(account_id), ms.has_account(account_id))
+        };
+        match (tg_has, ms_has) {
+            (true, false) => Ok(self.telegram_stream.as_ref()),
+            (false, true) => Ok(self.msteams_stream.as_ref()),
+            (true, true) => Err(anyhow::anyhow!(
+                "account_id '{account_id}' exists in multiple channels; explicit routing required"
             )),
             (false, false) => Err(anyhow::anyhow!("unknown channel account: {account_id}")),
         }
@@ -61,18 +82,10 @@ impl ChannelOutbound for MultiChannelOutbound {
         text: &str,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_text(account_id, to, text, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_text(account_id, to, text, reply_to)
-                    .await
-            },
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_text(account_id, to, text, reply_to)
+            .await
     }
 
     async fn send_media(
@@ -82,25 +95,17 @@ impl ChannelOutbound for MultiChannelOutbound {
         payload: &moltis_common::types::ReplyPayload,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_media(account_id, to, payload, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_media(account_id, to, payload, reply_to)
-                    .await
-            },
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_media(account_id, to, payload, reply_to)
+            .await
     }
 
     async fn send_typing(&self, account_id: &str, to: &str) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => self.telegram_outbound.send_typing(account_id, to).await,
-            OutboundKind::MsTeams => self.msteams_outbound.send_typing(account_id, to).await,
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_typing(account_id, to)
+            .await
     }
 
     async fn send_text_with_suffix(
@@ -111,18 +116,10 @@ impl ChannelOutbound for MultiChannelOutbound {
         suffix_html: &str,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_text_with_suffix(account_id, to, text, suffix_html, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_text_with_suffix(account_id, to, text, suffix_html, reply_to)
-                    .await
-            },
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_text_with_suffix(account_id, to, text, suffix_html, reply_to)
+            .await
     }
 
     async fn send_html(
@@ -132,18 +129,10 @@ impl ChannelOutbound for MultiChannelOutbound {
         html: &str,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_html(account_id, to, html, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_html(account_id, to, html, reply_to)
-                    .await
-            },
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_html(account_id, to, html, reply_to)
+            .await
     }
 
     async fn send_text_silent(
@@ -153,18 +142,10 @@ impl ChannelOutbound for MultiChannelOutbound {
         text: &str,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_text_silent(account_id, to, text, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_text_silent(account_id, to, text, reply_to)
-                    .await
-            },
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_text_silent(account_id, to, text, reply_to)
+            .await
     }
 
     async fn send_location(
@@ -176,62 +157,15 @@ impl ChannelOutbound for MultiChannelOutbound {
         title: Option<&str>,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_outbound
-                    .send_location(account_id, to, latitude, longitude, title, reply_to)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_outbound
-                    .send_location(account_id, to, latitude, longitude, title, reply_to)
-                    .await
-            },
-        }
-    }
-}
-
-pub struct MultiChannelStreamOutbound {
-    telegram_plugin: Arc<RwLock<TelegramPlugin>>,
-    msteams_plugin: Arc<RwLock<MsTeamsPlugin>>,
-    telegram_stream: Arc<dyn ChannelStreamOutbound>,
-    msteams_stream: Arc<dyn ChannelStreamOutbound>,
-}
-
-impl MultiChannelStreamOutbound {
-    pub fn new(
-        telegram_plugin: Arc<RwLock<TelegramPlugin>>,
-        msteams_plugin: Arc<RwLock<MsTeamsPlugin>>,
-        telegram_stream: Arc<dyn ChannelStreamOutbound>,
-        msteams_stream: Arc<dyn ChannelStreamOutbound>,
-    ) -> Self {
-        Self {
-            telegram_plugin,
-            msteams_plugin,
-            telegram_stream,
-            msteams_stream,
-        }
-    }
-
-    async fn resolve_kind(&self, account_id: &str) -> Result<OutboundKind> {
-        let (tg_has, ms_has) = {
-            let tg = self.telegram_plugin.read().await;
-            let ms = self.msteams_plugin.read().await;
-            (tg.has_account(account_id), ms.has_account(account_id))
-        };
-        match (tg_has, ms_has) {
-            (true, false) => Ok(OutboundKind::Telegram),
-            (false, true) => Ok(OutboundKind::MsTeams),
-            (true, true) => Err(anyhow::anyhow!(
-                "account_id '{account_id}' exists in multiple channels; explicit channel routing required"
-            )),
-            (false, false) => Err(anyhow::anyhow!("unknown channel account: {account_id}")),
-        }
+        self.resolve_outbound(account_id)
+            .await?
+            .send_location(account_id, to, latitude, longitude, title, reply_to)
+            .await
     }
 }
 
 #[async_trait]
-impl ChannelStreamOutbound for MultiChannelStreamOutbound {
+impl ChannelStreamOutbound for MultiChannelOutbound {
     async fn send_stream(
         &self,
         account_id: &str,
@@ -239,24 +173,15 @@ impl ChannelStreamOutbound for MultiChannelStreamOutbound {
         reply_to: Option<&str>,
         stream: StreamReceiver,
     ) -> Result<()> {
-        match self.resolve_kind(account_id).await? {
-            OutboundKind::Telegram => {
-                self.telegram_stream
-                    .send_stream(account_id, to, reply_to, stream)
-                    .await
-            },
-            OutboundKind::MsTeams => {
-                self.msteams_stream
-                    .send_stream(account_id, to, reply_to, stream)
-                    .await
-            },
-        }
+        self.resolve_stream(account_id)
+            .await?
+            .send_stream(account_id, to, reply_to, stream)
+            .await
     }
 
     async fn is_stream_enabled(&self, account_id: &str) -> bool {
-        match self.resolve_kind(account_id).await {
-            Ok(OutboundKind::Telegram) => self.telegram_stream.is_stream_enabled(account_id).await,
-            Ok(OutboundKind::MsTeams) => self.msteams_stream.is_stream_enabled(account_id).await,
+        match self.resolve_stream(account_id).await {
+            Ok(stream) => stream.is_stream_enabled(account_id).await,
             Err(_) => false,
         }
     }

@@ -2156,23 +2156,21 @@ pub async fn start_gateway(
             (ms.shared_outbound(), ms.shared_stream_outbound())
         };
 
-        let multi_outbound: Arc<dyn moltis_channels::ChannelOutbound> =
-            Arc::new(crate::channel_outbound::MultiChannelOutbound::new(
-                Arc::clone(&tg_plugin),
-                Arc::clone(&msteams_plugin),
-                tg_outbound,
-                ms_outbound,
-            ));
-        let multi_stream_outbound: Arc<dyn moltis_channels::ChannelStreamOutbound> =
-            Arc::new(crate::channel_outbound::MultiChannelStreamOutbound::new(
-                Arc::clone(&tg_plugin),
-                Arc::clone(&msteams_plugin),
-                tg_stream_outbound,
-                ms_stream_outbound,
-            ));
+        let multi_router = Arc::new(crate::channel_outbound::MultiChannelOutbound::new(
+            Arc::clone(&tg_plugin),
+            Arc::clone(&msteams_plugin),
+            tg_outbound,
+            ms_outbound,
+            tg_stream_outbound,
+            ms_stream_outbound,
+        ));
 
-        services = services.with_channel_outbound(multi_outbound);
-        services = services.with_channel_stream_outbound(multi_stream_outbound);
+        services = services.with_channel_outbound(
+            Arc::clone(&multi_router) as Arc<dyn moltis_channels::ChannelOutbound>,
+        );
+        services = services.with_channel_stream_outbound(
+            multi_router as Arc<dyn moltis_channels::ChannelStreamOutbound>,
+        );
 
         services.channel = Arc::new(crate::channel::LiveChannelService::new(
             tg_plugin,
