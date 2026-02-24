@@ -285,6 +285,11 @@ pub fn memory_path() -> PathBuf {
     data_dir().join("MEMORY.md")
 }
 
+/// Return the workspace directory for a named agent: `data_dir()/agents/<id>`.
+pub fn agent_workspace_dir(agent_id: &str) -> PathBuf {
+    data_dir().join("agents").join(agent_id)
+}
+
 /// Load identity values from `IDENTITY.md` frontmatter if present.
 pub fn load_identity() -> Option<AgentIdentity> {
     let path = identity_path();
@@ -300,6 +305,21 @@ pub fn load_identity() -> Option<AgentIdentity> {
     } else {
         Some(identity)
     }
+}
+
+/// Load identity values for a specific agent workspace.
+///
+/// For `"main"`, this checks `data_dir()/agents/main/IDENTITY.md` first and
+/// falls back to the root `IDENTITY.md`.
+pub fn load_identity_for_agent(agent_id: &str) -> Option<AgentIdentity> {
+    if agent_id == "main" {
+        let main_path = agent_workspace_dir("main").join("IDENTITY.md");
+        if let Some(identity) = load_identity_from_path(&main_path) {
+            return Some(identity);
+        }
+        return load_identity();
+    }
+    load_identity_from_path(&agent_workspace_dir(agent_id).join("IDENTITY.md"))
 }
 
 /// Load user values from `USER.md` frontmatter if present.
@@ -392,6 +412,21 @@ pub fn load_soul() -> Option<String> {
     }
 }
 
+/// Load SOUL.md for a specific agent workspace.
+///
+/// For `"main"`, this checks `data_dir()/agents/main/SOUL.md` first and
+/// falls back to the root `SOUL.md`.
+pub fn load_soul_for_agent(agent_id: &str) -> Option<String> {
+    if agent_id == "main" {
+        let main_path = agent_workspace_dir("main").join("SOUL.md");
+        if let Some(soul) = load_workspace_markdown(main_path) {
+            return Some(soul);
+        }
+        return load_soul();
+    }
+    load_workspace_markdown(agent_workspace_dir(agent_id).join("SOUL.md"))
+}
+
 /// Write `DEFAULT_SOUL` to `SOUL.md` when the file doesn't already exist.
 fn write_default_soul() -> anyhow::Result<()> {
     let path = soul_path();
@@ -411,9 +446,21 @@ pub fn load_agents_md() -> Option<String> {
     load_workspace_markdown(agents_path())
 }
 
+/// Load AGENTS.md for a specific agent, falling back to the root file.
+pub fn load_agents_md_for_agent(agent_id: &str) -> Option<String> {
+    let agent_path = agent_workspace_dir(agent_id).join("AGENTS.md");
+    load_workspace_markdown(agent_path).or_else(load_agents_md)
+}
+
 /// Load TOOLS.md from the workspace root (`data_dir`) if present and non-empty.
 pub fn load_tools_md() -> Option<String> {
     load_workspace_markdown(tools_path())
+}
+
+/// Load TOOLS.md for a specific agent, falling back to the root file.
+pub fn load_tools_md_for_agent(agent_id: &str) -> Option<String> {
+    let agent_path = agent_workspace_dir(agent_id).join("TOOLS.md");
+    load_workspace_markdown(agent_path).or_else(load_tools_md)
 }
 
 /// Load HEARTBEAT.md from the workspace root (`data_dir`) if present and non-empty.
@@ -424,6 +471,21 @@ pub fn load_heartbeat_md() -> Option<String> {
 /// Load MEMORY.md from the workspace root (`data_dir`) if present and non-empty.
 pub fn load_memory_md() -> Option<String> {
     load_workspace_markdown(memory_path())
+}
+
+/// Load MEMORY.md for a specific agent workspace.
+///
+/// For `"main"`, this checks `data_dir()/agents/main/MEMORY.md` first and
+/// falls back to the root `MEMORY.md`.
+pub fn load_memory_md_for_agent(agent_id: &str) -> Option<String> {
+    if agent_id == "main" {
+        let main_path = agent_workspace_dir("main").join("MEMORY.md");
+        if let Some(memory) = load_workspace_markdown(main_path) {
+            return Some(memory);
+        }
+        return load_memory_md();
+    }
+    load_workspace_markdown(agent_workspace_dir(agent_id).join("MEMORY.md"))
 }
 
 /// Persist SOUL.md in the workspace root (`data_dir`).
@@ -490,18 +552,12 @@ pub fn save_identity(identity: &AgentIdentity) -> anyhow::Result<PathBuf> {
     Ok(path)
 }
 
-/// Return the workspace data directory for a named agent.
-/// Non-main agents live under `data_dir()/agents/<id>/`.
-pub fn agent_data_dir(agent_id: &str) -> PathBuf {
-    data_dir().join("agents").join(agent_id)
-}
-
 /// Persist identity values for a non-main agent into its workspace.
 pub fn save_identity_for_agent(
     agent_id: &str,
     identity: &AgentIdentity,
 ) -> anyhow::Result<PathBuf> {
-    let dir = agent_data_dir(agent_id);
+    let dir = agent_workspace_dir(agent_id);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("IDENTITY.md");
 
@@ -694,6 +750,21 @@ fn load_workspace_markdown(path: PathBuf) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+fn load_identity_from_path(path: &Path) -> Option<AgentIdentity> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let frontmatter = extract_yaml_frontmatter(&content)?;
+    let identity = parse_identity_frontmatter(frontmatter);
+    if identity.name.is_none()
+        && identity.emoji.is_none()
+        && identity.creature.is_none()
+        && identity.vibe.is_none()
+    {
+        None
+    } else {
+        Some(identity)
     }
 }
 

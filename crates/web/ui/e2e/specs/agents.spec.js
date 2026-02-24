@@ -112,6 +112,50 @@ test.describe("Agents settings page", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
+	test("session header agent selector switches session agent and shows sidebar indicator", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await navigateAndWait(page, "/settings/agents");
+		await waitForWsConnected(page);
+
+		await page.getByRole("button", { name: "New Agent", exact: true }).click();
+		await expect(page.getByText("Create Agent", { exact: true })).toBeVisible();
+		await page.getByPlaceholder("e.g. writer, coder, researcher").fill("selector-test");
+		await page.getByPlaceholder("Creative Writer").fill("Selector Test Agent");
+		await page.getByRole("button", { name: "Create", exact: true }).click();
+		await expect(page.locator(".backend-card").filter({ hasText: "Selector Test Agent" })).toBeVisible({
+			timeout: 10_000,
+		});
+
+		await page.goto("/chats");
+		await expectPageContentMounted(page);
+		await waitForWsConnected(page);
+		await createSession(page);
+
+		const agentSelect = page.locator('select[title="Session agent"]');
+		await expect(agentSelect).toBeVisible();
+		await agentSelect.selectOption("selector-test");
+		await expect(agentSelect).toHaveValue("selector-test");
+		await expect
+			.poll(async () => {
+				return (
+					(await page
+						.locator("#sessionList .session-item.active")
+						.first()
+						.textContent()
+						.catch(() => "")) || ""
+				);
+			})
+			.toContain("@selector-test");
+
+		await navigateAndWait(page, "/settings/agents");
+		const testCard = page.locator(".backend-card").filter({ hasText: "Selector Test Agent" });
+		await testCard.getByRole("button", { name: "Delete", exact: true }).click();
+		await page.locator(".provider-modal").getByRole("button", { name: "Delete", exact: true }).click();
+		await expect(testCard).toHaveCount(0, { timeout: 10_000 });
+
+		expect(pageErrors).toEqual([]);
+	});
+
 	test("create form validates required fields", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await navigateAndWait(page, "/settings/agents");

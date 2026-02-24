@@ -43,6 +43,7 @@ import {
 var identity = signal(null);
 var loading = signal(true);
 var activeSection = signal("identity");
+var activeSubPath = signal("");
 var mobileSidebarVisible = signal(true);
 var mounted = false;
 var containerRef = null;
@@ -64,9 +65,23 @@ function isSafariBrowser() {
 	return /Apple/i.test(vendor) || ua.includes("Safari/");
 }
 
+function isMissingMethodError(res) {
+	var message = res?.error?.message;
+	if (typeof message !== "string") return false;
+	var lower = message.toLowerCase();
+	return lower.includes("method") && (lower.includes("not found") || lower.includes("unknown"));
+}
+
+function fetchMainIdentity() {
+	return sendRpc("agents.identity.get", { agent_id: "main" }).then((res) => {
+		if (res?.ok || !isMissingMethodError(res)) return res;
+		return sendRpc("agent.identity.get", {});
+	});
+}
+
 function fetchIdentity() {
 	if (!mounted) return;
-	sendRpc("agent.identity.get", {}).then((res) => {
+	fetchMainIdentity().then((res) => {
 		if (res?.ok) {
 			identity.value = res.payload;
 			loading.value = false;
@@ -321,13 +336,16 @@ function IdentitySection() {
 		setSaving(true);
 		setSaved(false);
 
-		updateIdentity({
-			name: name.trim(),
-			emoji: emoji.trim() || "",
-			theme: theme.trim() || "",
-			soul: soul.trim() || null,
-			user_name: userName.trim(),
-		}).then((res) => {
+		updateIdentity(
+			{
+				name: name.trim(),
+				emoji: emoji.trim() || "",
+				theme: theme.trim() || "",
+				soul: soul.trim() || null,
+				user_name: userName.trim(),
+			},
+			{ agentId: "main" },
+		).then((res) => {
 			setSaving(false);
 			if (res?.ok) {
 				identity.value = res.payload;
@@ -348,7 +366,7 @@ function IdentitySection() {
 		setError(null);
 		setSaved(false);
 		setEmojiSaving(true);
-		updateIdentity({ emoji: nextEmoji.trim() || "" }).then((res) => {
+		updateIdentity({ emoji: nextEmoji.trim() || "" }, { agentId: "main" }).then((res) => {
 			setEmojiSaving(false);
 			if (res?.ok) {
 				identity.value = res.payload;
@@ -386,7 +404,7 @@ function IdentitySection() {
 
 		var payload = {};
 		payload[field] = trimmed;
-		updateIdentity(payload).then((res) => {
+		updateIdentity(payload, { agentId: "main" }).then((res) => {
 			if (field === "name") {
 				setNameSaving(false);
 			} else {
@@ -3390,14 +3408,14 @@ var pageSectionHandlers = {
 };
 
 /** Wrapper that mounts a page init/teardown pair into a ref div. */
-function PageSection({ initFn, teardownFn }) {
+function PageSection({ initFn, teardownFn, subPath }) {
 	var ref = useRef(null);
 	useEffect(() => {
-		if (ref.current) initFn(ref.current);
+		if (ref.current) initFn(ref.current, subPath);
 		return () => {
 			if (teardownFn) teardownFn();
 		};
-	}, []);
+	}, [initFn, teardownFn, subPath]);
 	return html`<div
 		ref=${ref}
 		class="flex-1 flex flex-col min-w-0 overflow-hidden"
@@ -3412,6 +3430,7 @@ function SettingsPage() {
 	}, []);
 
 	var section = activeSection.value;
+	var subPath = activeSubPath.value;
 	var ps = pageSectionHandlers[section];
 	var mobile = isMobileViewport();
 	var showSidebar = !mobile || mobileSidebarVisible.value;
@@ -3448,7 +3467,11 @@ function SettingsPage() {
 							</div>`
 							: null
 					}
-					${ps ? html`<${PageSection} key=${section} initFn=${ps.init} teardownFn=${ps.teardown} />` : null}
+					${
+						ps
+							? html`<${PageSection} key=${`${section}:${subPath}`} initFn=${ps.init} teardownFn=${ps.teardown} subPath=${subPath} />`
+							: null
+					}
 					${section === "identity" ? html`<${IdentitySection} />` : null}
 					${section === "memory" ? html`<${MemorySection} />` : null}
 					${section === "environment" ? html`<${EnvironmentSection} />` : null}
@@ -3483,9 +3506,13 @@ registerPrefix(
 		mounted = true;
 		containerRef = container;
 		container.style.cssText = "flex-direction:row;padding:0;overflow:hidden;";
-		var isValidSection = param && getSectionItems().some((s) => s.id === param);
-		var section = isValidSection ? param : DEFAULT_SECTION;
+		var parts = (param || "").replace(/:/g, "/").split("/").filter(Boolean);
+		var requestedSection = parts[0] || "";
+		var subPath = parts.slice(1).join("/");
+		var isValidSection = requestedSection && getSectionItems().some((s) => s.id === requestedSection);
+		var section = isValidSection ? requestedSection : DEFAULT_SECTION;
 		activeSection.value = section;
+		activeSubPath.value = isValidSection ? subPath : "";
 		mobileSidebarVisible.value = !isMobileViewport();
 		if (!isValidSection) {
 			history.replaceState(null, "", settingsPath(section));
@@ -3500,6 +3527,7 @@ registerPrefix(
 		identity.value = null;
 		loading.value = true;
 		activeSection.value = DEFAULT_SECTION;
+		activeSubPath.value = "";
 		mobileSidebarVisible.value = true;
 	},
 );

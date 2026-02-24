@@ -8,9 +8,10 @@ import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { EmojiPicker } from "./emoji-picker.js";
 import { refresh as refreshGon } from "./gon.js";
-import { sendRpc } from "./helpers.js";
+import { parseAgentsListPayload, sendRpc } from "./helpers.js";
 import { navigate } from "./router.js";
 import { settingsPath } from "./routes.js";
+import { fetchSessions } from "./sessions.js";
 import { confirmDialog } from "./ui.js";
 
 var _mounted = false;
@@ -199,15 +200,16 @@ function AgentForm({ agent, onSave, onCancel }) {
 
 // ── Agent card ──────────────────────────────────────────────
 
-function AgentCard({ agent, onEdit, onDelete }) {
+function AgentCard({ agent, defaultId, onEdit, onDelete, onSetDefault }) {
 	var isMain = agent.id === "main";
+	var isDefault = !!agent.is_default || agent.id === defaultId;
 	return html`
 		<div class="backend-card">
 			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					${agent.emoji && html`<span class="text-lg">${agent.emoji}</span>`}
 					<span class="text-sm font-medium text-[var(--text-strong)]">${agent.name}</span>
-					${isMain && html`<span class="recommended-badge">Default</span>`}
+					${isDefault && html`<span class="recommended-badge">Default</span>`}
 				</div>
 				<div class="flex gap-2">
 					${
@@ -230,6 +232,16 @@ function AgentCard({ agent, onEdit, onDelete }) {
 							>Delete</button>
 						`
 					}
+					${
+						!isDefault &&
+						html`
+						<button
+							class="provider-btn provider-btn-secondary"
+							style="font-size:0.7rem;padding:3px 8px;"
+							onClick=${() => onSetDefault(agent)}
+						>Set Default</button>
+					`
+					}
 				</div>
 			</div>
 			${
@@ -248,6 +260,7 @@ function AgentCard({ agent, onEdit, onDelete }) {
 
 function AgentsPage({ subPath }) {
 	var [agents, setAgents] = useState([]);
+	var [defaultId, setDefaultId] = useState("main");
 	var [loading, setLoading] = useState(true);
 	var [editing, setEditing] = useState(null); // null | "new" | AgentPersona
 	var [error, setError] = useState(null);
@@ -264,7 +277,9 @@ function AgentsPage({ subPath }) {
 				}
 				setLoading(false);
 				if (res?.ok) {
-					setAgents(res.payload || []);
+					var parsed = parseAgentsListPayload(res.payload);
+					setDefaultId(parsed.defaultId);
+					setAgents(parsed.agents);
 				} else {
 					setError(res?.error?.message || "Failed to load agents");
 				}
@@ -282,19 +297,31 @@ function AgentsPage({ subPath }) {
 	}, []);
 
 	function onDelete(agent) {
-		confirmDialog(`Delete agent "${agent.name}"? All sessions assigned to this agent will also be destroyed.`).then(
-			(yes) => {
-				if (!yes) return;
-				sendRpc("agents.delete", { id: agent.id }).then((res) => {
-					if (res?.ok) {
-						refreshGon();
-						fetchAgents();
-					} else {
-						setError(res?.error?.message || "Failed to delete");
-					}
-				});
-			},
-		);
+		confirmDialog(
+			`Delete agent "${agent.name}"? Sessions using this agent will be reassigned to the default agent.`,
+		).then((yes) => {
+			if (!yes) return;
+			sendRpc("agents.delete", { id: agent.id }).then((res) => {
+				if (res?.ok) {
+					refreshGon();
+					fetchSessions();
+					fetchAgents();
+				} else {
+					setError(res?.error?.message || "Failed to delete");
+				}
+			});
+		});
+	}
+
+	function onSetDefault(agent) {
+		sendRpc("agents.set_default", { id: agent.id }).then((res) => {
+			if (res?.ok) {
+				refreshGon();
+				fetchAgents();
+			} else {
+				setError(res?.error?.message || "Failed to set default");
+			}
+		});
 	}
 
 	if (loading) {
@@ -331,16 +358,18 @@ function AgentsPage({ subPath }) {
 		${error && html`<span class="text-xs" style="color:var(--error);">${error}</span>`}
 
 		<div class="flex flex-col gap-2" style="max-width:600px;">
-			${agents.map(
-				(agent) => html`
-				<${AgentCard}
-					key=${agent.id}
-					agent=${agent}
-					onEdit=${(a) => setEditing(a)}
-					onDelete=${onDelete}
-				/>
-			`,
-			)}
+				${agents.map(
+					(agent) => html`
+					<${AgentCard}
+						key=${agent.id}
+						agent=${agent}
+						defaultId=${defaultId}
+						onEdit=${(a) => setEditing(a)}
+						onDelete=${onDelete}
+						onSetDefault=${onSetDefault}
+					/>
+				`,
+				)}
 		</div>
 	</div>`;
 }

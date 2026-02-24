@@ -2,13 +2,14 @@
 //!
 //! Each agent has its own workspace directory under `data_dir()/agents/<id>/`
 //! with dedicated `IDENTITY.md`, `SOUL.md`, and memory files.
-//! The "main" agent always maps to the root `data_dir()` workspace.
+//! The "main" agent uses `data_dir()/agents/main` with fallback reads from the
+//! root workspace for backward compatibility.
 
 use {
     anyhow::Result,
     serde::{Deserialize, Serialize},
     std::{
-        path::PathBuf,
+        path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     },
 };
@@ -25,6 +26,8 @@ fn now_ms() -> i64 {
 pub struct AgentPersona {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub is_default: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,6 +74,7 @@ pub struct UpdateAgentParams {
 struct AgentRow {
     id: String,
     name: String,
+    is_default: i64,
     emoji: Option<String>,
     creature: Option<String>,
     vibe: Option<String>,
@@ -84,6 +88,7 @@ impl From<AgentRow> for AgentPersona {
         Self {
             id: r.id,
             name: r.name,
+            is_default: r.is_default != 0,
             emoji: r.emoji,
             creature: r.creature,
             vibe: r.vibe,
@@ -124,9 +129,80 @@ impl AgentPersonaStore {
         Self { pool }
     }
 
+    /// Return the current default agent ID.
+    ///
+    /// If no explicit default row is set, this falls back to `"main"`.
+    pub async fn default_id(&self) -> Result<String> {
+        let row = sqlx::query_scalar::<_, String>(
+            "SELECT id FROM agents WHERE is_default = 1 ORDER BY updated_at DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.unwrap_or_else(|| "main".to_string()))
+    }
+
+    /// Set the default agent ID. `"main"` is always valid.
+    pub async fn set_default(&self, id: &str) -> Result<String> {
+        if id != "main" && self.get(id).await?.is_none() {
+            anyhow::bail!("agent '{id}' not found");
+        }
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("UPDATE agents SET is_default = 0")
+            .execute(&mut *tx)
+            .await?;
+
+        if id != "main" {
+            let now = now_ms();
+            let updated =
+                sqlx::query("UPDATE agents SET is_default = 1, updated_at = ? WHERE id = ?")
+                    .bind(now)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            if updated.rows_affected() == 0 {
+                anyhow::bail!("agent '{id}' not found");
+            }
+        }
+
+        tx.commit().await?;
+        Ok(id.to_string())
+    }
+
+    /// Ensure the default main workspace exists and is seeded from the root
+    /// workspace when files are present there.
+    pub fn ensure_main_workspace_seeded(&self) -> Result<PathBuf> {
+        let main_workspace = moltis_config::agent_workspace_dir("main");
+        std::fs::create_dir_all(&main_workspace)?;
+
+        for file_name in &[
+            "IDENTITY.md",
+            "SOUL.md",
+            "MEMORY.md",
+            "AGENTS.md",
+            "TOOLS.md",
+        ] {
+            let src = moltis_config::data_dir().join(file_name);
+            let dst = main_workspace.join(file_name);
+            if src.exists() && !dst.exists() {
+                let _ = std::fs::copy(&src, &dst)?;
+            }
+        }
+
+        let src_memory_dir = moltis_config::data_dir().join("memory");
+        let dst_memory_dir = main_workspace.join("memory");
+        if src_memory_dir.exists() && src_memory_dir.is_dir() && !dst_memory_dir.exists() {
+            copy_dir_recursive(&src_memory_dir, &dst_memory_dir)?;
+        }
+
+        Ok(main_workspace)
+    }
+
     /// List all agents: synthesize "main" from config, then append DB rows.
     pub async fn list(&self) -> Result<Vec<AgentPersona>> {
-        let main = synthesize_main_agent();
+        let _ = self.ensure_main_workspace_seeded();
+        let default_id = self.default_id().await?;
+        let main = synthesize_main_agent(default_id == "main");
         let db_agents: Vec<AgentPersona> =
             sqlx::query_as::<_, AgentRow>("SELECT * FROM agents ORDER BY created_at ASC")
                 .fetch_all(&self.pool)
@@ -136,14 +212,15 @@ impl AgentPersonaStore {
                 .collect();
 
         let mut result = vec![main];
-        result.extend(db_agents);
+        result.extend(db_agents.into_iter().filter(|agent| agent.id != "main"));
         Ok(result)
     }
 
     /// Get a single agent by ID.
     pub async fn get(&self, id: &str) -> Result<Option<AgentPersona>> {
         if id == "main" {
-            return Ok(Some(synthesize_main_agent()));
+            let default_id = self.default_id().await?;
+            return Ok(Some(synthesize_main_agent(default_id == "main")));
         }
         let row = sqlx::query_as::<_, AgentRow>("SELECT * FROM agents WHERE id = ?")
             .bind(id)
@@ -158,8 +235,8 @@ impl AgentPersonaStore {
 
         let now = now_ms();
         sqlx::query(
-            r#"INSERT INTO agents (id, name, emoji, creature, vibe, description, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+            r#"INSERT INTO agents (id, name, is_default, emoji, creature, vibe, description, created_at, updated_at)
+               VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&params.id)
         .bind(&params.name)
@@ -186,6 +263,7 @@ impl AgentPersonaStore {
         Ok(AgentPersona {
             id: params.id,
             name: params.name,
+            is_default: false,
             emoji: params.emoji,
             creature: params.creature,
             vibe: params.vibe,
@@ -238,6 +316,7 @@ impl AgentPersonaStore {
         Ok(AgentPersona {
             id: id.to_string(),
             name,
+            is_default: existing.is_default,
             emoji,
             creature,
             vibe,
@@ -252,6 +331,9 @@ impl AgentPersonaStore {
         if id == "main" {
             anyhow::bail!("cannot delete the main agent");
         }
+        if self.default_id().await? == id {
+            anyhow::bail!("cannot delete the default agent");
+        }
 
         let result = sqlx::query("DELETE FROM agents WHERE id = ?")
             .bind(id)
@@ -263,7 +345,7 @@ impl AgentPersonaStore {
         }
 
         // Archive the workspace directory by renaming it.
-        let workspace = moltis_config::agent_data_dir(id);
+        let workspace = moltis_config::agent_workspace_dir(id);
         if workspace.exists() {
             let archived = workspace.with_file_name(format!("{id}.archived"));
             if let Err(e) = std::fs::rename(&workspace, &archived) {
@@ -281,21 +363,23 @@ impl AgentPersonaStore {
 
     /// Create the workspace directory for an agent.
     pub fn ensure_workspace(&self, agent_id: &str) -> Result<PathBuf> {
-        let dir = moltis_config::agent_data_dir(agent_id);
+        let dir = moltis_config::agent_workspace_dir(agent_id);
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
 }
 
 /// Synthesize the "main" agent persona from the global identity config.
-fn synthesize_main_agent() -> AgentPersona {
-    let identity = moltis_config::load_identity();
+fn synthesize_main_agent(is_default: bool) -> AgentPersona {
+    let identity =
+        moltis_config::load_identity_for_agent("main").or_else(moltis_config::load_identity);
     AgentPersona {
         id: "main".to_string(),
         name: identity
             .as_ref()
             .and_then(|i| i.name.clone())
             .unwrap_or_else(|| "moltis".to_string()),
+        is_default,
         emoji: identity.as_ref().and_then(|i| i.emoji.clone()),
         creature: identity.as_ref().and_then(|i| i.creature.clone()),
         vibe: identity.as_ref().and_then(|i| i.vibe.clone()),
@@ -303,6 +387,22 @@ fn synthesize_main_agent() -> AgentPersona {
         created_at: 0,
         updated_at: 0,
     }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            let _ = std::fs::copy(src_path, dst_path)?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -331,6 +431,7 @@ mod tests {
             r#"CREATE TABLE IF NOT EXISTS agents (
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
+                is_default  INTEGER NOT NULL DEFAULT 0,
                 emoji       TEXT,
                 creature    TEXT,
                 vibe        TEXT,
@@ -352,6 +453,7 @@ mod tests {
         let agents = store.list().await.unwrap();
         assert!(!agents.is_empty());
         assert_eq!(agents[0].id, "main");
+        assert!(agents[0].is_default);
     }
 
     #[tokio::test]
@@ -373,6 +475,7 @@ mod tests {
 
         assert_eq!(agent.id, "research");
         assert_eq!(agent.name, "Research Assistant");
+        assert!(!agent.is_default);
         assert_eq!(agent.emoji.as_deref(), Some("🔬"));
 
         let fetched = store.get("research").await.unwrap().unwrap();
@@ -488,6 +591,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_set_default_non_main() {
+        let pool = test_pool().await;
+        let store = AgentPersonaStore::new(pool);
+        store
+            .create(CreateAgentParams {
+                id: "ops".to_string(),
+                name: "Ops".to_string(),
+                emoji: None,
+                creature: None,
+                vibe: None,
+                description: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.default_id().await.unwrap(), "main");
+        assert_eq!(store.set_default("ops").await.unwrap(), "ops");
+        assert_eq!(store.default_id().await.unwrap(), "ops");
+        let ops = store.get("ops").await.unwrap().unwrap();
+        assert!(ops.is_default);
+    }
+
+    #[tokio::test]
+    async fn test_delete_default_rejected() {
+        let pool = test_pool().await;
+        let store = AgentPersonaStore::new(pool);
+        store
+            .create(CreateAgentParams {
+                id: "ops".to_string(),
+                name: "Ops".to_string(),
+                emoji: None,
+                creature: None,
+                vibe: None,
+                description: None,
+            })
+            .await
+            .unwrap();
+        store.set_default("ops").await.unwrap();
+        assert!(store.delete("ops").await.is_err());
+    }
+
+    #[tokio::test]
     async fn test_delete_nonexistent() {
         let pool = test_pool().await;
         let store = AgentPersonaStore::new(pool);
@@ -536,5 +680,6 @@ mod tests {
         let store = AgentPersonaStore::new(pool);
         let main = store.get("main").await.unwrap().unwrap();
         assert_eq!(main.id, "main");
+        assert!(main.is_default);
     }
 }

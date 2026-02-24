@@ -2134,7 +2134,10 @@ pub async fn start_gateway(
     let agent_persona_store = Arc::new(crate::agent_persona::AgentPersonaStore::new(
         db_pool.clone(),
     ));
-    services = services.with_agent_persona_store(agent_persona_store);
+    if let Err(e) = agent_persona_store.ensure_main_workspace_seeded() {
+        tracing::warn!(error = %e, "failed to seed main agent workspace");
+    }
+    services = services.with_agent_persona_store(Arc::clone(&agent_persona_store));
 
     // ── Hook discovery & registration ─────────────────────────────────────
     seed_default_workspace_markdown_files();
@@ -2152,6 +2155,7 @@ pub async fn start_gateway(
                 .with_tts_service(Arc::clone(&services.tts))
                 .with_share_store(Arc::clone(&session_share_store))
                 .with_sandbox_router(Arc::clone(&sandbox_router))
+                .with_agent_persona_store(Arc::clone(&agent_persona_store))
                 .with_project_store(Arc::clone(&project_store))
                 .with_state_store(Arc::clone(&session_state_store))
                 .with_browser_service(Arc::clone(&services.browser));
@@ -2345,6 +2349,7 @@ pub async fn start_gateway(
                     let data_memory_file = data_dir.join("MEMORY.md");
                     let data_memory_file_lower = data_dir.join("memory.md");
                     let data_memory_sub = data_dir.join("memory");
+                    let agents_root = data_dir.join("agents");
 
                     let config = moltis_memory::config::MemoryConfig {
                         db_path: memory_db_path.to_string_lossy().into(),
@@ -2353,6 +2358,9 @@ pub async fn start_gateway(
                             data_memory_file,
                             data_memory_file_lower,
                             data_memory_sub,
+                            // Include all agent workspaces so per-agent memory writes
+                            // remain indexed across periodic full syncs.
+                            agents_root,
                         ],
                         ..Default::default()
                     };
