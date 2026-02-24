@@ -32,6 +32,7 @@
 - [Scheduling (Cron Jobs)](scheduling.md)
 - [Skill Self-Extension](skill-tools.md)
 - [Mobile PWA](mobile-pwa.md)
+- [Native Swift Embedding (POC)](native-swift-embedding.md)
 
 ---
 
