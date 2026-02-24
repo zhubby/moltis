@@ -100,12 +100,289 @@ pub(super) fn register(reg: &mut MethodRegistry) {
         "agents.list",
         Box::new(|ctx| {
             Box::pin(async move {
-                ctx.state
-                    .services
-                    .agent
+                let Some(ref store) = ctx.state.services.agent_persona_store else {
+                    return ctx
+                        .state
+                        .services
+                        .agent
+                        .list()
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e));
+                };
+                store
                     .list()
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map(|agents| serde_json::to_value(&agents).unwrap_or_default())
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))
+            })
+        }),
+    );
+    reg.register(
+        "agents.get",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let id = ctx
+                    .params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ErrorShape::new(error_codes::INVALID_REQUEST, "missing 'id' parameter")
+                    })?;
+                let Some(ref store) = ctx.state.services.agent_persona_store else {
+                    return Err(ErrorShape::new(
+                        error_codes::UNAVAILABLE,
+                        "agent personas not available",
+                    ));
+                };
+                match store.get(id).await {
+                    Ok(Some(agent)) => serde_json::to_value(&agent)
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string())),
+                    Ok(None) => Err(ErrorShape::new(
+                        error_codes::INVALID_REQUEST,
+                        "agent not found",
+                    )),
+                    Err(e) => Err(ErrorShape::new(error_codes::UNAVAILABLE, e.to_string())),
+                }
+            })
+        }),
+    );
+    reg.register(
+        "agents.create",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let Some(ref store) = ctx.state.services.agent_persona_store else {
+                    return Err(ErrorShape::new(
+                        error_codes::UNAVAILABLE,
+                        "agent personas not available",
+                    ));
+                };
+                let params: crate::agent_persona::CreateAgentParams =
+                    serde_json::from_value(ctx.params).map_err(|e| {
+                        ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string())
+                    })?;
+                let agent = store
+                    .create(params)
+                    .await
+                    .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string()))?;
+                serde_json::to_value(&agent)
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))
+            })
+        }),
+    );
+    reg.register(
+        "agents.update",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let id = ctx
+                    .params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ErrorShape::new(error_codes::INVALID_REQUEST, "missing 'id' parameter")
+                    })?
+                    .to_string();
+                let Some(ref store) = ctx.state.services.agent_persona_store else {
+                    return Err(ErrorShape::new(
+                        error_codes::UNAVAILABLE,
+                        "agent personas not available",
+                    ));
+                };
+                let params: crate::agent_persona::UpdateAgentParams =
+                    serde_json::from_value(ctx.params).map_err(|e| {
+                        ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string())
+                    })?;
+                let agent = store
+                    .update(&id, params)
+                    .await
+                    .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string()))?;
+                serde_json::to_value(&agent)
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))
+            })
+        }),
+    );
+    reg.register(
+        "agents.delete",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let id = ctx
+                    .params
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ErrorShape::new(error_codes::INVALID_REQUEST, "missing 'id' parameter")
+                    })?
+                    .to_string();
+                let Some(ref store) = ctx.state.services.agent_persona_store else {
+                    return Err(ErrorShape::new(
+                        error_codes::UNAVAILABLE,
+                        "agent personas not available",
+                    ));
+                };
+                // Cascade-delete all sessions belonging to this agent.
+                let mut deleted_sessions = 0_u64;
+                if let Some(ref meta) = ctx.state.services.session_metadata {
+                    deleted_sessions = meta.delete_by_agent_id(&id).await.unwrap_or(0);
+                }
+                store
+                    .delete(&id)
+                    .await
+                    .map_err(|e| ErrorShape::new(error_codes::INVALID_REQUEST, e.to_string()))?;
+                Ok(serde_json::json!({
+                    "deleted": true,
+                    "deleted_sessions": deleted_sessions,
+                }))
+            })
+        }),
+    );
+    reg.register(
+        "agents.set_session",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let session_key = ctx
+                    .params
+                    .get("session_key")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        ErrorShape::new(
+                            error_codes::INVALID_REQUEST,
+                            "missing 'session_key' parameter",
+                        )
+                    })?;
+                let agent_id = ctx.params.get("agent_id").and_then(|v| v.as_str());
+                let Some(ref meta) = ctx.state.services.session_metadata else {
+                    return Err(ErrorShape::new(
+                        error_codes::UNAVAILABLE,
+                        "session metadata not available",
+                    ));
+                };
+                meta.set_agent_id(session_key, agent_id)
+                    .await
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))?;
+                Ok(serde_json::json!({ "ok": true }))
+            })
+        }),
+    );
+    reg.register(
+        "agents.identity.get",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let agent_id = ctx
+                    .params
+                    .get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("main");
+                if agent_id == "main" {
+                    return ctx
+                        .state
+                        .services
+                        .onboarding
+                        .identity_get()
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e));
+                }
+                // Non-main agent: read from agent workspace
+                let dir = moltis_config::agent_data_dir(agent_id);
+                let identity_path = dir.join("IDENTITY.md");
+                let soul_path = dir.join("SOUL.md");
+                let identity_content = std::fs::read_to_string(&identity_path).ok();
+                let identity = identity_content
+                    .as_deref()
+                    .and_then(moltis_config::extract_yaml_frontmatter)
+                    .map(String::from);
+                let soul = std::fs::read_to_string(&soul_path).ok();
+                Ok(serde_json::json!({
+                    "identity": identity,
+                    "soul": soul,
+                }))
+            })
+        }),
+    );
+    reg.register(
+        "agents.identity.update",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let agent_id = ctx
+                    .params
+                    .get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("main");
+                if agent_id == "main" {
+                    return ctx
+                        .state
+                        .services
+                        .onboarding
+                        .identity_update(ctx.params)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e));
+                }
+                let identity = moltis_config::schema::AgentIdentity {
+                    name: ctx
+                        .params
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    emoji: ctx
+                        .params
+                        .get("emoji")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    creature: ctx
+                        .params
+                        .get("creature")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                    vibe: ctx
+                        .params
+                        .get("vibe")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                };
+                moltis_config::save_identity_for_agent(agent_id, &identity)
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))?;
+                Ok(serde_json::json!({ "ok": true }))
+            })
+        }),
+    );
+    reg.register(
+        "agents.identity.update_soul",
+        Box::new(|ctx| {
+            Box::pin(async move {
+                let agent_id = ctx
+                    .params
+                    .get("agent_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("main");
+                let soul = ctx
+                    .params
+                    .get("soul")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if agent_id == "main" {
+                    return ctx
+                        .state
+                        .services
+                        .onboarding
+                        .identity_update_soul(soul)
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e));
+                }
+                let dir = moltis_config::agent_data_dir(agent_id);
+                std::fs::create_dir_all(&dir)
+                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e.to_string()))?;
+                let soul_path = dir.join("SOUL.md");
+                match soul.as_deref().map(str::trim) {
+                    Some(content) if !content.is_empty() => {
+                        std::fs::write(&soul_path, content).map_err(|e| {
+                            ErrorShape::new(error_codes::UNAVAILABLE, e.to_string())
+                        })?;
+                    },
+                    _ => {
+                        std::fs::write(&soul_path, "").map_err(|e| {
+                            ErrorShape::new(error_codes::UNAVAILABLE, e.to_string())
+                        })?;
+                    },
+                }
+                Ok(serde_json::json!({ "ok": true }))
             })
         }),
     );

@@ -2130,6 +2130,12 @@ pub async fn start_gateway(
     services = services.with_session_store(Arc::clone(&session_store));
     services = services.with_session_share_store(Arc::clone(&session_share_store));
 
+    // Wire agent persona store for multi-agent support.
+    let agent_persona_store = Arc::new(crate::agent_persona::AgentPersonaStore::new(
+        db_pool.clone(),
+    ));
+    services = services.with_agent_persona_store(agent_persona_store);
+
     // ── Hook discovery & registration ─────────────────────────────────────
     seed_default_workspace_markdown_files();
     seed_example_skill();

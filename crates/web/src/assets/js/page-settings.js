@@ -10,6 +10,7 @@ import * as gon from "./gon.js";
 import { refresh as refreshGon } from "./gon.js";
 import { sendRpc } from "./helpers.js";
 import { updateIdentity, validateIdentityFields } from "./identity-utils.js";
+import { initAgents, teardownAgents } from "./page-agents.js";
 // Moved page init/teardown imports
 import { initChannels, teardownChannels } from "./page-channels.js";
 import { initCrons, teardownCrons } from "./page-crons.js";
@@ -87,6 +88,12 @@ var sections = [
 		id: "identity",
 		label: "Identity",
 		icon: html`<span class="icon icon-person"></span>`,
+	},
+	{
+		id: "agents",
+		label: "Agents",
+		icon: html`<span class="icon icon-sparkles"></span>`,
+		page: true,
 	},
 	{
 		id: "environment",
@@ -3372,6 +3379,7 @@ var pageSectionHandlers = {
 	mcp: { init: initMcp, teardown: teardownMcp },
 	hooks: { init: initHooks, teardown: teardownHooks },
 	skills: { init: initSkills, teardown: teardownSkills },
+	agents: { init: initAgents, teardown: teardownAgents },
 	terminal: { init: initTerminal, teardown: teardownTerminal },
 	sandboxes: { init: initImages, teardown: teardownImages },
 	monitoring: {
