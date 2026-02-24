@@ -45,4 +45,24 @@ final class MoltisPOCTests: XCTestCase {
             $0.role == .error && $0.text.contains("Validation:")
         }))
     }
+
+    func testOnboardingStatePersistsCompletion() throws {
+        let suiteName = "moltis.swift-poc.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Failed to create isolated UserDefaults suite")
+            return
+        }
+
+        defaults.removePersistentDomain(forName: suiteName)
+        let key = "onboarding"
+
+        let state = OnboardingState(defaults: defaults, completionKey: key)
+        XCTAssertFalse(state.isCompleted)
+
+        state.complete()
+        XCTAssertTrue(state.isCompleted)
+
+        let reloaded = OnboardingState(defaults: defaults, completionKey: key)
+        XCTAssertTrue(reloaded.isCompleted)
+    }
 }

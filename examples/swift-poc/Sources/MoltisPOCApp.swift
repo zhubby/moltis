@@ -4,16 +4,28 @@ import SwiftUI
 struct MoltisPOCApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var chatStore: ChatStore
+    @StateObject private var onboardingState: OnboardingState
 
     init() {
         let settings = AppSettings()
+        let onboardingState = OnboardingState()
         _settings = StateObject(wrappedValue: settings)
         _chatStore = StateObject(wrappedValue: ChatStore(settings: settings))
+        _onboardingState = StateObject(wrappedValue: onboardingState)
     }
 
     var body: some Scene {
         WindowGroup("Moltis Swift POC") {
-            ContentView(chatStore: chatStore, settings: settings)
+            Group {
+                if onboardingState.isCompleted {
+                    ContentView(chatStore: chatStore, settings: settings)
+                } else {
+                    OnboardingHostView(settings: settings) {
+                        onboardingState.complete()
+                        chatStore.loadVersion()
+                    }
+                }
+            }
         }
         .windowResizability(.contentSize)
 
