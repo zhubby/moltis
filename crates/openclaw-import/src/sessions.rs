@@ -292,7 +292,7 @@ struct TranscriptEntry {
     content: String,
 }
 
-fn convert_session(src: &Path, dest: &Path) -> anyhow::Result<ConvertStats> {
+fn convert_session(src: &Path, dest: &Path) -> crate::error::Result<ConvertStats> {
     let file = std::fs::File::open(src)?;
     let reader = BufReader::new(file);
 
@@ -419,7 +419,10 @@ fn load_session_metadata(path: &Path) -> HashMap<String, ImportedSessionEntry> {
     serde_json::from_str(&content).unwrap_or_default()
 }
 
-fn merge_session_metadata(path: &Path, new_entries: &[ImportedSessionEntry]) -> anyhow::Result<()> {
+fn merge_session_metadata(
+    path: &Path,
+    new_entries: &[ImportedSessionEntry],
+) -> crate::error::Result<()> {
     let mut existing = load_session_metadata(path);
 
     for entry in new_entries {
@@ -441,7 +444,7 @@ fn write_transcript(
     label: &str,
     model: Option<&str>,
     stats: &ConvertStats,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     std::fs::create_dir_all(dir)?;
 
     // Use hyphens instead of colons for filesystem safety

@@ -183,7 +183,7 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
 pub fn write_provider_keys(
     providers: &HashMap<String, MoltisProviderConfig>,
     dest: &Path,
-) -> anyhow::Result<()> {
+) -> crate::error::Result<()> {
     if providers.is_empty() {
         return Ok(());
     }

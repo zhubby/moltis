@@ -6,13 +6,14 @@
 use std::path::PathBuf;
 
 use {
-    anyhow::Result,
     notify_debouncer_full::{
         DebounceEventResult, Debouncer, RecommendedCache, new_debouncer, notify::RecursiveMode,
     },
     tokio::sync::mpsc,
     tracing::{debug, info, warn},
 };
+
+use crate::error::Result;
 
 /// Events emitted by the import watcher.
 #[derive(Debug, Clone)]

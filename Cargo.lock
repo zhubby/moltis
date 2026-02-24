@@ -5107,9 +5107,9 @@ dependencies = [
 name = "moltis-openclaw-import"
 version = "0.9.10"
 dependencies = [
- "anyhow",
  "dirs-next",
  "json5",
+ "moltis-common",
  "moltis-config",
  "notify-debouncer-full",
  "secrecy 0.8.0",

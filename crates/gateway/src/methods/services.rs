@@ -3401,7 +3401,6 @@ pub(super) fn register(reg: &mut MethodRegistry) {
         }),
     );
 
-
     // ── OpenClaw import ─────────────────────────────────────────────────
 
     reg.register(
@@ -3413,7 +3412,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .onboarding
                     .openclaw_detect()
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3426,7 +3425,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .onboarding
                     .openclaw_scan()
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3439,7 +3438,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .onboarding
                     .openclaw_import(ctx.params.clone())
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3455,7 +3454,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .logs
                     .tail(ctx.params)
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3469,7 +3468,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .logs
                     .list(ctx.params)
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3483,7 +3482,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .logs
                     .status()
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );
@@ -3497,7 +3496,7 @@ pub(super) fn register(reg: &mut MethodRegistry) {
                     .logs
                     .ack()
                     .await
-                    .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                    .map_err(ErrorShape::from)
             })
         }),
     );

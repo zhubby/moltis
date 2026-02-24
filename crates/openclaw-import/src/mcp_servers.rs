@@ -101,7 +101,7 @@ pub fn import_mcp_servers(detection: &OpenClawDetection, dest_mcp_path: &Path) -
     }
 }
 
-fn load_mcp_servers(path: &Path) -> anyhow::Result<HashMap<String, OpenClawMcpServer>> {
+fn load_mcp_servers(path: &Path) -> crate::error::Result<HashMap<String, OpenClawMcpServer>> {
     let content = std::fs::read_to_string(path)?;
     let servers: HashMap<String, OpenClawMcpServer> = serde_json::from_str(&content)?;
     Ok(servers)

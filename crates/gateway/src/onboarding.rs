@@ -138,7 +138,7 @@ impl OnboardingService for GatewayOnboardingService {
 
         let report = moltis_openclaw_import::import(&detection, &selection, &config_dir, &data_dir);
 
-        serde_json::to_value(&report).map_err(|e| e.to_string())
+        Ok(serde_json::to_value(&report)?)
     }
 
     #[cfg(not(feature = "openclaw-import"))]

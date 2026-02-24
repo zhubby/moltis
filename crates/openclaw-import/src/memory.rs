@@ -124,7 +124,7 @@ enum MemoryFileResult {
 
 const IMPORT_SEPARATOR: &str = "\n\n<!-- Imported from OpenClaw -->\n\n";
 
-fn import_memory_file(src: &Path, dest: &Path) -> anyhow::Result<MemoryFileResult> {
+fn import_memory_file(src: &Path, dest: &Path) -> crate::error::Result<MemoryFileResult> {
     let src_content = std::fs::read_to_string(src)?;
     if src_content.trim().is_empty() {
         return Ok(MemoryFileResult::Skipped);

@@ -125,7 +125,7 @@ pub fn import_skills(detection: &OpenClawDetection, dest_skills_dir: &Path) -> C
 }
 
 /// Recursively copy a directory.
-fn copy_dir_recursive(src: &Path, dest: &Path) -> anyhow::Result<()> {
+fn copy_dir_recursive(src: &Path, dest: &Path) -> crate::error::Result<()> {
     std::fs::create_dir_all(dest)?;
 
     for entry in walkdir::WalkDir::new(src).min_depth(1) {

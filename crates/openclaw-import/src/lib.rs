@@ -11,6 +11,7 @@
 
 pub mod channels;
 pub mod detect;
+pub mod error;
 pub mod identity;
 pub mod mcp_servers;
 pub mod memory;
@@ -220,7 +221,7 @@ pub fn load_import_state(data_dir: &Path) -> Option<ImportState> {
     serde_json::from_str(&content).ok()
 }
 
-fn save_import_state(path: &Path, report: &ImportReport) -> anyhow::Result<()> {
+fn save_import_state(path: &Path, report: &ImportReport) -> error::Result<()> {
     let imported: Vec<ImportCategory> = report
         .categories
         .iter()
@@ -246,10 +247,7 @@ fn save_import_state(path: &Path, report: &ImportReport) -> anyhow::Result<()> {
 /// Persist imported identity data to `moltis.toml`.
 ///
 /// Loads any existing config, merges identity and timezone, and writes back.
-fn persist_identity(
-    imported: &identity::ImportedIdentity,
-    config_dir: &Path,
-) -> anyhow::Result<()> {
+fn persist_identity(imported: &identity::ImportedIdentity, config_dir: &Path) -> error::Result<()> {
     let config_path = config_dir.join("moltis.toml");
     let mut config = load_or_default_config(&config_path);
 
@@ -271,10 +269,7 @@ fn persist_identity(
 }
 
 /// Persist imported Telegram channels to `[channels.telegram]` in `moltis.toml`.
-fn persist_channels(
-    imported: &channels::ImportedChannels,
-    config_dir: &Path,
-) -> anyhow::Result<()> {
+fn persist_channels(imported: &channels::ImportedChannels, config_dir: &Path) -> error::Result<()> {
     let config_path = config_dir.join("moltis.toml");
     let mut config = load_or_default_config(&config_path);
 
@@ -318,12 +313,11 @@ fn load_or_default_config(path: &Path) -> moltis_config::MoltisConfig {
 }
 
 /// Serialize a `MoltisConfig` to TOML and write it to the given path.
-fn save_config_to_path(path: &Path, config: &moltis_config::MoltisConfig) -> anyhow::Result<()> {
+fn save_config_to_path(path: &Path, config: &moltis_config::MoltisConfig) -> error::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let toml_str =
-        toml::to_string_pretty(config).map_err(|e| anyhow::anyhow!("serialize config: {e}"))?;
+    let toml_str = toml::to_string_pretty(config)?;
     std::fs::write(path, toml_str)?;
     Ok(())
 }
