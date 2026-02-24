@@ -63,7 +63,7 @@ tracing                = { workspace = true }
 tracing-subscriber     = { workspace = true }
 which                  = { workspace = true }
 
-[target.'cfg(not(target_os = "windows"))'.dependencies]
+[target.'cfg(all(not(target_os = "windows"), not(all(target_os = "linux", target_arch = "aarch64"))))'.dependencies]
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
@@ -82,24 +82,28 @@ default = [
   "qmd",
   "tailscale",
   "tls",
+  "vault",
   "voice",
   "web-ui",
 ]
 # Minimal build for memory-constrained devices (Raspberry Pi, etc.).
 # Build with: cargo build --release --no-default-features --features lightweight
 file-watcher       = ["moltis-gateway/file-watcher"]
-graphql            = ["moltis-gateway/graphql"]
+graphql            = ["moltis-gateway/graphql", "moltis-web?/graphql"]
 jemalloc           = ["dep:tikv-jemallocator"]
+# jemalloc is intentionally unavailable on linux/aarch64 to avoid runtime
+# crashes on 16 KiB page kernels (e.g. Raspberry Pi OS variants).
 lightweight        = ["jemalloc", "tls", "web-ui"]
 local-llm          = ["moltis-gateway/local-llm"]
-metrics            = ["moltis-gateway/metrics"]
+metrics            = ["moltis-gateway/metrics", "moltis-web?/metrics"]
 openclaw-import    = ["dep:moltis-openclaw-import", "moltis-gateway/openclaw-import"]
 prometheus         = ["moltis-gateway/prometheus"]
-push-notifications = ["moltis-gateway/push-notifications"]
+push-notifications = ["moltis-gateway/push-notifications", "moltis-web?/push-notifications"]
 qmd                = ["moltis-gateway/qmd"]
-tailscale          = ["moltis-gateway/tailscale"]
+tailscale          = ["moltis-gateway/tailscale", "moltis-web?/tailscale"]
 tls                = ["moltis-gateway/tls"]
-voice              = ["moltis-gateway/voice"]
+vault              = ["moltis-gateway/vault", "moltis-web?/vault"]
+voice              = ["moltis-gateway/voice", "moltis-web?/voice"]
 web-ui             = ["dep:moltis-web", "moltis-gateway/web-ui"]
 
 [lints]

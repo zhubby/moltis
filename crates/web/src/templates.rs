@@ -72,6 +72,8 @@ pub(crate) struct GonData {
     started_at: u64,
     /// Whether an OpenClaw installation was detected (for import UI).
     openclaw_detected: bool,
+    #[cfg(feature = "vault")]
+    vault_status: String,
 }
 
 #[derive(serde::Serialize)]
@@ -315,6 +317,17 @@ pub(crate) async fn build_gon_data(gw: &GatewayState) -> GonData {
         routes: SPA_ROUTES.clone(),
         started_at: *PROCESS_STARTED_AT_MS,
         openclaw_detected: moltis_gateway::server::openclaw_detected_for_ui(),
+        #[cfg(feature = "vault")]
+        vault_status: {
+            if let Some(ref vault) = gw.vault {
+                match vault.status().await {
+                    Ok(s) => format!("{s:?}").to_lowercase(),
+                    Err(_) => "error".to_owned(),
+                }
+            } else {
+                "disabled".to_owned()
+            }
+        },
     }
 }
 
