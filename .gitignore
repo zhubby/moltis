@@ -10,3 +10,6 @@ prompts
 features/
 .moltis/
 docs/book/
+examples/swift-poc/Generated/
+examples/swift-poc/MoltisPOC.xcodeproj/
+examples/swift-poc/.derivedData/

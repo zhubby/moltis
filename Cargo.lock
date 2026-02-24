@@ -5188,6 +5188,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "moltis-swift-bridge"
+version = "0.9.10"
+dependencies = [
+ "metrics 0.24.3",
+ "moltis-config",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "moltis-tailscale"
 version = "0.9.10"
 dependencies = [

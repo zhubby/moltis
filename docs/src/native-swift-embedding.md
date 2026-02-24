@@ -41,8 +41,8 @@ Existing Moltis crates (chat/providers/config/etc.)
 
 For the POC, keep the ABI intentionally small:
 
-- `moltis_init(config_json)`
-- `moltis_chat(request_json)`
+- `moltis_version()`
+- `moltis_chat_json(request_json)`
 - `moltis_free_string(ptr)`
 - `moltis_shutdown()`
 
@@ -67,12 +67,22 @@ Safety checklist:
 
 ## Swift-side Integration Notes
 
-In Xcode:
+Use YAML-generated Xcode projects for the POC (no hand-maintained `.xcodeproj`):
 
-1. Build Rust static library for target (for example iOS simulator and device).
-2. Add generated `libmoltis_bridge.a` to "Link Binary With Libraries".
-3. Add C header to bridging header (or module map).
-4. Write a Swift facade (`MoltisClient`) that wraps unsafe pointers and lifetime rules.
+1. Define app targets in `examples/swift-poc/project.yml`.
+2. Generate project with XcodeGen.
+3. Link `Generated/libmoltis_bridge.a` and include `Generated/moltis_bridge.h`.
+4. Use a Swift facade (`MoltisClient`) to own pointer and lifetime rules.
+5. Keep Swift linted via `examples/swift-poc/.swiftlint.yml`.
+
+From repo root:
+
+```bash
+just swift-poc-build-rust
+just swift-poc-generate
+just swift-poc-lint
+just swift-poc-build
+```
 
 The UI remains purely SwiftUI while core requests/responses flow through the Rust bridge.
 

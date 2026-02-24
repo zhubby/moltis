@@ -218,3 +218,31 @@ ui-e2e-headed:
 
 # Build all Linux packages (deb + rpm + arch + appimage) for all architectures
 packages-all: deb-all rpm-all arch-pkg-all
+
+# Build Rust static library and generated C header used by swift-poc.
+swift-poc-build-rust:
+    ./scripts/build-swift-poc-bridge.sh
+
+# Generate Xcode project from YAML spec for swift-poc.
+swift-poc-generate:
+    ./scripts/generate-swift-poc-project.sh
+
+# Lint swift-poc Swift sources with SwiftLint.
+swift-poc-lint:
+    ./scripts/lint-swift-poc.sh
+
+# Build swift-poc macOS app.
+swift-poc-build: swift-poc-build-rust swift-poc-generate
+    ./scripts/build-swift-poc.sh
+
+# Run swift-poc unit tests.
+swift-poc-test: swift-poc-build-rust swift-poc-generate
+    ./scripts/test-swift-poc.sh
+
+# Build and launch the swift-poc macOS app locally.
+swift-poc-run: swift-poc-build-rust swift-poc-generate
+    ./scripts/run-swift-poc.sh
+
+# Open generated project in Xcode.
+swift-poc-open: swift-poc-build-rust swift-poc-generate
+    open examples/swift-poc/MoltisPOC.xcodeproj

@@ -1,0 +1,52 @@
+name: MoltisPOC
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    HEADER_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/Generated"
+    LIBRARY_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/Generated"
+
+packages: {}
+
+targets:
+  MoltisPOC:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.poc
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_EMIT_LOC_STRINGS: NO
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridging-Header.h
+        OTHER_LDFLAGS:
+          - "-lmoltis_bridge"
+    scheme:
+      testTargets:
+        - MoltisPOCTests
+
+  MoltisPOCTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: MoltisPOC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.poc.tests
+        GENERATE_INFOPLIST_FILE: YES

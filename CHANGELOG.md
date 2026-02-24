@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `graphql` feature flag (default on) in gateway and CLI crates for compile-time opt-out
 - Settings > GraphQL page embedding GraphiQL playground at `/settings/graphql`
 - Gateway startup now seeds a built-in `dcg-guard` hook in `~/.moltis/hooks/dcg-guard/` (manifest + handler), so destructive command guarding is available out of the box once `dcg` is installed
+- Swift embedding POC scaffold with a new `moltis-swift-bridge` static library crate, XcodeGen YAML project (`examples/swift-poc/project.yml`), and SwiftLint wiring for SwiftUI frontend code quality
 ### Changed
 
 - **Crate restructure**: gateway crate reduced from ~42K to ~29K lines by extracting `moltis-chat` (chat engine, agent orchestration), `moltis-auth` (password + passkey auth), `moltis-tls` (TLS/HTTPS termination), `moltis-service-traits` (shared service interfaces), and moving share rendering into `moltis-web`
