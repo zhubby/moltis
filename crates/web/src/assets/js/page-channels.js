@@ -74,6 +74,45 @@ function loadSenders() {
 	});
 }
 
+function defaultTeamsBaseUrl() {
+	if (typeof window === "undefined") return "";
+	return window.location?.origin || "";
+}
+
+function normalizeBaseUrlForWebhook(baseUrl) {
+	var raw = (baseUrl || "").trim();
+	if (!raw) raw = defaultTeamsBaseUrl();
+	if (!raw) return "";
+	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
+	try {
+		var parsed = new URL(raw);
+		return `${parsed.protocol}//${parsed.host}`;
+	} catch (_e) {
+		return "";
+	}
+}
+
+function generateWebhookSecretHex() {
+	if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+		var bytes = new Uint8Array(24);
+		window.crypto.getRandomValues(bytes);
+		return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+	}
+	var value = "";
+	while (value.length < 48) {
+		value += Math.floor(Math.random() * 16).toString(16);
+	}
+	return value.slice(0, 48);
+}
+
+function buildTeamsEndpoint(baseUrl, accountId, webhookSecret) {
+	var normalizedBase = normalizeBaseUrlForWebhook(baseUrl);
+	var account = (accountId || "").trim();
+	var secret = (webhookSecret || "").trim();
+	if (!(normalizedBase && account && secret)) return "";
+	return `${normalizedBase}/api/channels/msteams/${encodeURIComponent(account)}/webhook?secret=${encodeURIComponent(secret)}`;
+}
+
 // ── Channel icon ─────────────────────────────────────────────
 function ChannelIcon({ type }) {
 	if (channelType(type) === "msteams") {
@@ -279,12 +318,52 @@ function AddChannelModal() {
 	var addModel = useSignal("");
 	var allowlistItems = useSignal([]);
 	var channelKind = useSignal("telegram");
+	var accountDraft = useSignal("");
 	var webhookSecret = useSignal("");
+	var baseUrlDraft = useSignal(defaultTeamsBaseUrl());
+	var bootstrapEndpoint = useSignal("");
+
+	function refreshBootstrapEndpoint() {
+		if (!bootstrapEndpoint.value) return;
+		bootstrapEndpoint.value = buildTeamsEndpoint(baseUrlDraft.value, accountDraft.value, webhookSecret.value);
+	}
+
+	function onBootstrapTeams() {
+		var accountId = accountDraft.value.trim();
+		if (!accountId) {
+			error.value = "Enter App ID / Account ID first.";
+			return;
+		}
+		var secret = webhookSecret.value.trim();
+		if (!secret) {
+			secret = generateWebhookSecretHex();
+			webhookSecret.value = secret;
+		}
+		var endpoint = buildTeamsEndpoint(baseUrlDraft.value, accountId, secret);
+		if (!endpoint) {
+			error.value = "Enter a valid public base URL (example: https://bot.example.com).";
+			return;
+		}
+		bootstrapEndpoint.value = endpoint;
+		error.value = "";
+		showToast("Teams endpoint generated");
+	}
+
+	function copyBootstrapEndpoint() {
+		if (!bootstrapEndpoint.value) return;
+		if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+			showToast("Clipboard is unavailable");
+			return;
+		}
+		navigator.clipboard.writeText(bootstrapEndpoint.value).then(() => {
+			showToast("Messaging endpoint copied");
+		});
+	}
 
 	function onSubmit(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
-		var accountId = form.querySelector("[data-field=accountId]").value.trim();
+		var accountId = accountDraft.value.trim();
 		var credential = form.querySelector("[data-field=credential]").value.trim();
 		var type = channelKind.value;
 		var v = validateChannelFields(type, accountId, credential);
@@ -317,7 +396,10 @@ function AddChannelModal() {
 				showAddModal.value = false;
 				addModel.value = "";
 				allowlistItems.value = [];
+				accountDraft.value = "";
 				webhookSecret.value = "";
+				baseUrlDraft.value = defaultTeamsBaseUrl();
+				bootstrapEndpoint.value = "";
 				channelKind.value = "telegram";
 				loadChannels();
 			} else {
@@ -348,6 +430,8 @@ function AddChannelModal() {
 	      <select data-field="channelType" style=${selectStyle} value=${channelKind.value}
 	        onChange=${(e) => {
 						channelKind.value = e.target.value;
+						error.value = "";
+						bootstrapEndpoint.value = "";
 					}}>
 	        <option value="telegram">Telegram</option>
 	        <option value="msteams">Microsoft Teams</option>
@@ -356,10 +440,11 @@ function AddChannelModal() {
 	        ${
 						isTeams
 							? html`<div>
-			            <span class="text-xs font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
-			            <div class="text-xs text-[var(--muted)]">1. Create an Azure Bot registration and copy the App ID + App Password.</div>
-			            <div class="text-xs text-[var(--muted)]">2. Set messaging endpoint to <code>/api/channels/msteams/&lt;account_id&gt;/webhook?secret=...</code>.</div>
-			          </div>`
+				            <span class="text-xs font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
+				            <div class="text-xs text-[var(--muted)]">1. Create an Azure Bot registration and copy the App ID + App Password.</div>
+				            <div class="text-xs text-[var(--muted)]">2. Use Bootstrap Teams below to generate the exact messaging endpoint.</div>
+				            <div class="text-xs text-[var(--muted)]">3. Optional CLI shortcut: <code>moltis channels teams bootstrap</code>.</div>
+				          </div>`
 							: html`<div>
 			            <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
 			            <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
@@ -371,6 +456,11 @@ function AddChannelModal() {
 		      <label class="text-xs text-[var(--muted)]">${accountLabel}</label>
 		      <input data-field="accountId" type="text"
 		        placeholder=${isTeams ? "Azure App ID or alias" : "e.g. my_assistant_bot"}
+		        value=${accountDraft.value}
+		        onInput=${(e) => {
+							accountDraft.value = e.target.value;
+							refreshBootstrapEndpoint();
+						}}
 		        style=${inputStyle} />
 		      <label class="text-xs text-[var(--muted)]">${credentialLabel}</label>
 		      <input data-field="credential" type="password" placeholder=${credentialPlaceholder} style=${inputStyle}
@@ -387,7 +477,33 @@ function AddChannelModal() {
 				            value=${webhookSecret.value}
 				            onInput=${(e) => {
 											webhookSecret.value = e.target.value;
+											refreshBootstrapEndpoint();
 										}} />
+				          <label class="text-xs text-[var(--muted)]" style="margin-top:8px;">Public Base URL (for Teams webhook)</label>
+				          <input type="text" placeholder="https://bot.example.com" style=${inputStyle}
+				            value=${baseUrlDraft.value}
+				            onInput=${(e) => {
+											baseUrlDraft.value = e.target.value;
+											refreshBootstrapEndpoint();
+										}} />
+				          <div class="flex gap-2" style="margin-top:8px;">
+				            <button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${onBootstrapTeams}>
+				              Bootstrap Teams
+				            </button>
+				            ${
+											bootstrapEndpoint.value &&
+											html`<button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${copyBootstrapEndpoint}>
+											      Copy Endpoint
+											    </button>`
+										}
+				          </div>
+				          ${
+										bootstrapEndpoint.value &&
+										html`<div style="margin-top:8px;">
+										      <div class="text-xs text-[var(--muted)]">Messaging endpoint</div>
+										      <code class="text-xs" style="display:block;word-break:break-all;">${bootstrapEndpoint.value}</code>
+										    </div>`
+									}
 				        </div>`
 					}
 	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
