@@ -94,6 +94,7 @@ pub fn import_mcp_servers(detection: &OpenClawDetection, dest_mcp_path: &Path) -
         category: ImportCategory::McpServers,
         status,
         items_imported: imported,
+        items_updated: 0,
         items_skipped: skipped,
         warnings: Vec::new(),
         errors: Vec::new(),

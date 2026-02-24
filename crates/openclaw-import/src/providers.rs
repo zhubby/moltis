@@ -166,6 +166,7 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
         category: ImportCategory::Providers,
         status,
         items_imported: items,
+        items_updated: 0,
         items_skipped: 0,
         warnings,
         errors: Vec::new(),

@@ -1,4 +1,4 @@
-//! Import memory files (MEMORY.md and daily logs) from OpenClaw.
+//! Import memory files (MEMORY.md and all markdown files in `memory/`) from OpenClaw.
 
 use std::path::Path;
 
@@ -12,7 +12,9 @@ use crate::{
 /// Import memory files from OpenClaw workspace to Moltis data directory.
 ///
 /// - `MEMORY.md`: Merged if both exist (imported content appended with separator).
-/// - `memory/YYYY-MM-DD.md`: Copied, skipping files that already exist.
+/// - `memory/*.md`: All markdown files copied, skipping files that already exist.
+///   This includes daily logs (`YYYY-MM-DD.md`), project notes, and any other
+///   custom memory files the user created.
 ///
 /// Does NOT import the SQLite vector database (not portable across embedding models).
 pub fn import_memory(detection: &OpenClawDetection, dest_data_dir: &Path) -> CategoryReport {
@@ -46,14 +48,14 @@ pub fn import_memory(detection: &OpenClawDetection, dest_data_dir: &Path) -> Cat
         }
     }
 
-    // 2. Import daily logs
-    let src_daily = detection.workspace_dir.join("memory");
-    let dest_daily = dest_data_dir.join("memory");
+    // 2. Import all markdown files from memory/ directory
+    let src_memory_dir = detection.workspace_dir.join("memory");
+    let dest_memory_dir = dest_data_dir.join("memory");
 
-    if src_daily.is_dir() {
-        if let Err(e) = std::fs::create_dir_all(&dest_daily) {
+    if src_memory_dir.is_dir() {
+        if let Err(e) = std::fs::create_dir_all(&dest_memory_dir) {
             errors.push(format!("failed to create memory directory: {e}"));
-        } else if let Ok(entries) = std::fs::read_dir(&src_daily) {
+        } else if let Ok(entries) = std::fs::read_dir(&src_memory_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if !path.is_file() {
@@ -62,26 +64,30 @@ pub fn import_memory(detection: &OpenClawDetection, dest_data_dir: &Path) -> Cat
                 let Some(name) = path.file_name() else {
                     continue;
                 };
-                // Only import .md files matching YYYY-MM-DD pattern
                 let name_str = name.to_string_lossy();
-                if !name_str.ends_with(".md") || !looks_like_daily_log(&name_str) {
+                if !name_str.ends_with(".md") {
                     continue;
                 }
 
-                let dest_file = dest_daily.join(name);
+                let dest_file = dest_memory_dir.join(name);
                 if dest_file.exists() {
-                    debug!(file = %name_str, "daily log already exists, skipping");
+                    debug!(file = %name_str, "memory file already exists, skipping");
                     skipped += 1;
                     continue;
                 }
 
                 match std::fs::copy(&path, &dest_file) {
                     Ok(_) => {
-                        debug!(file = %name_str, "imported daily log");
+                        let kind = if looks_like_daily_log(&name_str) {
+                            "daily log"
+                        } else {
+                            "memory file"
+                        };
+                        debug!(file = %name_str, kind, "imported memory file");
                         imported += 1;
                     },
                     Err(e) => {
-                        warn!(file = %name_str, error = %e, "failed to copy daily log");
+                        warn!(file = %name_str, error = %e, "failed to copy memory file");
                         errors.push(format!("failed to copy {name_str}: {e}"));
                     },
                 }
@@ -103,6 +109,7 @@ pub fn import_memory(detection: &OpenClawDetection, dest_data_dir: &Path) -> Cat
         category: ImportCategory::Memory,
         status,
         items_imported: imported,
+        items_updated: 0,
         items_skipped: skipped,
         warnings,
         errors,
@@ -255,7 +262,7 @@ mod tests {
         std::fs::create_dir_all(&daily).unwrap();
         std::fs::write(daily.join("2024-01-15.md"), "day 1").unwrap();
         std::fs::write(daily.join("2024-01-16.md"), "day 2").unwrap();
-        std::fs::write(daily.join("notes.txt"), "not a daily log").unwrap();
+        std::fs::write(daily.join("notes.txt"), "not a markdown file").unwrap();
 
         let detection = make_detection(home);
         let report = import_memory(&detection, &dest);
@@ -263,7 +270,41 @@ mod tests {
         assert_eq!(report.items_imported, 2);
         assert!(dest.join("memory").join("2024-01-15.md").is_file());
         assert!(dest.join("memory").join("2024-01-16.md").is_file());
+        // .txt files are NOT imported (only .md)
         assert!(!dest.join("memory").join("notes.txt").exists());
+    }
+
+    #[test]
+    fn import_all_markdown_memory_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dest = tmp.path().join("moltis");
+
+        let mem_dir = home.join("workspace").join("memory");
+        std::fs::create_dir_all(&mem_dir).unwrap();
+        std::fs::write(mem_dir.join("2024-01-15.md"), "daily log").unwrap();
+        std::fs::write(
+            mem_dir.join("project-notes.md"),
+            "# Project Notes\nSome notes.",
+        )
+        .unwrap();
+        std::fs::write(
+            mem_dir.join("api-reference.md"),
+            "# API Reference\nEndpoints.",
+        )
+        .unwrap();
+        std::fs::write(mem_dir.join("data.json"), "not imported").unwrap();
+
+        let detection = make_detection(home);
+        let report = import_memory(&detection, &dest);
+
+        // All 3 .md files imported (daily log + 2 custom memory files)
+        assert_eq!(report.items_imported, 3);
+        assert!(dest.join("memory").join("2024-01-15.md").is_file());
+        assert!(dest.join("memory").join("project-notes.md").is_file());
+        assert!(dest.join("memory").join("api-reference.md").is_file());
+        // Non-.md files skipped
+        assert!(!dest.join("memory").join("data.json").exists());
     }
 
     #[test]

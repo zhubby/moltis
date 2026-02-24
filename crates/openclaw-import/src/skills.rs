@@ -117,6 +117,7 @@ pub fn import_skills(detection: &OpenClawDetection, dest_skills_dir: &Path) -> C
         category: ImportCategory::Skills,
         status,
         items_imported: imported,
+        items_updated: 0,
         items_skipped: skipped,
         warnings,
         errors,

@@ -2269,7 +2269,7 @@ function OpenClawImportStep({ onNext, onBack }) {
 			key: "memory",
 			label: "Memory",
 			available: scan.memory_available,
-			detail: `${scan.daily_logs_count} daily log(s)`,
+			detail: `${scan.memory_files_count} memory file(s)`,
 		},
 		{
 			key: "channels",

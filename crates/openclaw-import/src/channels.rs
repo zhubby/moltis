@@ -82,6 +82,7 @@ pub fn import_channels(detection: &OpenClawDetection) -> (CategoryReport, Import
         category: ImportCategory::Channels,
         status,
         items_imported: imported,
+        items_updated: 0,
         items_skipped: 0,
         warnings,
         errors: Vec::new(),

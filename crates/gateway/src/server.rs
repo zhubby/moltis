@@ -2911,6 +2911,77 @@ pub async fn start_gateway(
         }
     }
 
+    // Spawn OpenClaw session watcher for automatic background syncing.
+    #[cfg(all(feature = "file-watcher", feature = "openclaw-import"))]
+    {
+        if let Some(detection) = moltis_openclaw_import::detect() {
+            let import_agent = if detection.agent_ids.contains(&"main".to_string()) {
+                "main"
+            } else {
+                detection
+                    .agent_ids
+                    .first()
+                    .map(|s| s.as_str())
+                    .unwrap_or("main")
+            };
+            let sessions_dir = detection
+                .home_dir
+                .join("agents")
+                .join(import_agent)
+                .join("agent")
+                .join("sessions");
+            if sessions_dir.is_dir() {
+                match moltis_openclaw_import::watcher::ImportWatcher::start(sessions_dir) {
+                    Ok((_watcher, mut rx)) => {
+                        info!("openclaw: session watcher started");
+                        let watcher_data_dir = data_dir.clone();
+                        tokio::spawn(async move {
+                            let _watcher = _watcher; // keep alive
+                            let mut interval =
+                                tokio::time::interval(std::time::Duration::from_secs(60));
+                            interval.tick().await; // skip first immediate tick
+                            loop {
+                                tokio::select! {
+                                    Some(_event) = rx.recv() => {
+                                        debug!("openclaw: session change detected, running incremental import");
+                                        let report = moltis_openclaw_import::import_sessions_only(
+                                            &detection, &watcher_data_dir,
+                                        );
+                                        if report.items_imported > 0 || report.items_updated > 0 {
+                                            info!(
+                                                imported = report.items_imported,
+                                                updated = report.items_updated,
+                                                skipped = report.items_skipped,
+                                                "openclaw: incremental session sync complete"
+                                            );
+                                        }
+                                    }
+                                    _ = interval.tick() => {
+                                        debug!("openclaw: periodic session sync");
+                                        let report = moltis_openclaw_import::import_sessions_only(
+                                            &detection, &watcher_data_dir,
+                                        );
+                                        if report.items_imported > 0 || report.items_updated > 0 {
+                                            info!(
+                                                imported = report.items_imported,
+                                                updated = report.items_updated,
+                                                skipped = report.items_skipped,
+                                                "openclaw: periodic session sync complete"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    },
+                    Err(e) => {
+                        warn!("openclaw: failed to start session watcher: {e}");
+                    },
+                }
+            }
+        }
+    }
+
     // Spawn MCP health polling + auto-restart background task.
     {
         let health_state = Arc::clone(&state);

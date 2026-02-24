@@ -68,7 +68,7 @@ impl OnboardingService for GatewayOnboardingService {
                     "providers_available": scan.providers_available,
                     "skills_count": scan.skills_count,
                     "memory_available": scan.memory_available,
-                    "daily_logs_count": scan.daily_logs_count,
+                    "memory_files_count": scan.memory_files_count,
                     "channels_available": scan.channels_available,
                     "telegram_accounts": scan.telegram_accounts,
                     "sessions_count": scan.sessions_count,

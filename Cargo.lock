@@ -5055,6 +5055,7 @@ dependencies = [
  "dirs-next",
  "json5",
  "moltis-config",
+ "notify-debouncer-full",
  "secrecy 0.8.0",
  "serde",
  "serde_json",

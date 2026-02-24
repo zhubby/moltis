@@ -19,6 +19,8 @@ pub mod report;
 pub mod sessions;
 pub mod skills;
 pub mod types;
+#[cfg(feature = "file-watcher")]
+pub mod watcher;
 
 use std::path::Path;
 
@@ -64,7 +66,7 @@ pub struct ImportScan {
     pub providers_available: bool,
     pub skills_count: usize,
     pub memory_available: bool,
-    pub daily_logs_count: usize,
+    pub memory_files_count: usize,
     pub channels_available: bool,
     pub telegram_accounts: usize,
     pub sessions_count: usize,
@@ -76,7 +78,7 @@ pub struct ImportScan {
 /// Scan an OpenClaw installation without importing anything.
 pub fn scan(detection: &OpenClawDetection) -> ImportScan {
     let skills = skills::discover_skills(detection);
-    let daily_logs_count = count_daily_logs(&detection.workspace_dir);
+    let memory_files_count = count_memory_files(&detection.workspace_dir);
 
     let (_, channels_result) = channels::import_channels(detection);
     let telegram_accounts = channels_result.telegram.len();
@@ -90,7 +92,7 @@ pub fn scan(detection: &OpenClawDetection) -> ImportScan {
         providers_available,
         skills_count: skills.len(),
         memory_available: detection.has_memory,
-        daily_logs_count,
+        memory_files_count,
         channels_available: telegram_accounts > 0,
         telegram_accounts,
         sessions_count: detection.session_count,
@@ -170,7 +172,12 @@ pub fn import(
     // Sessions
     if selection.sessions {
         let sessions_dir = data_dir.join("sessions");
-        report.add_category(sessions::import_sessions(detection, &sessions_dir));
+        let memory_sessions_dir = data_dir.join("memory").join("sessions");
+        report.add_category(sessions::import_sessions(
+            detection,
+            &sessions_dir,
+            &memory_sessions_dir,
+        ));
     }
 
     // MCP Servers
@@ -187,6 +194,16 @@ pub fn import(
     let _ = save_import_state(&state_path, &report);
 
     report
+}
+
+/// Run an incremental import of sessions only.
+///
+/// This is used by the file watcher to sync new/changed sessions without
+/// re-running the full import (identity, providers, skills, etc.).
+pub fn import_sessions_only(detection: &OpenClawDetection, data_dir: &Path) -> CategoryReport {
+    let sessions_dir = data_dir.join("sessions");
+    let memory_sessions_dir = data_dir.join("memory").join("sessions");
+    sessions::import_sessions(detection, &sessions_dir, &memory_sessions_dir)
 }
 
 /// Persistent import state for idempotency tracking.
@@ -344,7 +361,7 @@ fn add_todos(report: &mut ImportReport, detection: &OpenClawDetection) {
     );
 }
 
-fn count_daily_logs(workspace_dir: &Path) -> usize {
+fn count_memory_files(workspace_dir: &Path) -> usize {
     let daily_dir = workspace_dir.join("memory");
     if !daily_dir.is_dir() {
         return 0;
@@ -455,7 +472,7 @@ mod tests {
         assert!(scan_result.providers_available);
         assert_eq!(scan_result.skills_count, 1);
         assert!(scan_result.memory_available);
-        assert_eq!(scan_result.daily_logs_count, 1);
+        assert_eq!(scan_result.memory_files_count, 1);
         assert!(scan_result.channels_available);
         assert_eq!(scan_result.telegram_accounts, 1);
         assert_eq!(scan_result.sessions_count, 1);

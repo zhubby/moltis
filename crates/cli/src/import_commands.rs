@@ -86,7 +86,7 @@ fn handle_detect(json_output: bool) -> anyhow::Result<()> {
     print_scan_item(
         "Memory",
         scan.memory_available,
-        Some(format!("{} daily log(s)", scan.daily_logs_count)),
+        Some(format!("{} memory file(s)", scan.memory_files_count)),
     );
     print_scan_item(
         "Channels",
@@ -285,7 +285,7 @@ fn print_scan_summary(scan: &moltis_openclaw_import::ImportScan) {
     print_scan_item(
         "Memory",
         scan.memory_available,
-        Some(format!("{} daily log(s)", scan.daily_logs_count)),
+        Some(format!("{} memory file(s)", scan.memory_files_count)),
     );
     print_scan_item(
         "Channels",
@@ -337,10 +337,17 @@ fn print_report(report: &moltis_openclaw_import::report::ImportReport) {
             ImportStatus::Skipped => "-",
             ImportStatus::Failed => "!",
         };
-        println!(
-            "  [{icon}] {}: {} imported, {} skipped",
-            cat.category, cat.items_imported, cat.items_skipped,
-        );
+        if cat.items_updated > 0 {
+            println!(
+                "  [{icon}] {}: {} imported, {} updated, {} skipped",
+                cat.category, cat.items_imported, cat.items_updated, cat.items_skipped,
+            );
+        } else {
+            println!(
+                "  [{icon}] {}: {} imported, {} skipped",
+                cat.category, cat.items_imported, cat.items_skipped,
+            );
+        }
         for w in &cat.warnings {
             println!("      warning: {w}");
         }
