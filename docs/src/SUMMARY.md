@@ -32,6 +32,7 @@
 - [Scheduling (Cron Jobs)](scheduling.md)
 - [Skill Self-Extension](skill-tools.md)
 - [Mobile PWA](mobile-pwa.md)
+- [OpenClaw Import](openclaw-import.md)
 
 ---
 
