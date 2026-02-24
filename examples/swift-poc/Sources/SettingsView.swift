@@ -61,7 +61,7 @@ enum SettingsSection: String, CaseIterable, Hashable {
         .monitoring: "chart.bar",
         .logs: "doc.plaintext",
         .graphql: "dot.squareshape.split.2x2",
-        .configuration: "slider.horizontal.3"
+        .configuration: "slider.horizontal.3",
     ]
 
     private static let groupMap: [SettingsSection: SettingsGroup] = [
@@ -84,7 +84,7 @@ enum SettingsSection: String, CaseIterable, Hashable {
         .monitoring: .systems,
         .logs: .systems,
         .graphql: .systems,
-        .configuration: .systems
+        .configuration: .systems,
     ]
 }
 
@@ -105,18 +105,25 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
         } detail: {
             ScrollView {
-                SettingsSectionContent(
-                    section: selectedSection,
-                    settings: settings
-                )
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingsSectionContent(
+                        section: selectedSection,
+                        settings: settings
+                    )
+                }
+                .toggleStyle(MoltisFormToggleStyle())
                 .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: 600, alignment: .leading)
+            }
+            .scrollContentBackground(.hidden)
+            .background {
+                VisualEffectBackground(material: .underPageBackground)
             }
         }
-        .frame(minWidth: 980, minHeight: 700)
+        .frame(minWidth: 900, minHeight: 625)
     }
 
     private func sections(for group: SettingsGroup) -> [SettingsSection] {

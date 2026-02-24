@@ -1,75 +1,94 @@
 import Foundation
 
 enum OnboardingStep: Int, CaseIterable {
-    case welcome
-    case identity
     case llm
     case voice
-    case ready
+    case channels
+    case identity
+    case summary
 
     var symbolName: String {
         switch self {
-        case .welcome:
-            return "sparkles"
-        case .identity:
-            return "person.crop.circle.fill"
         case .llm:
             return "cpu.fill"
         case .voice:
             return "waveform.circle.fill"
-        case .ready:
+        case .channels:
+            return "point.3.connected.trianglepath.dotted"
+        case .identity:
+            return "person.crop.circle.fill"
+        case .summary:
             return "checkmark.seal.fill"
         }
     }
 
-    var railLabel: String {
+    var label: String {
         switch self {
-        case .welcome:
-            return "Welcome"
-        case .identity:
-            return "Identity"
         case .llm:
-            return "Model"
+            return "LLM"
         case .voice:
             return "Voice"
-        case .ready:
-            return "Ready"
+        case .channels:
+            return "Channels"
+        case .identity:
+            return "Identity"
+        case .summary:
+            return "Summary"
         }
     }
 
     var title: String {
         switch self {
-        case .welcome:
-            return "Welcome to Moltis"
-        case .identity:
-            return "Assistant Identity"
         case .llm:
             return "Language Model"
         case .voice:
             return "Voice"
-        case .ready:
+        case .channels:
+            return "Channels"
+        case .identity:
+            return "Assistant Identity"
+        case .summary:
             return "Ready to Go"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .welcome:
-            return "Set up your assistant in a few quick steps."
-        case .identity:
-            return "Give your assistant a name and personality."
         case .llm:
             return "Choose your preferred model and provider."
         case .voice:
             return "Optionally enable voice interaction."
-        case .ready:
+        case .channels:
+            return "Configure channel routing and sender policies."
+        case .identity:
+            return "Give your assistant a name and personality."
+        case .summary:
             return "Everything looks good. You're all set."
         }
     }
-}
 
-enum RailStepState {
-    case upcoming
-    case current
-    case done
+    /// Maps to the SettingsSection that provides content for this step.
+    /// Summary has no corresponding settings section.
+    var settingsSection: SettingsSection? {
+        switch self {
+        case .llm:
+            return .llms
+        case .voice:
+            return .voice
+        case .channels:
+            return .channels
+        case .identity:
+            return .identity
+        case .summary:
+            return nil
+        }
+    }
+
+    var stepNumber: Int {
+        rawValue + 1
+    }
+
+    static var totalSteps: Int {
+        allCases.count
+    }
 }

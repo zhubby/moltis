@@ -18,109 +18,91 @@ struct SettingsSectionContent: View {
     }
 }
 
+// MARK: - Routing
+
 private extension SettingsSectionContent {
     @ViewBuilder
-    private var generalContent: some View {
+    var generalContent: some View {
         switch section {
-        case .identity:
-            identityPane
-        case .environment:
-            environmentPane
-        case .memory:
-            memoryPane
-        case .notifications:
-            notificationsPane
-        case .crons:
-            cronsPane
-        case .heartbeat:
-            heartbeatPane
-        default:
-            EmptyView()
+        case .identity: identityPane
+        case .environment: environmentPane
+        case .memory: memoryPane
+        case .notifications: notificationsPane
+        case .crons: cronsPane
+        case .heartbeat: heartbeatPane
+        default: EmptyView()
         }
     }
 
     @ViewBuilder
-    private var securityContent: some View {
+    var securityContent: some View {
         switch section {
-        case .security:
-            securityPane
-        case .tailscale:
-            tailscalePane
-        default:
-            EmptyView()
+        case .security: securityPane
+        case .tailscale: tailscalePane
+        default: EmptyView()
         }
     }
 
     @ViewBuilder
-    private var integrationsContent: some View {
+    var integrationsContent: some View {
         switch section {
-        case .channels:
-            channelsPane
-        case .hooks:
-            hooksPane
-        case .llms:
-            llmsPane
-        case .mcp:
-            mcpPane
-        case .skills:
-            skillsPane
-        case .voice:
-            voicePane
-        default:
-            EmptyView()
+        case .channels: channelsPane
+        case .hooks: hooksPane
+        case .llms: llmsPane
+        case .mcp: mcpPane
+        case .skills: skillsPane
+        case .voice: voicePane
+        default: EmptyView()
         }
     }
 
     @ViewBuilder
-    private var systemsContent: some View {
+    var systemsContent: some View {
         switch section {
-        case .terminal:
-            terminalPane
-        case .sandboxes:
-            sandboxesPane
-        case .monitoring:
-            monitoringPane
-        case .logs:
-            logsPane
-        case .graphql:
-            graphqlPane
-        case .configuration:
-            configurationPane
-        default:
-            EmptyView()
+        case .terminal: terminalPane
+        case .sandboxes: sandboxesPane
+        case .monitoring: monitoringPane
+        case .logs: logsPane
+        case .graphql: graphqlPane
+        case .configuration: configurationPane
+        default: EmptyView()
+        }
+    }
+}
+
+// MARK: - General Panes
+
+private extension SettingsSectionContent {
+    var identityPane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            MoltisSection {
+                TextField("Display name", text: $settings.identityName)
+                    .annotation("The name shown in chat headers and channel messages")
+            }
+            MoltisSection {
+                MoltisEditorField(
+                    title: "Soul Prompt",
+                    text: $settings.identitySoul
+                )
+            }
         }
     }
 
-    private var identityPane: some View {
-        settingsPanel(
-            title: "Identity",
-            subtitle: "Assistant identity and default soul behavior."
-        ) {
-            TextField("Display name", text: $settings.identityName)
-            editor(
-                title: "Soul Prompt",
-                text: $settings.identitySoul,
-                minHeight: 180
-            )
-        }
-    }
-
-    private var environmentPane: some View {
-        settingsPanel(
-            title: "Environment",
-            subtitle: "Core config and data directory locations."
-        ) {
+    var environmentPane: some View {
+        MoltisSection {
             TextField("Config directory", text: $settings.environmentConfigDir)
+                .annotation("Location of moltis.toml and credentials")
+            Divider()
             TextField("Data directory", text: $settings.environmentDataDir)
+                .annotation("Location of databases, sessions, and logs")
         }
     }
 
-    private var memoryPane: some View {
-        settingsPanel(
-            title: "Memory",
-            subtitle: "Memory behavior and scope."
-        ) {
+    var memoryPane: some View {
+        MoltisSection {
             Toggle("Enable memory", isOn: $settings.memoryEnabled)
+                .annotation("Allow the assistant to remember context across sessions")
+            Divider()
             Picker("Memory mode", selection: $settings.memoryMode) {
                 ForEach(settings.memoryModes, id: \.self) { mode in
                     Text(mode.capitalized).tag(mode)
@@ -130,35 +112,29 @@ private extension SettingsSectionContent {
         }
     }
 
-    private var notificationsPane: some View {
-        settingsPanel(
-            title: "Notifications",
-            subtitle: "Desktop notifications and sound behavior."
-        ) {
+    var notificationsPane: some View {
+        MoltisSection {
             Toggle("Enable notifications", isOn: $settings.notificationsEnabled)
+                .annotation("Show desktop notifications for incoming messages")
+            Divider()
             Toggle("Play sounds", isOn: $settings.notificationsSoundEnabled)
         }
     }
 
-    private var cronsPane: some View {
-        settingsPanel(
-            title: "Crons",
-            subtitle: "Cron jobs configuration from web settings."
-        ) {
-            editor(
+    var cronsPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "Cron Definitions",
-                text: $settings.cronJobs,
-                minHeight: 180
+                text: $settings.cronJobs
             )
         }
     }
 
-    private var heartbeatPane: some View {
-        settingsPanel(
-            title: "Heartbeat",
-            subtitle: "Heartbeat scheduler controls."
-        ) {
+    var heartbeatPane: some View {
+        MoltisSection {
             Toggle("Enable heartbeat", isOn: $settings.heartbeatEnabled)
+                .annotation("Periodically check system health")
+            Divider()
             Stepper(
                 "Interval: \(settings.heartbeatIntervalMinutes) min",
                 value: $settings.heartbeatIntervalMinutes,
@@ -166,216 +142,165 @@ private extension SettingsSectionContent {
             )
         }
     }
+}
 
-    private var securityPane: some View {
-        settingsPanel(
-            title: "Security",
-            subtitle: "Authentication and credential controls."
-        ) {
+// MARK: - Security Panes
+
+private extension SettingsSectionContent {
+    var securityPane: some View {
+        MoltisSection {
             Toggle("Require password login", isOn: $settings.requirePassword)
+                .annotation("Protect the web UI with password authentication")
+            Divider()
             Toggle("Enable passkeys", isOn: $settings.passkeysEnabled)
+                .annotation("Allow WebAuthn passkey login")
         }
     }
 
-    private var tailscalePane: some View {
-        settingsPanel(
-            title: "Tailscale",
-            subtitle: "Remote connectivity settings."
-        ) {
+    var tailscalePane: some View {
+        MoltisSection {
             Toggle("Enable Tailscale", isOn: $settings.tailscaleEnabled)
+                .annotation("Expose the instance over your Tailscale network")
+            Divider()
             TextField("Hostname", text: $settings.tailscaleHostname)
         }
     }
+}
 
-    private var channelsPane: some View {
-        settingsPanel(
-            title: "Channels",
-            subtitle: "Channel routing and sender policies."
-        ) {
-            editor(
+// MARK: - Integrations Panes
+
+private extension SettingsSectionContent {
+    var channelsPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "Channel Rules",
-                text: $settings.channelRules,
-                minHeight: 180
+                text: $settings.channelRules
             )
         }
     }
 
-    private var hooksPane: some View {
-        settingsPanel(
-            title: "Hooks",
-            subtitle: "Hook commands and trigger settings."
-        ) {
-            editor(
+    var hooksPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "Hooks Config",
-                text: $settings.hooksConfig,
-                minHeight: 180
+                text: $settings.hooksConfig
             )
         }
     }
 
-    private var llmsPane: some View {
-        settingsPanel(
-            title: "LLMs",
-            subtitle: "Provider, model, and auth values."
-        ) {
+    var llmsPane: some View {
+        MoltisSection {
             Picker("Provider", selection: $settings.llmProvider) {
                 ForEach(settings.llmProviders, id: \.self) { provider in
                     Text(provider.capitalized).tag(provider)
                 }
             }
-
+            Divider()
             TextField("Model", text: $settings.llmModel)
+            Divider()
             SecureField("API key", text: $settings.llmApiKey)
         }
     }
 
-    private var mcpPane: some View {
-        settingsPanel(
-            title: "MCP",
-            subtitle: "MCP server registrations and transport settings."
-        ) {
-            editor(
+    var mcpPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "MCP Servers",
-                text: $settings.mcpServers,
-                minHeight: 180
+                text: $settings.mcpServers
             )
         }
     }
 
-    private var skillsPane: some View {
-        settingsPanel(
-            title: "Skills",
-            subtitle: "Enabled skill packs and repositories."
-        ) {
-            editor(
+    var skillsPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "Skills",
-                text: $settings.skills,
-                minHeight: 180
+                text: $settings.skills
             )
         }
     }
 
-    private var voicePane: some View {
-        settingsPanel(
-            title: "Voice",
-            subtitle: "TTS and STT provider configuration."
-        ) {
+    var voicePane: some View {
+        MoltisSection {
             Toggle("Enable voice", isOn: $settings.voiceEnabled)
+                .annotation("Enable text-to-speech and speech-to-text")
+            Divider()
             Picker("Voice provider", selection: $settings.voiceProvider) {
                 ForEach(settings.voiceProviders, id: \.self) { provider in
                     Text(provider.capitalized).tag(provider)
                 }
             }
+            Divider()
             SecureField("Voice API key", text: $settings.voiceApiKey)
         }
     }
+}
 
-    private var terminalPane: some View {
-        settingsPanel(
-            title: "Terminal",
-            subtitle: "Host terminal exposure settings."
-        ) {
+// MARK: - Systems Panes
+
+private extension SettingsSectionContent {
+    var terminalPane: some View {
+        MoltisSection {
             Toggle("Enable terminal tool", isOn: $settings.terminalEnabled)
+                .annotation("Allow the assistant to execute shell commands")
+            Divider()
             TextField("Default shell", text: $settings.terminalShell)
         }
     }
 
-    private var sandboxesPane: some View {
-        settingsPanel(
-            title: "Sandboxes",
-            subtitle: "Container backend and image defaults."
-        ) {
+    var sandboxesPane: some View {
+        MoltisSection {
             Picker("Backend", selection: $settings.sandboxBackend) {
                 ForEach(settings.sandboxBackends, id: \.self) { backend in
                     Text(backend.capitalized).tag(backend)
                 }
             }
+            Divider()
             TextField("Default image", text: $settings.sandboxImage)
         }
     }
 
-    private var monitoringPane: some View {
-        settingsPanel(
-            title: "Monitoring",
-            subtitle: "Metrics and tracing controls."
-        ) {
+    var monitoringPane: some View {
+        MoltisSection {
             Toggle("Enable monitoring", isOn: $settings.monitoringEnabled)
+            Divider()
             Toggle("Enable metrics", isOn: $settings.metricsEnabled)
+                .annotation("Expose Prometheus-compatible metrics endpoint")
+            Divider()
             Toggle("Enable tracing", isOn: $settings.tracingEnabled)
+                .annotation("Emit OpenTelemetry traces for async operations")
         }
     }
 
-    private var logsPane: some View {
-        settingsPanel(
-            title: "Logs",
-            subtitle: "Log level and persistence options."
-        ) {
+    var logsPane: some View {
+        MoltisSection {
             Picker("Log level", selection: $settings.logLevel) {
                 ForEach(settings.logLevels, id: \.self) { level in
                     Text(level.uppercased()).tag(level)
                 }
             }
+            Divider()
             Toggle("Persist logs to disk", isOn: $settings.persistLogs)
+                .annotation("Write log files to the data directory")
         }
     }
 
-    private var graphqlPane: some View {
-        settingsPanel(
-            title: "GraphQL",
-            subtitle: "GraphQL endpoint exposure."
-        ) {
+    var graphqlPane: some View {
+        MoltisSection {
             Toggle("Enable GraphQL", isOn: $settings.graphqlEnabled)
+                .annotation("Expose a GraphQL API for programmatic access")
+            Divider()
             TextField("GraphQL path", text: $settings.graphqlPath)
         }
     }
 
-    private var configurationPane: some View {
-        settingsPanel(
-            title: "Configuration",
-            subtitle: "Raw TOML, consumed by Rust validation."
-        ) {
-            editor(
+    var configurationPane: some View {
+        MoltisSection {
+            MoltisEditorField(
                 title: "moltis.toml",
                 text: $settings.configurationToml,
                 minHeight: 320
             )
-        }
-    }
-
-    private func settingsPanel<Content: View>(
-        title: String,
-        subtitle: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.title3.weight(.semibold))
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            content()
-        }
-    }
-
-    private func editor(
-        title: String,
-        text: Binding<String>,
-        minHeight: CGFloat
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.headline)
-
-            TextEditor(text: text)
-                .font(.system(.body, design: .monospaced))
-                .frame(minHeight: minHeight)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(.secondary.opacity(0.3), lineWidth: 1)
-                }
         }
     }
 }

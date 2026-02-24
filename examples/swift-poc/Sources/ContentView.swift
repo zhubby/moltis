@@ -58,11 +58,24 @@ private struct SessionsSidebarView: View {
 private struct SessionRowView: View {
     let session: ChatSession
 
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(session.title)
-                .font(.headline)
-                .lineLimit(1)
+            HStack {
+                Text(session.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Text(Self.timeFormatter.string(from: session.updatedAt))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
 
             Text(session.previewText)
                 .font(.caption)
@@ -95,90 +108,114 @@ private struct ChatDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(sessionTitle)
-                        .font(.title3.weight(.semibold))
-                    Text(chatStore.bridgeSummary)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Button("Load Version") {
-                    chatStore.loadVersion()
-                }
-
-                Button("Settings") {
-                    openSettings()
-                }
-            }
-            .padding(16)
+            headerBar
 
             Divider()
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(sessionMessages) { message in
-                            MessageBubbleView(message: message)
-                                .id(message.id)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
-                }
-                .background(Color(nsColor: .controlBackgroundColor))
-                .onAppear {
-                    if let anchor = chatStore.selectedMessageAnchorID {
-                        proxy.scrollTo(anchor, anchor: .bottom)
-                    }
-                }
-                .onChange(of: chatStore.selectedMessageAnchorID) { _, anchor in
-                    guard let anchor else {
-                        return
-                    }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(anchor, anchor: .bottom)
-                    }
-                }
-            }
+            messageList
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text(chatStore.statusText)
+            inputBar
+        }
+    }
+
+    private var headerBar: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(sessionTitle)
+                    .font(.title3.weight(.semibold))
+                Text(chatStore.bridgeSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
 
-                Text("Config source: Settings > Configuration")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            Spacer()
 
-                HStack(alignment: .bottom, spacing: 10) {
-                    TextField(
-                        "Send a message to Rust bridge...",
-                        text: $chatStore.draftMessage,
-                        axis: .vertical
-                    )
-                    .lineLimit(1 ... 4)
-                    .textFieldStyle(.roundedBorder)
+            Button {
+                openSettings()
+            } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("Settings")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
 
-                    Button(chatStore.isSending ? "Sending..." : "Send") {
-                        chatStore.sendDraftMessage()
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(sessionMessages) { message in
+                        MessageBubbleView(message: message)
+                            .id(message.id)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canSendMessage)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+            }
+            .background {
+                VisualEffectBackground(material: .underPageBackground)
+            }
+            .onAppear {
+                if let anchor = chatStore.selectedMessageAnchorID {
+                    proxy.scrollTo(anchor, anchor: .bottom)
                 }
             }
-            .padding(16)
+            .onChange(of: chatStore.selectedMessageAnchorID) { _, anchor in
+                guard let anchor else {
+                    return
+                }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo(anchor, anchor: .bottom)
+                }
+            }
         }
+    }
+
+    private var inputBar: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(
+                "Message...",
+                text: $chatStore.draftMessage,
+                axis: .vertical
+            )
+            .lineLimit(1 ... 4)
+            .textFieldStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.quaternary, lineWidth: 1)
+            }
+
+            Button {
+                chatStore.sendDraftMessage()
+            } label: {
+                Image(systemName: chatStore.isSending ? "ellipsis.circle" : "arrow.up.circle.fill")
+                    .font(.title2)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canSendMessage)
+            .help("Send message")
+        }
+        .padding(12)
     }
 }
 
 private struct MessageBubbleView: View {
     let message: ChatMessage
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     private var isUser: Bool {
         message.role == .user
@@ -217,9 +254,15 @@ private struct MessageBubbleView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.role.title)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text(message.role.title)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(Self.timeFormatter.string(from: message.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
 
                 Text(message.text)
                     .textSelection(.enabled)

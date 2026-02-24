@@ -20,7 +20,7 @@ struct MoltisPOCApp: App {
                 if onboardingState.isCompleted {
                     ContentView(chatStore: chatStore, settings: settings)
                 } else {
-                    OnboardingHostView(settings: settings) {
+                    OnboardingView(settings: settings) {
                         onboardingState.complete()
                         chatStore.loadVersion()
                     }
