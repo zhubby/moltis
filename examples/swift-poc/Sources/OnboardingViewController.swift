@@ -6,8 +6,9 @@ final class OnboardingViewController: NSViewController {
 
     var currentStep = OnboardingStep.welcome
     var currentContentView: NSView?
-    var railRows: [OnboardingStepRowView] = []
+    var pageDots: OnboardingPageDotsView!
 
+    let heroSymbol = NSImageView()
     let titleLabel = NSTextField(labelWithString: "")
     let subtitleLabel = NSTextField(labelWithString: "")
     let validationLabel = NSTextField(labelWithString: "")
@@ -23,7 +24,8 @@ final class OnboardingViewController: NSViewController {
     let voiceToggle = NSButton(checkboxWithTitle: "Enable voice", target: nil, action: nil)
     let voiceProviderPopup = NSPopUpButton()
     let voiceApiKeyField = NSSecureTextField(string: "")
-    let summaryLabel = NSTextField(wrappingLabelWithString: "")
+
+    var summaryRows: [OnboardingSummaryRow] = []
 
     lazy var welcomeStepView = buildWelcomeStepView()
     lazy var identityStepView = buildIdentityStepView()
@@ -45,7 +47,6 @@ final class OnboardingViewController: NSViewController {
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
         configureStaticControls()
         setupLayout()
@@ -91,31 +92,21 @@ extension OnboardingViewController {
         titleLabel.stringValue = step.title
         subtitleLabel.stringValue = step.subtitle
         validationLabel.stringValue = ""
-        backButton.isEnabled = step != .welcome
-        nextButton.title = step == .ready ? "Launch Chat" : "Continue"
+        backButton.isHidden = step == .welcome
+        nextButton.title = step == .ready ? "Get Started" : "Continue"
 
-        updateRail()
+        if let symbolImage = NSImage(
+            systemSymbolName: step.symbolName,
+            accessibilityDescription: step.title
+        ) {
+            heroSymbol.image = symbolImage
+        }
+
+        pageDots.update(currentIndex: step.rawValue)
         replaceContent(with: makeStepView(step), animated: animated)
 
         if step == .ready {
-            summaryLabel.stringValue = summaryText()
-        }
-    }
-
-    func updateRail() {
-        railRows.enumerated().forEach { index, row in
-            guard let step = OnboardingStep(rawValue: index) else {
-                return
-            }
-            let state: RailStepState
-            if step.rawValue < currentStep.rawValue {
-                state = .done
-            } else if step == currentStep {
-                state = .current
-            } else {
-                state = .upcoming
-            }
-            row.apply(state: state)
+            updateSummary()
         }
     }
 
@@ -221,14 +212,16 @@ extension OnboardingViewController {
         popup.selectItem(at: 0)
     }
 
-    func summaryText() -> String {
-        let voiceStatus = settings.voiceEnabled ? "Enabled (\(settings.voiceProvider))" : "Disabled"
-        return """
-        Identity: \(settings.identityName)
-        LLM: \(settings.llmProvider) / \(settings.llmModel)
-        Voice: \(voiceStatus)
-
-        Next, you'll land in chat sessions with per-message bubbles.
-        """
+    func updateSummary() {
+        let values = [
+            settings.identityName,
+            "\(settings.llmProvider) / \(settings.llmModel)",
+            settings.voiceEnabled ? "Enabled (\(settings.voiceProvider))" : "Disabled"
+        ]
+        for (index, row) in summaryRows.enumerated() where index < values.count {
+            if let valueField = row.viewWithTag(1) as? NSTextField {
+                valueField.stringValue = values[index]
+            }
+        }
     }
 }

@@ -2,40 +2,43 @@ import AppKit
 
 extension OnboardingViewController {
     func buildWelcomeStepView() -> NSView {
-        let stack = makeVerticalStack(spacing: 12)
+        let stack = makeVerticalStack(spacing: 16)
 
-        let headline = NSTextField(labelWithString: "What this onboarding sets up")
-        headline.font = .systemFont(ofSize: 18, weight: .semibold)
-        stack.addArrangedSubview(headline)
-
-        let bullets = [
-            "1. Assistant identity and soul prompt.",
-            "2. Default LLM provider and model.",
-            "3. Optional voice provider defaults."
+        let features = [
+            OnboardingFeatureRow(
+                symbolName: "person.crop.circle.fill",
+                title: "Identity",
+                detail: "Name your assistant and set its personality."
+            ),
+            OnboardingFeatureRow(
+                symbolName: "cpu.fill",
+                title: "Language Model",
+                detail: "Connect to your preferred LLM provider."
+            ),
+            OnboardingFeatureRow(
+                symbolName: "waveform.circle.fill",
+                title: "Voice",
+                detail: "Optionally enable voice interaction."
+            )
         ]
 
-        bullets.forEach { text in
-            let label = NSTextField(wrappingLabelWithString: text)
-            label.font = .systemFont(ofSize: 14, weight: .regular)
-            label.textColor = .labelColor
-            label.maximumNumberOfLines = 2
-            stack.addArrangedSubview(label)
-        }
-
+        features.forEach { stack.addArrangedSubview($0) }
         stack.addArrangedSubview(NSView())
         return stack
     }
 
     func buildIdentityStepView() -> NSView {
-        let stack = makeVerticalStack(spacing: 10)
+        let stack = makeVerticalStack(spacing: 8)
 
         identityNameField.placeholderString = "Assistant display name"
         identityNameField.font = .systemFont(ofSize: 14, weight: .regular)
+        identityNameField.controlSize = .large
 
-        let soulScroll = makeTextEditorScrollView(textView: soulPromptTextView, minHeight: 180)
+        let soulScroll = makeTextEditorScrollView(textView: soulPromptTextView, minHeight: 140)
 
         stack.addArrangedSubview(makeFieldLabel("Display Name"))
         stack.addArrangedSubview(identityNameField)
+        stack.setCustomSpacing(16, after: identityNameField)
         stack.addArrangedSubview(makeFieldLabel("Soul Prompt"))
         stack.addArrangedSubview(soulScroll)
 
@@ -43,15 +46,20 @@ extension OnboardingViewController {
     }
 
     func buildLlmStepView() -> NSView {
-        let stack = makeVerticalStack(spacing: 10)
+        let stack = makeVerticalStack(spacing: 8)
 
+        providerPopup.controlSize = .large
         modelField.placeholderString = "gpt-4.1"
+        modelField.controlSize = .large
         apiKeyField.placeholderString = "sk-..."
+        apiKeyField.controlSize = .large
 
         stack.addArrangedSubview(makeFieldLabel("Provider"))
         stack.addArrangedSubview(providerPopup)
+        stack.setCustomSpacing(16, after: providerPopup)
         stack.addArrangedSubview(makeFieldLabel("Model"))
         stack.addArrangedSubview(modelField)
+        stack.setCustomSpacing(16, after: modelField)
         stack.addArrangedSubview(makeFieldLabel("API Key"))
         stack.addArrangedSubview(apiKeyField)
 
@@ -59,13 +67,18 @@ extension OnboardingViewController {
     }
 
     func buildVoiceStepView() -> NSView {
-        let stack = makeVerticalStack(spacing: 10)
+        let stack = makeVerticalStack(spacing: 8)
 
+        voiceToggle.controlSize = .large
+        voiceProviderPopup.controlSize = .large
         voiceApiKeyField.placeholderString = "Voice API key"
+        voiceApiKeyField.controlSize = .large
 
         stack.addArrangedSubview(voiceToggle)
+        stack.setCustomSpacing(16, after: voiceToggle)
         stack.addArrangedSubview(makeFieldLabel("Voice Provider"))
         stack.addArrangedSubview(voiceProviderPopup)
+        stack.setCustomSpacing(16, after: voiceProviderPopup)
         stack.addArrangedSubview(makeFieldLabel("Voice API Key"))
         stack.addArrangedSubview(voiceApiKeyField)
 
@@ -73,19 +86,46 @@ extension OnboardingViewController {
     }
 
     func buildReadyStepView() -> NSView {
-        summaryLabel.font = .systemFont(ofSize: 14, weight: .regular)
-        summaryLabel.textColor = .labelColor
-        summaryLabel.maximumNumberOfLines = 0
+        let stack = makeVerticalStack(spacing: 16)
 
-        let tipText = "Tip: use Cmd-, at any time to reopen Settings."
-        let tip = NSTextField(wrappingLabelWithString: tipText)
-        tip.font = .systemFont(ofSize: 13, weight: .medium)
-        tip.textColor = .secondaryLabelColor
+        let card = NSView()
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 10
+        card.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        card.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.4).cgColor
+        card.layer?.borderWidth = 0.5
+        card.translatesAutoresizingMaskIntoConstraints = false
 
-        let stack = NSStackView(views: [summaryLabel, tip, NSView()])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
+        let labels = ["Identity", "Model", "Voice"]
+        let placeholders = ["—", "—", "—"]
+        let cardStack = makeVerticalStack(spacing: 8)
+        cardStack.translatesAutoresizingMaskIntoConstraints = false
+
+        summaryRows = []
+        for (index, label) in labels.enumerated() {
+            let row = OnboardingSummaryRow(label: label, value: placeholders[index])
+            summaryRows.append(row)
+            cardStack.addArrangedSubview(row)
+        }
+
+        card.addSubview(cardStack)
+        NSLayoutConstraint.activate([
+            cardStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            cardStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+            cardStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
+            cardStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14)
+        ])
+
+        let tip = NSTextField(wrappingLabelWithString: "You can change these anytime in Settings (\u{2318},).")
+        tip.font = .systemFont(ofSize: 12, weight: .regular)
+        tip.textColor = .tertiaryLabelColor
+
+        stack.addArrangedSubview(card)
+        stack.addArrangedSubview(tip)
+        stack.addArrangedSubview(NSView())
+
+        card.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
         return stack
     }
 
@@ -99,7 +139,7 @@ extension OnboardingViewController {
 
     func makeFieldLabel(_ value: String) -> NSTextField {
         let label = NSTextField(labelWithString: value)
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
         label.textColor = .secondaryLabelColor
         return label
     }

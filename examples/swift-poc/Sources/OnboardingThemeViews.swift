@@ -1,18 +1,37 @@
 import AppKit
 
-final class OnboardingGradientView: NSView {
-    private let gradientLayer = CAGradientLayer()
+final class OnboardingPageDotsView: NSView {
+    private var dots: [NSView] = []
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        gradientLayer.colors = [
-            NSColor(calibratedRed: 0.08, green: 0.24, blue: 0.44, alpha: 1).cgColor,
-            NSColor(calibratedRed: 0.10, green: 0.40, blue: 0.65, alpha: 1).cgColor
-        ]
-        gradientLayer.startPoint = CGPoint(x: 0, y: 1)
-        gradientLayer.endPoint = CGPoint(x: 1, y: 0)
-        layer?.addSublayer(gradientLayer)
+    init(count: Int) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        for _ in 0..<count {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 3.5
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                dot.widthAnchor.constraint(equalToConstant: 7),
+                dot.heightAnchor.constraint(equalToConstant: 7)
+            ])
+            dots.append(dot)
+            stack.addArrangedSubview(dot)
+        }
     }
 
     @available(*, unavailable)
@@ -20,40 +39,62 @@ final class OnboardingGradientView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layout() {
-        super.layout()
-        gradientLayer.frame = bounds
+    func update(currentIndex: Int) {
+        for (index, dot) in dots.enumerated() {
+            if index == currentIndex {
+                dot.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            } else if index < currentIndex {
+                dot.layer?.backgroundColor = NSColor.controlAccentColor
+                    .withAlphaComponent(0.35).cgColor
+            } else {
+                dot.layer?.backgroundColor = NSColor.separatorColor.cgColor
+            }
+        }
     }
 }
 
-final class OnboardingStepRowView: NSView {
-    private let dotView = NSView()
-    private let textField = NSTextField(labelWithString: "")
-
-    init(title: String) {
+final class OnboardingFeatureRow: NSView {
+    init(symbolName: String, title: String, detail: String) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        dotView.wantsLayer = true
-        dotView.layer?.cornerRadius = 5
-        dotView.translatesAutoresizingMaskIntoConstraints = false
+        let icon = NSImageView()
+        if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: title) {
+            icon.image = image
+        }
+        icon.contentTintColor = .controlAccentColor
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 36),
+            icon.heightAnchor.constraint(equalToConstant: 36)
+        ])
 
-        textField.stringValue = title
-        textField.font = .systemFont(ofSize: 13, weight: .medium)
-        textField.translatesAutoresizingMaskIntoConstraints = false
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .labelColor
 
-        addSubview(dotView)
-        addSubview(textField)
+        let detailLabel = NSTextField(labelWithString: detail)
+        detailLabel.font = .systemFont(ofSize: 12, weight: .regular)
+        detailLabel.textColor = .secondaryLabelColor
+
+        let textStack = NSStackView(views: [titleLabel, detailLabel])
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 1
+
+        let row = NSStackView(views: [icon, textStack])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
 
         NSLayoutConstraint.activate([
-            dotView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            dotView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dotView.widthAnchor.constraint(equalToConstant: 10),
-            dotView.heightAnchor.constraint(equalToConstant: 10),
-            textField.leadingAnchor.constraint(equalTo: dotView.trailingAnchor, constant: 9),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor),
-            textField.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
     }
 
@@ -61,19 +102,42 @@ final class OnboardingStepRowView: NSView {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+}
 
-    func apply(state: RailStepState) {
-        switch state {
-        case .upcoming:
-            dotView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.35).cgColor
-            textField.textColor = NSColor.white.withAlphaComponent(0.72)
-        case .current:
-            dotView.layer?.backgroundColor = NSColor.white.cgColor
-            textField.textColor = .white
-        case .done:
-            let doneColor = NSColor(calibratedRed: 0.66, green: 0.93, blue: 0.76, alpha: 1)
-            dotView.layer?.backgroundColor = doneColor.cgColor
-            textField.textColor = NSColor.white.withAlphaComponent(0.9)
-        }
+final class OnboardingSummaryRow: NSView {
+    init(label: String, value: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        let labelField = NSTextField(labelWithString: label)
+        labelField.font = .systemFont(ofSize: 12, weight: .medium)
+        labelField.textColor = .secondaryLabelColor
+        labelField.alignment = .right
+        labelField.translatesAutoresizingMaskIntoConstraints = false
+        labelField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+
+        let valueField = NSTextField(labelWithString: value)
+        valueField.font = .systemFont(ofSize: 13, weight: .regular)
+        valueField.textColor = .labelColor
+        valueField.tag = 1
+
+        let row = NSStackView(views: [labelField, valueField])
+        row.orientation = .horizontal
+        row.alignment = .firstBaseline
+        row.spacing = 10
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
     }
 }
