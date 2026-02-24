@@ -199,7 +199,22 @@ HTTP mode. The key settings are:</p>
 <tr><td><code>MOLTIS_DEPLOY_PLATFORM</code></td><td>Deploy platform</td><td>Hides local-only providers (see below)</td></tr>
 <tr><td><code>MOLTIS_PASSWORD</code></td><td>Initial password</td><td>Set auth password via environment variable</td></tr>
 </tbody></table>
-</div><div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
+</div><div id="admonition-tip" class="admonition admonish-tip" role="note" aria-labelledby="admonition-tip-title">
+<div class="admonition-title">
+<div id="admonition-tip-title">
+<p>Tip</p>
+</div>
+<a class="admonition-anchor-link" href="#admonition-tip"></a>
+</div>
+<div>
+<p>If requests to your domain are redirected to <code>:13131</code>, Moltis TLS is still
+enabled behind a TLS-terminating proxy. Use <code>--no-tls</code> (or
+<code>MOLTIS_NO_TLS=true</code>).</p>
+<p>Only keep Moltis TLS enabled when your proxy talks HTTPS to Moltis (or uses
+TCP TLS passthrough). In that case, set <code>MOLTIS_ALLOW_TLS_BEHIND_PROXY=true</code>.</p>
+</div>
+</div>
+<div id="admonition-warning" class="admonition admonish-warning" role="note" aria-labelledby="admonition-warning-title">
 <div class="admonition-title">
 <div id="admonition-warning-title">
 <p>Warning</p>

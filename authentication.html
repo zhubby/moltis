@@ -428,12 +428,15 @@ automatically classify connections as remote</li>
 <li><strong>Bare proxies</strong> (no forwarding headers) can appear local — set
 <code>MOLTIS_BEHIND_PROXY=true</code> to force all connections to be treated as
 remote</li>
-<li>The proxy must forward <code>Origin</code> and <code>Host</code> headers for WebSocket
-CSWSH protection</li>
+<li>The proxy must preserve the browser origin host for WebSocket CSWSH
+protection (forward <code>Host</code>, or <code>X-Forwarded-Host</code> when rewriting <code>Host</code>)</li>
 <li>TLS termination typically happens at the proxy</li>
+<li>Passkeys are tied to the RP ID/host identity; host/domain changes usually
+require registering new passkeys on the new host</li>
 </ul>
 <p>See <a href="security.html#reverse-proxy-deployments">Security Architecture</a> for
-detailed proxy deployment guidance.</p>
+detailed proxy deployment guidance, including a Nginx Proxy Manager
+header snippet and passkey migration guidance.</p>
 <h2 id="session-management"><a class="header" href="#session-management">Session Management</a></h2>
 <div class="table-wrapper"><table><thead><tr><th>Operation</th><th>Endpoint</th><th>Auth required</th></tr></thead><tbody>
 <tr><td>Check status</td><td><code>GET /api/auth/status</code></td><td>No</td></tr>

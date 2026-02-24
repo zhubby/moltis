@@ -291,6 +291,8 @@ the Docker socket mount for sandboxed command execution.</p>
 <ul>
 <li>Set <code>MOLTIS_PASSWORD</code> in the Coolify UI before first deploy.</li>
 <li>Set <code>SERVICE_FQDN_MOLTIS_13131</code> to your app domain.</li>
+<li>Keep Moltis in <code>--no-tls</code> mode behind Coolify’s reverse proxy. If requests
+are redirected to <code>:13131</code>, check that TLS is disabled in Moltis.</li>
 <li>Keep <code>/var/run/docker.sock:/var/run/docker.sock</code> mounted if you want sandbox
 isolation for exec tools.</li>
 </ul>

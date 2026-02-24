@@ -469,15 +469,68 @@ Once a password is configured (Tier 1), authentication is required
 for all traffic regardless of <code>is_local_connection()</code>.</p>
 </li>
 <li>
-<p><strong>WebSocket proxying</strong> must forward the <code>Origin</code> and <code>Host</code> headers
-correctly.  Moltis validates same-origin on WebSocket upgrades to
-prevent cross-site WebSocket hijacking (CSWSH).</p>
+<p><strong>WebSocket proxying</strong> must preserve browser origin host info
+(<code>Host</code>, or <code>X-Forwarded-Host</code> if <code>Host</code> is rewritten). Moltis
+validates same-origin on WebSocket upgrades to prevent cross-site
+WebSocket hijacking (CSWSH).</p>
 </li>
 <li>
-<p><strong>TLS termination</strong> should happen at the proxy.  Moltis can also
-serve TLS directly (<code>[tls] enabled = true</code>), but most proxy setups
-handle certificates at the edge.</p>
+<p><strong>TLS termination</strong> should happen at the proxy. Run Moltis with
+<code>--no-tls</code> (or <code>MOLTIS_NO_TLS=true</code>) in this mode.</p>
+<p>If your browser is being redirected to <code>https://&lt;domain&gt;:13131</code>,
+Moltis TLS is still enabled while your proxy upstream is plain HTTP.</p>
 </li>
+<li>
+<p><strong>Advanced TLS upstream mode</strong> (optional): if your proxy connects to
+Moltis using HTTPS upstream (or TCP TLS passthrough), you may keep
+Moltis TLS enabled. Set <code>MOLTIS_ALLOW_TLS_BEHIND_PROXY=true</code> to
+acknowledge this non-default setup.</p>
+</li>
+</ol>
+<h3 id="nginx-proxy-manager-known-good-headers"><a class="header" href="#nginx-proxy-manager-known-good-headers">Nginx Proxy Manager (known-good headers)</a></h3>
+<p>If WebSockets fail behind NPM while HTTP works, ensure:</p>
+<ul>
+<li>Moltis runs with <code>MOLTIS_BEHIND_PROXY=true</code></li>
+<li>For standard edge TLS termination, Moltis runs with <code>--no-tls</code></li>
+<li>NPM preserves browser host/origin context</li>
+</ul>
+<p>Use this in NPM’s <strong>Advanced</strong> field:</p>
+<pre><code class="language-nginx">proxy_set_header Host $host;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";
+</code></pre>
+<p>Upstream scheme guidance:</p>
+<ul>
+<li><strong>Edge TLS termination (most setups)</strong>: proxy to <code>http://&lt;moltis-host&gt;:13131</code>
+with Moltis started using <code>--no-tls</code></li>
+<li><strong>HTTPS upstream / TLS passthrough</strong>: proxy to <code>https://&lt;moltis-host&gt;:13131</code>
+and set <code>MOLTIS_ALLOW_TLS_BEHIND_PROXY=true</code></li>
+</ul>
+<h3 id="passkeys-behind-proxies-host-changes"><a class="header" href="#passkeys-behind-proxies-host-changes">Passkeys Behind Proxies (Host Changes)</a></h3>
+<p>WebAuthn passkeys are bound to an RP ID (domain identity), not just the
+server process. In practice:</p>
+<ul>
+<li>If users move from one hostname to another, old passkeys for the old host
+will not authenticate on the new host.</li>
+<li>If a proxy rewrites <code>Host</code> and does not preserve browser host context,
+passkey routes can fail with “no passkey config for this hostname”.</li>
+</ul>
+<p>For stable proxy deployments, set explicit WebAuthn identity to your public
+domain:</p>
+<pre><code class="language-bash">MOLTIS_BEHIND_PROXY=true
+MOLTIS_NO_TLS=true
+MOLTIS_WEBAUTHN_RP_ID=chat.example.com
+MOLTIS_WEBAUTHN_ORIGIN=https://chat.example.com
+</code></pre>
+<p>Migration guidance when changing host/domain:</p>
+<ol>
+<li>Keep password login enabled during migration.</li>
+<li>Deploy with the new <code>MOLTIS_WEBAUTHN_RP_ID</code>/<code>MOLTIS_WEBAUTHN_ORIGIN</code>.</li>
+<li>Ask users to register a new passkey on the new host.</li>
+<li>Remove old passkeys after new-host login is confirmed.</li>
 </ol>
 <h2 id="production-recommendations"><a class="header" href="#production-recommendations">Production Recommendations</a></h2>
 <h3 id="1-enable-authentication"><a class="header" href="#1-enable-authentication">1. Enable Authentication</a></h3>
