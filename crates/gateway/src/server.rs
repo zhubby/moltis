@@ -2685,8 +2685,12 @@ pub async fn start_gateway(
     // expensive and noisy — non-chat models (image, audio, video) would
     // generate spurious warnings.
 
-    // Store heartbeat config on state for gon data and RPC methods.
-    state.inner.write().await.heartbeat_config = config.heartbeat.clone();
+    // Store heartbeat config and channels offered on state for gon data and RPC methods.
+    {
+        let mut inner = state.inner.write().await;
+        inner.heartbeat_config = config.heartbeat.clone();
+        inner.channels_offered = config.channels.offered.clone();
+    }
     #[cfg(feature = "graphql")]
     state.set_graphql_enabled(config.graphql.enabled);
 

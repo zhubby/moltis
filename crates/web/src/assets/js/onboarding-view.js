@@ -2016,16 +2016,16 @@ function VoiceStep({ onNext, onBack }) {
 
 // ── Channel step ────────────────────────────────────────────
 
-function ChannelTypeSelector({ onSelect }) {
+function ChannelTypeSelector({ onSelect, offered }) {
 	return html`<div class="flex gap-3">
-		<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("telegram")}>
+		${offered.has("telegram") && html`<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("telegram")}>
 			<span class="icon icon-xl icon-telegram"></span>
 			<span class="text-sm font-medium text-[var(--text-strong)]">Telegram</span>
-		</button>
-		<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("msteams")}>
+		</button>`}
+		${offered.has("msteams") && html`<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("msteams")}>
 			<span class="icon icon-xl icon-msteams"></span>
 			<span class="text-sm font-medium text-[var(--text-strong)]">Microsoft Teams</span>
-		</button>
+		</button>`}
 	</div>`;
 }
 
@@ -2243,8 +2243,12 @@ function ChannelSuccess({ channelName, channelType: type, onAnother }) {
 }
 
 function ChannelStep({ onNext, onBack }) {
-	var [phase, setPhase] = useState("select");
-	var [selectedType, setSelectedType] = useState(null);
+	var offeredList = getGon("channels_offered") || ["telegram"];
+	var offered = new Set(offeredList);
+	var singleType = offeredList.length === 1 ? offeredList[0] : null;
+
+	var [phase, setPhase] = useState(singleType ? "form" : "select");
+	var [selectedType, setSelectedType] = useState(singleType);
 	var [connectedName, setConnectedName] = useState("");
 	var [connectedType, setConnectedType] = useState(null);
 	var [error, setError] = useState(null);
@@ -2263,20 +2267,27 @@ function ChannelStep({ onNext, onBack }) {
 	}
 
 	function onAnother() {
-		setPhase("select");
-		setSelectedType(null);
-		setError(null);
+		if (singleType) {
+			setPhase("form");
+			setError(null);
+		} else {
+			setPhase("select");
+			setSelectedType(null);
+			setError(null);
+		}
 	}
+
+	var showBackSelector = phase === "form" && !singleType;
 
 	return html`<div class="flex flex-col gap-4">
 		<h2 class="text-lg font-medium text-[var(--text-strong)]">Connect a Channel</h2>
 		<p class="text-xs text-[var(--muted)] leading-relaxed">Connect a messaging channel so you can chat from your phone or team workspace. You can set this up later in Channels.</p>
-		${phase === "select" && html`<${ChannelTypeSelector} onSelect=${onSelectType} />`}
+		${phase === "select" && html`<${ChannelTypeSelector} onSelect=${onSelectType} offered=${offered} />`}
 		${phase === "form" && selectedType === "telegram" && html`<${TelegramForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "form" && selectedType === "msteams" && html`<${TeamsForm} onConnected=${onConnected} error=${error} setError=${setError} />`}
 		${phase === "success" && html`<${ChannelSuccess} channelName=${connectedName} channelType=${connectedType} onAnother=${onAnother} />`}
 		<div class="flex flex-wrap items-center gap-3 mt-1">
-			<button type="button" class="provider-btn provider-btn-secondary" onClick=${phase === "form" ? () => setPhase("select") : onBack}>Back</button>
+			<button type="button" class="provider-btn provider-btn-secondary" onClick=${showBackSelector ? () => setPhase("select") : onBack}>Back</button>
 			${phase === "success" && html`<button type="button" class="provider-btn" onClick=${onNext}>Continue</button>`}
 			<button type="button" class="text-xs text-[var(--muted)] cursor-pointer bg-transparent border-none underline" onClick=${onNext}>Skip for now</button>
 		</div>
