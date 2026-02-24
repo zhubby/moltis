@@ -2017,17 +2017,15 @@ function VoiceStep({ onNext, onBack }) {
 // ── Channel step ────────────────────────────────────────────
 
 function ChannelTypeSelector({ onSelect }) {
-	return html`<div class="flex flex-col gap-3">
-		<div class="flex gap-3">
-			<button type="button" class="backend-card flex-1" onClick=${() => onSelect("telegram")}>
-				<span class="icon icon-telegram"></span>
-				<span class="text-sm font-medium text-[var(--text-strong)]">Telegram</span>
-			</button>
-			<button type="button" class="backend-card flex-1" onClick=${() => onSelect("msteams")}>
-				<span class="icon icon-msteams"></span>
-				<span class="text-sm font-medium text-[var(--text-strong)]">Microsoft Teams</span>
-			</button>
-		</div>
+	return html`<div class="flex gap-3">
+		<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("telegram")}>
+			<span class="icon icon-xl icon-telegram"></span>
+			<span class="text-sm font-medium text-[var(--text-strong)]">Telegram</span>
+		</button>
+		<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("msteams")}>
+			<span class="icon icon-xl icon-msteams"></span>
+			<span class="text-sm font-medium text-[var(--text-strong)]">Microsoft Teams</span>
+		</button>
 	</div>`;
 }
 
