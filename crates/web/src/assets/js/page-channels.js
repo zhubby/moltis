@@ -13,10 +13,10 @@ import {
 	validateChannelFields,
 } from "./channel-utils.js";
 import { onEvent } from "./events.js";
+import { get as getGon } from "./gon.js";
 import { sendRpc } from "./helpers.js";
 import { updateNavCount } from "./nav-counts.js";
 import { connected } from "./signals.js";
-import { get as getGon } from "./gon.js";
 import * as S from "./state.js";
 import { models as modelsSig } from "./stores/model-store.js";
 import { ConfirmDialog, Modal, ModelSelect, requestConfirm, showToast } from "./ui.js";
@@ -141,18 +141,24 @@ function ChannelCard(props) {
 function ConnectButtons() {
 	var offered = new Set(getGon("channels_offered") || ["telegram"]);
 	return html`<div class="flex gap-2">
-		${offered.has("telegram") && html`<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
+		${
+			offered.has("telegram") &&
+			html`<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
 			onClick=${() => {
 				if (connected.value) showAddTelegram.value = true;
 			}}>
 			<span class="icon icon-telegram"></span> Connect Telegram
-		</button>`}
-		${offered.has("msteams") && html`<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
+		</button>`
+		}
+		${
+			offered.has("msteams") &&
+			html`<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
 			onClick=${() => {
 				if (connected.value) showAddTeams.value = true;
 			}}>
 			<span class="icon icon-msteams"></span> Connect Microsoft Teams
-		</button>`}
+		</button>`
+		}
 	</div>`;
 }
 
