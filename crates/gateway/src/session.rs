@@ -1573,6 +1573,7 @@ impl SessionService for LiveSessionService {
             if entry.key == "main"
                 || entry.channel_binding.is_some()
                 || entry.key.starts_with("telegram:")
+                || entry.key.starts_with("msteams:")
                 || entry.key.starts_with("cron:")
             {
                 continue;

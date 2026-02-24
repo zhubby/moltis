@@ -2021,7 +2021,7 @@ function ChannelStep({ onNext, onBack }) {
 
 	function onSubmit(e) {
 		e.preventDefault();
-		var v = validateChannelFields(accountId, token);
+		var v = validateChannelFields("telegram", accountId, token);
 		if (!v.valid) {
 			setError(v.error);
 			return;

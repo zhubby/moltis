@@ -30,6 +30,27 @@ var showAddModal = signal(false);
 var editingChannel = signal(null);
 var sendersAccount = signal("");
 
+function channelType(type) {
+	return type || "telegram";
+}
+
+function channelLabel(type) {
+	return channelType(type) === "msteams" ? "Microsoft Teams" : "Telegram";
+}
+
+function senderSelectionKey(ch) {
+	return `${channelType(ch.type)}::${ch.account_id}`;
+}
+
+function parseSenderSelectionKey(key) {
+	var idx = key.indexOf("::");
+	if (idx < 0) return { type: "telegram", account_id: key };
+	return {
+		type: key.slice(0, idx) || "telegram",
+		account_id: key.slice(idx + 2),
+	};
+}
+
 function loadChannels() {
 	fetchChannelStatus().then((res) => {
 		if (res?.ok) {
@@ -42,18 +63,22 @@ function loadChannels() {
 }
 
 function loadSenders() {
-	var accountId = sendersAccount.value;
-	if (!accountId) {
+	var selected = sendersAccount.value;
+	if (!selected) {
 		senders.value = [];
 		return;
 	}
-	sendRpc("channels.senders.list", { account_id: accountId }).then((res) => {
+	var parsed = parseSenderSelectionKey(selected);
+	sendRpc("channels.senders.list", { type: parsed.type, account_id: parsed.account_id }).then((res) => {
 		if (res?.ok) senders.value = res.payload?.senders || [];
 	});
 }
 
-// ── Telegram icon (CSS mask-image) ──────────────────────────
-function TelegramIcon() {
+// ── Channel icon ─────────────────────────────────────────────
+function ChannelIcon({ type }) {
+	if (channelType(type) === "msteams") {
+		return html`<span class="icon icon-chat"></span>`;
+	}
 	return html`<span class="icon icon-telegram"></span>`;
 }
 
@@ -64,7 +89,7 @@ function ChannelCard(props) {
 	function onRemove() {
 		requestConfirm(`Remove ${ch.name || ch.account_id}?`).then((yes) => {
 			if (!yes) return;
-			sendRpc("channels.remove", { account_id: ch.account_id }).then((r) => {
+			sendRpc("channels.remove", { type: channelType(ch.type), account_id: ch.account_id }).then((r) => {
 				if (r?.ok) loadChannels();
 			});
 		});
@@ -82,11 +107,11 @@ function ChannelCard(props) {
 
 	return html`<div class="provider-card" style="padding:12px 14px;border-radius:8px;margin-bottom:8px;">
     <div style="display:flex;align-items:center;gap:10px;">
-      <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--surface2);">
-        <${TelegramIcon} />
-      </span>
-      <div style="display:flex;flex-direction:column;gap:2px;">
-        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || "Telegram"}</span>
+	      <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--surface2);">
+	        <${ChannelIcon} type=${ch.type} />
+	      </span>
+	      <div style="display:flex;flex-direction:column;gap:2px;">
+	        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || channelLabel(ch.type)}</span>
         ${ch.details && html`<span class="text-xs text-[var(--muted)]">${ch.details}</span>`}
         ${sessionLine && html`<span class="text-xs text-[var(--muted)]">${sessionLine}</span>`}
       </div>
@@ -107,18 +132,18 @@ function ChannelCard(props) {
 function ChannelsTab() {
 	if (channels.value.length === 0) {
 		return html`<div style="text-align:center;padding:40px 0;">
-      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No Telegram bots connected.</div>
-      <div class="text-xs text-[var(--muted)]">Click "+ Add Telegram Bot" to connect one using a token from @BotFather.</div>
-    </div>`;
+	      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No channels connected.</div>
+	      <div class="text-xs text-[var(--muted)]">Click "+ Add Channel" to connect Telegram or Microsoft Teams.</div>
+	    </div>`;
 	}
-	return html`${channels.value.map((ch) => html`<${ChannelCard} key=${ch.account_id} channel=${ch} />`)}`;
+	return html`${channels.value.map((ch) => html`<${ChannelCard} key=${senderSelectionKey(ch)} channel=${ch} />`)}`;
 }
 
 // ── Senders tab ──────────────────────────────────────────────
 function SendersTab() {
 	useEffect(() => {
 		if (channels.value.length > 0 && !sendersAccount.value) {
-			sendersAccount.value = channels.value[0].account_id;
+			sendersAccount.value = senderSelectionKey(channels.value[0]);
 		}
 	}, [channels.value]);
 
@@ -132,8 +157,10 @@ function SendersTab() {
 
 	function onAction(identifier, action) {
 		var rpc = action === "approve" ? "channels.senders.approve" : "channels.senders.deny";
+		var parsed = parseSenderSelectionKey(sendersAccount.value);
 		sendRpc(rpc, {
-			account_id: sendersAccount.value,
+			type: parsed.type,
+			account_id: parsed.account_id,
 			identifier: identifier,
 		}).then(() => {
 			loadSenders();
@@ -144,14 +171,15 @@ function SendersTab() {
 	return html`<div>
     <div style="margin-bottom:12px;">
       <label class="text-xs text-[var(--muted)]" style="margin-right:6px;">Account:</label>
-      <select style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;"
-        value=${sendersAccount.value} onChange=${(e) => {
-					sendersAccount.value = e.target.value;
-				}}>
-        ${channels.value.map(
-					(ch) => html`<option key=${ch.account_id} value=${ch.account_id}>${ch.name || ch.account_id}</option>`,
-				)}
-      </select>
+	      <select style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;"
+	        value=${sendersAccount.value} onChange=${(e) => {
+						sendersAccount.value = e.target.value;
+					}}>
+	        ${channels.value.map(
+						(ch) =>
+							html`<option key=${senderSelectionKey(ch)} value=${senderSelectionKey(ch)}>${ch.name || ch.account_id}</option>`,
+					)}
+	      </select>
     </div>
     ${senders.value.length === 0 && html`<div class="text-sm text-[var(--muted)] senders-empty">No messages received yet for this account.</div>`}
     ${
@@ -250,13 +278,16 @@ function AddChannelModal() {
 	var saving = useSignal(false);
 	var addModel = useSignal("");
 	var allowlistItems = useSignal([]);
+	var channelKind = useSignal("telegram");
+	var webhookSecret = useSignal("");
 
 	function onSubmit(e) {
 		e.preventDefault();
 		var form = e.target.closest(".channel-form");
 		var accountId = form.querySelector("[data-field=accountId]").value.trim();
-		var token = form.querySelector("[data-field=token]").value.trim();
-		var v = validateChannelFields(accountId, token);
+		var credential = form.querySelector("[data-field=credential]").value.trim();
+		var type = channelKind.value;
+		var v = validateChannelFields(type, accountId, credential);
 		if (!v.valid) {
 			error.value = v.error;
 			return;
@@ -264,25 +295,33 @@ function AddChannelModal() {
 		error.value = "";
 		saving.value = true;
 		var addConfig = {
-			token: token,
 			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
 			mention_mode: form.querySelector("[data-field=mentionMode]").value,
 			allowlist: allowlistItems.value,
 		};
+		if (type === "msteams") {
+			addConfig.app_id = accountId;
+			addConfig.app_password = credential;
+			if (webhookSecret.value.trim()) addConfig.webhook_secret = webhookSecret.value.trim();
+		} else {
+			addConfig.token = credential;
+		}
 		if (addModel.value) {
 			addConfig.model = addModel.value;
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
-		addChannel("telegram", accountId, addConfig).then((res) => {
+		addChannel(type, accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
 				showAddModal.value = false;
 				addModel.value = "";
 				allowlistItems.value = [];
+				webhookSecret.value = "";
+				channelKind.value = "telegram";
 				loadChannels();
 			} else {
-				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect bot.";
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
 			}
 		});
 	}
@@ -296,30 +335,64 @@ function AddChannelModal() {
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
 	var inputStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
+	var isTeams = channelKind.value === "msteams";
+	var accountLabel = isTeams ? "App ID / Account ID" : "Bot username";
+	var credentialLabel = isTeams ? "App Password (client secret)" : "Bot Token (from @BotFather)";
+	var credentialPlaceholder = isTeams ? "Azure client secret" : "123456:ABC-DEF...";
 
 	return html`<${Modal} show=${showAddModal.value} onClose=${() => {
 		showAddModal.value = false;
-	}} title="Add Telegram Bot">
-    <div class="channel-form">
-      <div class="channel-card">
-        <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
-        <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
-        <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
-        <div class="text-xs text-[var(--muted)]">3. Copy the bot token (looks like 123456:ABC-DEF...) and paste it below</div>
-        <div class="text-xs text-[var(--muted)] channel-help" style="margin-top:2px;">See the <a href="https://core.telegram.org/bots/tutorial" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">Telegram Bot Tutorial</a> for more details.</div>
-      </div>
-	      <label class="text-xs text-[var(--muted)]">Bot username</label>
-	      <input data-field="accountId" type="text" placeholder="e.g. my_assistant_bot" style=${inputStyle} />
-	      <label class="text-xs text-[var(--muted)]">Bot Token (from @BotFather)</label>
-	      <input data-field="token" type="password" placeholder="123456:ABC-DEF..." style=${inputStyle}
-	        autocomplete="new-password"
-	        autocapitalize="none"
-	        autocorrect="off"
-	        spellcheck="false"
-	        name="telegram_bot_token" />
-      <label class="text-xs text-[var(--muted)]">DM Policy</label>
-      <select data-field="dmPolicy" style=${selectStyle}>
-        <option value="allowlist">Allowlist only</option>
+	}} title="Add Channel">
+	    <div class="channel-form">
+	      <label class="text-xs text-[var(--muted)]">Channel Type</label>
+	      <select data-field="channelType" style=${selectStyle} value=${channelKind.value}
+	        onChange=${(e) => {
+						channelKind.value = e.target.value;
+					}}>
+	        <option value="telegram">Telegram</option>
+	        <option value="msteams">Microsoft Teams</option>
+	      </select>
+	      <div class="channel-card">
+	        ${
+						isTeams
+							? html`<div>
+			            <span class="text-xs font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
+			            <div class="text-xs text-[var(--muted)]">1. Create an Azure Bot registration and copy the App ID + App Password.</div>
+			            <div class="text-xs text-[var(--muted)]">2. Set messaging endpoint to <code>/api/channels/msteams/&lt;account_id&gt;/webhook?secret=...</code>.</div>
+			          </div>`
+							: html`<div>
+			            <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
+			            <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
+			            <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
+			            <div class="text-xs text-[var(--muted)]">3. Copy the bot token and paste it below</div>
+			          </div>`
+					}
+	      </div>
+		      <label class="text-xs text-[var(--muted)]">${accountLabel}</label>
+		      <input data-field="accountId" type="text"
+		        placeholder=${isTeams ? "Azure App ID or alias" : "e.g. my_assistant_bot"}
+		        style=${inputStyle} />
+		      <label class="text-xs text-[var(--muted)]">${credentialLabel}</label>
+		      <input data-field="credential" type="password" placeholder=${credentialPlaceholder} style=${inputStyle}
+		        autocomplete="new-password"
+		        autocapitalize="none"
+		        autocorrect="off"
+		        spellcheck="false"
+		        name="telegram_bot_token" />
+		      ${
+						isTeams &&
+						html`<div>
+				          <label class="text-xs text-[var(--muted)]">Webhook Secret (optional)</label>
+				          <input type="text" placeholder="shared secret for ?secret=..." style=${inputStyle}
+				            value=${webhookSecret.value}
+				            onInput=${(e) => {
+											webhookSecret.value = e.target.value;
+										}} />
+				        </div>`
+					}
+	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+	      <select data-field="dmPolicy" style=${selectStyle}>
+	        <option value="allowlist">Allowlist only</option>
         <option value="open">Open (anyone)</option>
         <option value="disabled">Disabled</option>
       </select>
@@ -340,12 +413,12 @@ function AddChannelModal() {
 				allowlistItems.value = v;
 			}} />
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
-      <button class="provider-btn"
-        onClick=${onSubmit} disabled=${saving.value}>
-        ${saving.value ? "Connecting\u2026" : "Connect Bot"}
-      </button>
-    </div>
-  </${Modal}>`;
+	      <button class="provider-btn"
+	        onClick=${onSubmit} disabled=${saving.value}>
+	        ${saving.value ? "Connecting\u2026" : "Connect Channel"}
+	      </button>
+	    </div>
+	  </${Modal}>`;
 }
 
 // ── Edit channel modal ───────────────────────────────────────
@@ -355,12 +428,17 @@ function EditChannelModal() {
 	var saving = useSignal(false);
 	var editModel = useSignal("");
 	var allowlistItems = useSignal([]);
+	var editCredential = useSignal("");
+	var editWebhookSecret = useSignal("");
 	useEffect(() => {
 		editModel.value = ch?.config?.model || "";
 		allowlistItems.value = ch?.config?.allowlist || [];
+		editCredential.value = "";
+		editWebhookSecret.value = ch?.config?.webhook_secret || "";
 	}, [ch]);
 	if (!ch) return null;
 	var cfg = ch.config || {};
+	var isTeams = channelType(ch.type) === "msteams";
 
 	function onSave(e) {
 		e.preventDefault();
@@ -368,17 +446,24 @@ function EditChannelModal() {
 		error.value = "";
 		saving.value = true;
 		var updateConfig = {
-			token: cfg.token || "",
 			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
 			mention_mode: form.querySelector("[data-field=mentionMode]").value,
 			allowlist: allowlistItems.value,
 		};
+		if (isTeams) {
+			updateConfig.app_id = cfg.app_id || ch.account_id;
+			updateConfig.app_password = editCredential.value || cfg.app_password || "";
+			if (editWebhookSecret.value.trim()) updateConfig.webhook_secret = editWebhookSecret.value.trim();
+		} else {
+			updateConfig.token = cfg.token || "";
+		}
 		if (editModel.value) {
 			updateConfig.model = editModel.value;
 			var found = modelsSig.value.find((x) => x.id === editModel.value);
 			if (found?.provider) updateConfig.model_provider = found.provider;
 		}
 		sendRpc("channels.update", {
+			type: channelType(ch.type),
 			account_id: ch.account_id,
 			config: updateConfig,
 		}).then((res) => {
@@ -387,7 +472,7 @@ function EditChannelModal() {
 				editingChannel.value = null;
 				loadChannels();
 			} else {
-				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update bot.";
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to update channel.";
 			}
 		});
 	}
@@ -399,15 +484,37 @@ function EditChannelModal() {
 
 	var selectStyle =
 		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
+	var inputStyle =
+		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
 
 	return html`<${Modal} show=${true} onClose=${() => {
 		editingChannel.value = null;
-	}} title="Edit Telegram Bot">
-    <div class="channel-form">
-      <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
-      <label class="text-xs text-[var(--muted)]">DM Policy</label>
-      <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "allowlist"}>
-        <option value="allowlist">Allowlist only</option>
+	}} title=${`Edit ${channelLabel(ch.type)} Channel`}>
+	    <div class="channel-form">
+	      <div class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id}</div>
+	      ${
+					isTeams &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">App Password (optional: leave blank to keep existing)</label>
+				        <input type="password" style=${inputStyle} value=${editCredential.value}
+				          onInput=${(e) => {
+										editCredential.value = e.target.value;
+									}} />
+				      </div>`
+				}
+	      ${
+					isTeams &&
+					html`<div>
+				        <label class="text-xs text-[var(--muted)]">Webhook Secret</label>
+				        <input type="text" style=${inputStyle} value=${editWebhookSecret.value}
+				          onInput=${(e) => {
+										editWebhookSecret.value = e.target.value;
+									}} />
+				      </div>`
+				}
+	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+	      <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "allowlist"}>
+	        <option value="allowlist">Allowlist only</option>
         <option value="open">Open (anyone)</option>
         <option value="disabled">Disabled</option>
       </select>
@@ -428,10 +535,10 @@ function EditChannelModal() {
 				allowlistItems.value = v;
 			}} />
       ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
-      <button class="provider-btn"
-        onClick=${onSave} disabled=${saving.value}>
-        ${saving.value ? "Saving\u2026" : "Save Changes"}
-      </button>
+	      <button class="provider-btn"
+	        onClick=${onSave} disabled=${saving.value}>
+	        ${saving.value ? "Saving\u2026" : "Save Changes"}
+	      </button>
     </div>
   </${Modal}>`;
 }
@@ -444,12 +551,14 @@ function ChannelsPage() {
 		if (connected.value) loadChannels();
 
 		var unsub = onEvent("channel", (p) => {
+			var selected = parseSenderSelectionKey(sendersAccount.value || "");
 			if (p.kind === "otp_resolved") {
 				loadChannels();
 			}
 			if (
 				activeTab.value === "senders" &&
-				sendersAccount.value === p.account_id &&
+				selected.account_id === p.account_id &&
+				selected.type === channelType(p.channel_type) &&
 				(p.kind === "inbound_message" || p.kind === "otp_challenge" || p.kind === "otp_resolved")
 			) {
 				loadSenders();
@@ -480,11 +589,11 @@ function ChannelsPage() {
         ${
 					activeTab.value === "channels" &&
 					html`
-          <button class="provider-btn"
-            onClick=${() => {
-							if (connected.value) showAddModal.value = true;
-						}}>+ Add Telegram Bot</button>
-        `
+	          <button class="provider-btn"
+	            onClick=${() => {
+								if (connected.value) showAddModal.value = true;
+							}}>+ Add Channel</button>
+	        `
 				}
       </div>
       ${activeTab.value === "channels" ? html`<${ChannelsTab} />` : html`<${SendersTab} />`}

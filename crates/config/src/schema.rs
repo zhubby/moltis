@@ -1016,6 +1016,9 @@ pub struct ChannelsConfig {
     /// Telegram bot accounts, keyed by account ID.
     #[serde(default)]
     pub telegram: HashMap<String, serde_json::Value>,
+    /// Microsoft Teams bot accounts, keyed by account ID.
+    #[serde(default)]
+    pub msteams: HashMap<String, serde_json::Value>,
 }
 
 /// TLS configuration for the gateway HTTPS server.

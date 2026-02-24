@@ -6,16 +6,20 @@ import { sendRpc } from "./helpers.js";
 
 /**
  * Validate required channel fields before submission.
- * @param {string} accountId - bot username
- * @param {string} token - bot token
+ * @param {string} type - channel type
+ * @param {string} accountId - account identifier
+ * @param {string} credential - primary credential (token or app password)
  * @returns {{ valid: true } | { valid: false, error: string }}
  */
-export function validateChannelFields(accountId, token) {
+export function validateChannelFields(type, accountId, credential) {
 	if (!accountId.trim()) {
-		return { valid: false, error: "Bot username is required." };
+		return { valid: false, error: "Account ID is required." };
 	}
-	if (!token.trim()) {
-		return { valid: false, error: "Bot token is required." };
+	if (!credential.trim()) {
+		return {
+			valid: false,
+			error: type === "msteams" ? "App password is required." : "Bot token is required.",
+		};
 	}
 	return { valid: true };
 }

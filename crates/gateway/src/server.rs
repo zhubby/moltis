@@ -233,7 +233,7 @@ impl moltis_tools::location::LocationRequester for GatewayLocationRequester {
             .send_text(
                 &reply_target.account_id,
                 &reply_target.chat_id,
-                "Please share your location using the attachment menu (📎 → Location).",
+                "Please share your location in this chat.",
                 None,
             )
             .await?;
@@ -1639,9 +1639,8 @@ pub async fn start_gateway(
             // formatting hint so the LLM produces channel-friendly content.
             let prompt_text = if req.deliver && !is_heartbeat_turn {
                 format!(
-                    "Your response will be delivered to a Telegram channel. \
-                     Keep it concise and use plain text or basic Telegram HTML \
-                     formatting (<b>, <i>, <code>). Stay under 4000 characters.\n\n\
+                    "Your response will be delivered to an external chat channel. \
+                     Keep it concise and prefer plain text with minimal formatting.\n\n\
                      {prompt_text}"
                 )
             } else {
@@ -2047,7 +2046,9 @@ pub async fn start_gateway(
 
     // Session service is wired after hook registry is built (below).
 
-    // Wire channel store and Telegram channel service.
+    let msteams_webhook_plugin: Arc<tokio::sync::RwLock<moltis_msteams::MsTeamsPlugin>>;
+
+    // Wire channel store and channel plugins.
     {
         use moltis_channels::store::ChannelStore;
 
@@ -2055,71 +2056,127 @@ pub async fn start_gateway(
             crate::channel_store::SqliteChannelStore::new(db_pool.clone()),
         );
 
-        let channel_sink = Arc::new(crate::channel_events::GatewayChannelEventSink::new(
-            Arc::clone(&deferred_state),
+        let channel_sink: Arc<dyn moltis_channels::ChannelEventSink> = Arc::new(
+            crate::channel_events::GatewayChannelEventSink::new(Arc::clone(&deferred_state)),
+        );
+        let tg_plugin = Arc::new(tokio::sync::RwLock::new(
+            moltis_telegram::TelegramPlugin::new()
+                .with_message_log(Arc::clone(&message_log))
+                .with_event_sink(Arc::clone(&channel_sink)),
         ));
-        let mut tg_plugin = moltis_telegram::TelegramPlugin::new()
-            .with_message_log(Arc::clone(&message_log))
-            .with_event_sink(channel_sink);
+        let msteams_plugin = Arc::new(tokio::sync::RwLock::new(
+            moltis_msteams::MsTeamsPlugin::new()
+                .with_message_log(Arc::clone(&message_log))
+                .with_event_sink(channel_sink),
+        ));
+        msteams_webhook_plugin = Arc::clone(&msteams_plugin);
 
-        // Start channels from config file (these take precedence).
-        let tg_accounts = &config.channels.telegram;
-        let mut started: HashSet<String> = HashSet::new();
-        for (account_id, account_config) in tg_accounts {
-            if let Err(e) = tg_plugin
-                .start_account(account_id, account_config.clone())
-                .await
-            {
-                tracing::warn!(account_id, "failed to start telegram account: {e}");
-            } else {
-                started.insert(account_id.clone());
+        // Start channels from config file (these take precedence over DB rows).
+        let mut started: HashSet<(String, String)> = HashSet::new();
+
+        {
+            let mut tg = tg_plugin.write().await;
+            for (account_id, account_config) in &config.channels.telegram {
+                if let Err(e) = tg.start_account(account_id, account_config.clone()).await {
+                    tracing::warn!(account_id, "failed to start telegram account: {e}");
+                } else {
+                    started.insert(("telegram".into(), account_id.clone()));
+                }
             }
         }
 
-        // Load persisted channels that weren't in the config file.
+        {
+            let mut ms = msteams_plugin.write().await;
+            for (account_id, account_config) in &config.channels.msteams {
+                if let Err(e) = ms.start_account(account_id, account_config.clone()).await {
+                    tracing::warn!(account_id, "failed to start microsoft teams account: {e}");
+                } else {
+                    started.insert(("msteams".into(), account_id.clone()));
+                }
+            }
+        }
+
+        // Load persisted channels that were not started from config.
         match channel_store.list().await {
             Ok(stored) => {
                 info!("{} stored channel(s) found in database", stored.len());
                 for ch in stored {
-                    if started.contains(&ch.account_id) {
+                    let key = (ch.channel_type.clone(), ch.account_id.clone());
+                    if started.contains(&key) {
                         info!(
                             account_id = ch.account_id,
+                            channel_type = ch.channel_type,
                             "skipping stored channel (already started from config)"
                         );
                         continue;
                     }
+
                     info!(
                         account_id = ch.account_id,
                         channel_type = ch.channel_type,
                         "starting stored channel"
                     );
-                    if let Err(e) = tg_plugin.start_account(&ch.account_id, ch.config).await {
+                    let start_result = match ch.channel_type.parse::<moltis_channels::ChannelType>()
+                    {
+                        Ok(moltis_channels::ChannelType::Telegram) => {
+                            let mut tg = tg_plugin.write().await;
+                            tg.start_account(&ch.account_id, ch.config).await
+                        },
+                        Ok(moltis_channels::ChannelType::MsTeams) => {
+                            let mut ms = msteams_plugin.write().await;
+                            ms.start_account(&ch.account_id, ch.config).await
+                        },
+                        Err(e) => Err(anyhow::anyhow!(e)),
+                    };
+
+                    if let Err(e) = start_result {
                         tracing::warn!(
                             account_id = ch.account_id,
-                            "failed to start stored telegram account: {e}"
+                            channel_type = ch.channel_type,
+                            "failed to start stored channel account: {e}"
                         );
                     } else {
-                        started.insert(ch.account_id);
+                        started.insert(key);
                     }
                 }
             },
-            Err(e) => {
-                tracing::warn!("failed to load stored channels: {e}");
-            },
+            Err(e) => tracing::warn!("failed to load stored channels: {e}"),
         }
 
         if !started.is_empty() {
-            info!("{} telegram account(s) started", started.len());
+            info!("{} channel account(s) started", started.len());
         }
 
-        // Grab shared outbound adapters before moving tg_plugin into the channel service.
-        let tg_outbound = tg_plugin.shared_outbound();
-        let tg_stream_outbound = tg_plugin.shared_stream_outbound();
-        services = services.with_channel_outbound(tg_outbound);
-        services = services.with_channel_stream_outbound(tg_stream_outbound);
+        let (tg_outbound, tg_stream_outbound) = {
+            let tg = tg_plugin.read().await;
+            (tg.shared_outbound(), tg.shared_stream_outbound())
+        };
+        let (ms_outbound, ms_stream_outbound) = {
+            let ms = msteams_plugin.read().await;
+            (ms.shared_outbound(), ms.shared_stream_outbound())
+        };
+
+        let multi_outbound: Arc<dyn moltis_channels::ChannelOutbound> =
+            Arc::new(crate::channel_outbound::MultiChannelOutbound::new(
+                Arc::clone(&tg_plugin),
+                Arc::clone(&msteams_plugin),
+                tg_outbound,
+                ms_outbound,
+            ));
+        let multi_stream_outbound: Arc<dyn moltis_channels::ChannelStreamOutbound> =
+            Arc::new(crate::channel_outbound::MultiChannelStreamOutbound::new(
+                Arc::clone(&tg_plugin),
+                Arc::clone(&msteams_plugin),
+                tg_stream_outbound,
+                ms_stream_outbound,
+            ));
+
+        services = services.with_channel_outbound(multi_outbound);
+        services = services.with_channel_stream_outbound(multi_stream_outbound);
 
         services.channel = Arc::new(crate::channel::LiveChannelService::new(
             tg_plugin,
+            msteams_plugin,
             channel_store,
             Arc::clone(&message_log),
             Arc::clone(&session_metadata),
@@ -2913,6 +2970,46 @@ pub async fn start_gateway(
 
     #[cfg_attr(not(feature = "tls"), allow(unused_mut))]
     let mut app = finalize_gateway_app(router, app_state, config.server.http_request_logs);
+
+    app = app.route(
+        "/api/channels/msteams/:account_id/webhook",
+        axum::routing::post(
+            move |axum::extract::Path(account_id): axum::extract::Path<String>,
+                  axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
+                  Json(payload): Json<serde_json::Value>| {
+                let teams_plugin = Arc::clone(&msteams_webhook_plugin);
+                async move {
+                    let secret = query.get("secret").map(String::as_str);
+                    let result = {
+                        let plugin = teams_plugin.read().await;
+                        plugin.ingest_activity(&account_id, payload, secret).await
+                    };
+                    match result {
+                        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("invalid Teams webhook secret") {
+                                (
+                                    StatusCode::UNAUTHORIZED,
+                                    Json(serde_json::json!({ "ok": false, "error": msg })),
+                                )
+                            } else if msg.contains("unknown Teams account") {
+                                (
+                                    StatusCode::NOT_FOUND,
+                                    Json(serde_json::json!({ "ok": false, "error": msg })),
+                                )
+                            } else {
+                                (
+                                    StatusCode::BAD_REQUEST,
+                                    Json(serde_json::json!({ "ok": false, "error": msg })),
+                                )
+                            }
+                        },
+                    }
+                }
+            },
+        ),
+    );
 
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;
 
