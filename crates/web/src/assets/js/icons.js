@@ -7,7 +7,7 @@ export function makeTelegramIcon() {
 
 export function makeTeamsIcon() {
 	var el = document.createElement("span");
-	el.className = "icon icon-chat";
+	el.className = "icon icon-msteams";
 	return el;
 }
 

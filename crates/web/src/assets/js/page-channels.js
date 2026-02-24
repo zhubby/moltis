@@ -4,7 +4,14 @@ import { signal, useSignal } from "@preact/signals";
 import { html } from "htm/preact";
 import { render } from "preact";
 import { useEffect } from "preact/hooks";
-import { addChannel, fetchChannelStatus, validateChannelFields } from "./channel-utils.js";
+import {
+	addChannel,
+	buildTeamsEndpoint,
+	defaultTeamsBaseUrl,
+	fetchChannelStatus,
+	generateWebhookSecretHex,
+	validateChannelFields,
+} from "./channel-utils.js";
 import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
 import { updateNavCount } from "./nav-counts.js";
@@ -26,7 +33,8 @@ export function prefetchChannels() {
 }
 var senders = signal([]);
 var activeTab = signal("channels");
-var showAddModal = signal(false);
+var showAddTelegram = signal(false);
+var showAddTeams = signal(false);
 var editingChannel = signal(null);
 var sendersAccount = signal("");
 
@@ -74,49 +82,10 @@ function loadSenders() {
 	});
 }
 
-function defaultTeamsBaseUrl() {
-	if (typeof window === "undefined") return "";
-	return window.location?.origin || "";
-}
-
-function normalizeBaseUrlForWebhook(baseUrl) {
-	var raw = (baseUrl || "").trim();
-	if (!raw) raw = defaultTeamsBaseUrl();
-	if (!raw) return "";
-	if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`;
-	try {
-		var parsed = new URL(raw);
-		return `${parsed.protocol}//${parsed.host}`;
-	} catch (_e) {
-		return "";
-	}
-}
-
-function generateWebhookSecretHex() {
-	if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
-		var bytes = new Uint8Array(24);
-		window.crypto.getRandomValues(bytes);
-		return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-	}
-	var value = "";
-	while (value.length < 48) {
-		value += Math.floor(Math.random() * 16).toString(16);
-	}
-	return value.slice(0, 48);
-}
-
-function buildTeamsEndpoint(baseUrl, accountId, webhookSecret) {
-	var normalizedBase = normalizeBaseUrlForWebhook(baseUrl);
-	var account = (accountId || "").trim();
-	var secret = (webhookSecret || "").trim();
-	if (!(normalizedBase && account && secret)) return "";
-	return `${normalizedBase}/api/channels/msteams/${encodeURIComponent(account)}/webhook?secret=${encodeURIComponent(secret)}`;
-}
-
 // ── Channel icon ─────────────────────────────────────────────
 function ChannelIcon({ type }) {
 	if (channelType(type) === "msteams") {
-		return html`<span class="icon icon-chat"></span>`;
+		return html`<span class="icon icon-msteams"></span>`;
 	}
 	return html`<span class="icon icon-telegram"></span>`;
 }
@@ -144,12 +113,12 @@ function ChannelCard(props) {
 				: "No active session";
 	}
 
-	return html`<div class="provider-card" style="padding:12px 14px;border-radius:8px;margin-bottom:8px;">
-    <div style="display:flex;align-items:center;gap:10px;">
-	      <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;background:var(--surface2);">
+	return html`<div class="provider-card p-3 rounded-lg mb-2">
+    <div class="flex items-center gap-2.5">
+	      <span class="inline-flex items-center justify-center w-7 h-7 rounded-md bg-[var(--surface2)]">
 	        <${ChannelIcon} type=${ch.type} />
 	      </span>
-	      <div style="display:flex;flex-direction:column;gap:2px;">
+	      <div class="flex flex-col gap-0.5">
 	        <span class="text-sm text-[var(--text-strong)]">${ch.name || ch.account_id || channelLabel(ch.type)}</span>
         ${ch.details && html`<span class="text-xs text-[var(--muted)]">${ch.details}</span>`}
         ${sessionLine && html`<span class="text-xs text-[var(--muted)]">${sessionLine}</span>`}
@@ -167,12 +136,30 @@ function ChannelCard(props) {
   </div>`;
 }
 
+// ── Connect channel buttons ──────────────────────────────────
+function ConnectButtons() {
+	return html`<div class="flex gap-2">
+		<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
+			onClick=${() => {
+				if (connected.value) showAddTelegram.value = true;
+			}}>
+			<span class="icon icon-telegram"></span> Connect Telegram
+		</button>
+		<button class="provider-btn provider-btn-secondary inline-flex items-center gap-1.5"
+			onClick=${() => {
+				if (connected.value) showAddTeams.value = true;
+			}}>
+			<span class="icon icon-msteams"></span> Connect Microsoft Teams
+		</button>
+	</div>`;
+}
+
 // ── Channels tab ─────────────────────────────────────────────
 function ChannelsTab() {
 	if (channels.value.length === 0) {
-		return html`<div style="text-align:center;padding:40px 0;">
-	      <div class="text-sm text-[var(--muted)]" style="margin-bottom:12px;">No channels connected.</div>
-	      <div class="text-xs text-[var(--muted)]">Click "+ Add Channel" to connect Telegram or Microsoft Teams.</div>
+		return html`<div class="text-center py-10">
+	      <div class="text-sm text-[var(--muted)] mb-4">No channels connected.</div>
+	      <div class="flex justify-center"><${ConnectButtons} /></div>
 	    </div>`;
 	}
 	return html`${channels.value.map((ch) => html`<${ChannelCard} key=${senderSelectionKey(ch)} channel=${ch} />`)}`;
@@ -311,13 +298,123 @@ function AllowlistInput({ value, onChange }) {
   </div>`;
 }
 
-// ── Add channel modal ────────────────────────────────────────
-function AddChannelModal() {
+// ── Shared form fields (DM policy, mention mode, model, allowlist) ───
+function SharedChannelFields({ addModel, allowlistItems }) {
+	var defaultPlaceholder =
+		modelsSig.value.length > 0
+			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
+			: "(server default)";
+
+	return html`
+      <label class="text-xs text-[var(--muted)]">DM Policy</label>
+      <select data-field="dmPolicy" class="channel-select">
+        <option value="allowlist">Allowlist only</option>
+        <option value="open">Open (anyone)</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
+      <select data-field="mentionMode" class="channel-select">
+        <option value="mention">Must @mention bot</option>
+        <option value="always">Always respond</option>
+        <option value="none">Don't respond in groups</option>
+      </select>
+      <label class="text-xs text-[var(--muted)]">Default Model</label>
+      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
+        onChange=${(v) => {
+					addModel.value = v;
+				}}
+        placeholder=${defaultPlaceholder} />
+      <label class="text-xs text-[var(--muted)]">DM Allowlist</label>
+      <${AllowlistInput} value=${allowlistItems.value} onChange=${(v) => {
+				allowlistItems.value = v;
+			}} />
+  `;
+}
+
+// ── Add Telegram modal ───────────────────────────────────────
+function AddTelegramModal() {
 	var error = useSignal("");
 	var saving = useSignal(false);
 	var addModel = useSignal("");
 	var allowlistItems = useSignal([]);
-	var channelKind = useSignal("telegram");
+	var accountDraft = useSignal("");
+
+	function onSubmit(e) {
+		e.preventDefault();
+		var form = e.target.closest(".channel-form");
+		var accountId = accountDraft.value.trim();
+		var credential = form.querySelector("[data-field=credential]").value.trim();
+		var v = validateChannelFields("telegram", accountId, credential);
+		if (!v.valid) {
+			error.value = v.error;
+			return;
+		}
+		error.value = "";
+		saving.value = true;
+		var addConfig = {
+			token: credential,
+			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
+			mention_mode: form.querySelector("[data-field=mentionMode]").value,
+			allowlist: allowlistItems.value,
+		};
+		if (addModel.value) {
+			addConfig.model = addModel.value;
+			var found = modelsSig.value.find((x) => x.id === addModel.value);
+			if (found?.provider) addConfig.model_provider = found.provider;
+		}
+		addChannel("telegram", accountId, addConfig).then((res) => {
+			saving.value = false;
+			if (res?.ok) {
+				showAddTelegram.value = false;
+				addModel.value = "";
+				allowlistItems.value = [];
+				accountDraft.value = "";
+				loadChannels();
+			} else {
+				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
+			}
+		});
+	}
+
+	return html`<${Modal} show=${showAddTelegram.value} onClose=${() => {
+		showAddTelegram.value = false;
+	}}
+	    title="Connect Telegram">
+	    <div class="channel-form">
+	      <div class="channel-card">
+	        <div>
+	          <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
+	          <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)] underline">@BotFather</a> in Telegram</div>
+	          <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
+	          <div class="text-xs text-[var(--muted)]">3. Copy the bot token and paste it below</div>
+	        </div>
+	      </div>
+	      <label class="text-xs text-[var(--muted)]">Bot username</label>
+	      <input data-field="accountId" type="text" placeholder="e.g. my_assistant_bot"
+	        value=${accountDraft.value}
+	        onInput=${(e) => {
+						accountDraft.value = e.target.value;
+					}}
+	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">Bot Token (from @BotFather)</label>
+	      <input data-field="credential" type="password" placeholder="123456:ABC-DEF..." class="channel-input"
+	        autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"
+	        name="telegram_bot_token" />
+	      <${SharedChannelFields} addModel=${addModel} allowlistItems=${allowlistItems} />
+	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
+	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
+	        ${saving.value ? "Connecting\u2026" : "Connect Telegram"}
+	      </button>
+	    </div>
+	  </${Modal}>`;
+}
+
+// ── Add Microsoft Teams modal ────────────────────────────────
+function AddTeamsModal() {
+	var error = useSignal("");
+	var saving = useSignal(false);
+	var addModel = useSignal("");
+	var allowlistItems = useSignal([]);
 	var accountDraft = useSignal("");
 	var webhookSecret = useSignal("");
 	var baseUrlDraft = useSignal(defaultTeamsBaseUrl());
@@ -365,8 +462,7 @@ function AddChannelModal() {
 		var form = e.target.closest(".channel-form");
 		var accountId = accountDraft.value.trim();
 		var credential = form.querySelector("[data-field=credential]").value.trim();
-		var type = channelKind.value;
-		var v = validateChannelFields(type, accountId, credential);
+		var v = validateChannelFields("msteams", accountId, credential);
 		if (!v.valid) {
 			error.value = v.error;
 			return;
@@ -374,33 +470,28 @@ function AddChannelModal() {
 		error.value = "";
 		saving.value = true;
 		var addConfig = {
+			app_id: accountId,
+			app_password: credential,
 			dm_policy: form.querySelector("[data-field=dmPolicy]").value,
 			mention_mode: form.querySelector("[data-field=mentionMode]").value,
 			allowlist: allowlistItems.value,
 		};
-		if (type === "msteams") {
-			addConfig.app_id = accountId;
-			addConfig.app_password = credential;
-			if (webhookSecret.value.trim()) addConfig.webhook_secret = webhookSecret.value.trim();
-		} else {
-			addConfig.token = credential;
-		}
+		if (webhookSecret.value.trim()) addConfig.webhook_secret = webhookSecret.value.trim();
 		if (addModel.value) {
 			addConfig.model = addModel.value;
 			var found = modelsSig.value.find((x) => x.id === addModel.value);
 			if (found?.provider) addConfig.model_provider = found.provider;
 		}
-		addChannel(type, accountId, addConfig).then((res) => {
+		addChannel("msteams", accountId, addConfig).then((res) => {
 			saving.value = false;
 			if (res?.ok) {
-				showAddModal.value = false;
+				showAddTeams.value = false;
 				addModel.value = "";
 				allowlistItems.value = [];
 				accountDraft.value = "";
 				webhookSecret.value = "";
 				baseUrlDraft.value = defaultTeamsBaseUrl();
 				bootstrapEndpoint.value = "";
-				channelKind.value = "telegram";
 				loadChannels();
 			} else {
 				error.value = (res?.error && (res.error.message || res.error.detail)) || "Failed to connect channel.";
@@ -408,130 +499,69 @@ function AddChannelModal() {
 		});
 	}
 
-	var defaultPlaceholder =
-		modelsSig.value.length > 0
-			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
-			: "(server default)";
-
-	var selectStyle =
-		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
-	var inputStyle =
-		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
-	var isTeams = channelKind.value === "msteams";
-	var accountLabel = isTeams ? "App ID / Account ID" : "Bot username";
-	var credentialLabel = isTeams ? "App Password (client secret)" : "Bot Token (from @BotFather)";
-	var credentialPlaceholder = isTeams ? "Azure client secret" : "123456:ABC-DEF...";
-
-	return html`<${Modal} show=${showAddModal.value} onClose=${() => {
-		showAddModal.value = false;
-	}} title="Add Channel">
+	return html`<${Modal} show=${showAddTeams.value} onClose=${() => {
+		showAddTeams.value = false;
+	}}
+	    title="Connect Microsoft Teams">
 	    <div class="channel-form">
-	      <label class="text-xs text-[var(--muted)]">Channel Type</label>
-	      <select data-field="channelType" style=${selectStyle} value=${channelKind.value}
-	        onChange=${(e) => {
-						channelKind.value = e.target.value;
-						error.value = "";
-						bootstrapEndpoint.value = "";
-					}}>
-	        <option value="telegram">Telegram</option>
-	        <option value="msteams">Microsoft Teams</option>
-	      </select>
 	      <div class="channel-card">
+	        <div>
+	          <span class="text-xs font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
+	          <div class="text-xs text-[var(--muted)]">1. <a href="https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration" target="_blank" class="text-[var(--accent)] underline">Create an Azure Bot registration</a> and copy the App ID + App Password.</div>
+	          <div class="text-xs text-[var(--muted)]">2. Use Bootstrap Teams below to generate the exact messaging endpoint.</div>
+	          <div class="text-xs text-[var(--muted)]">3. Optional CLI shortcut: <code>moltis channels teams bootstrap</code>.</div>
+	        </div>
+	      </div>
+	      <label class="text-xs text-[var(--muted)]">App ID / Account ID</label>
+	      <input data-field="accountId" type="text" placeholder="Azure App ID or alias"
+	        value=${accountDraft.value}
+	        onInput=${(e) => {
+						accountDraft.value = e.target.value;
+						refreshBootstrapEndpoint();
+					}}
+	        class="channel-input" />
+	      <label class="text-xs text-[var(--muted)]">App Password (client secret)</label>
+	      <input data-field="credential" type="password" placeholder="Azure client secret" class="channel-input"
+	        autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"
+	        name="teams_app_password" />
+	      <div>
+	        <label class="text-xs text-[var(--muted)]">Webhook Secret (optional)</label>
+	        <input type="text" placeholder="shared secret for ?secret=..." class="channel-input"
+	          value=${webhookSecret.value}
+	          onInput=${(e) => {
+							webhookSecret.value = e.target.value;
+							refreshBootstrapEndpoint();
+						}} />
+	        <label class="text-xs text-[var(--muted)] mt-2">Public Base URL (for Teams webhook)</label>
+	        <input type="text" placeholder="https://bot.example.com" class="channel-input"
+	          value=${baseUrlDraft.value}
+	          onInput=${(e) => {
+							baseUrlDraft.value = e.target.value;
+							refreshBootstrapEndpoint();
+						}} />
+	        <div class="flex gap-2 mt-2">
+	          <button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${onBootstrapTeams}>
+	            Bootstrap Teams
+	          </button>
+	          ${
+							bootstrapEndpoint.value &&
+							html`<button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${copyBootstrapEndpoint}>
+	            Copy Endpoint
+	          </button>`
+						}
+	        </div>
 	        ${
-						isTeams
-							? html`<div>
-				            <span class="text-xs font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
-				            <div class="text-xs text-[var(--muted)]">1. Create an Azure Bot registration and copy the App ID + App Password.</div>
-				            <div class="text-xs text-[var(--muted)]">2. Use Bootstrap Teams below to generate the exact messaging endpoint.</div>
-				            <div class="text-xs text-[var(--muted)]">3. Optional CLI shortcut: <code>moltis channels teams bootstrap</code>.</div>
-				          </div>`
-							: html`<div>
-			            <span class="text-xs font-medium text-[var(--text-strong)]">How to create a Telegram bot</span>
-			            <div class="text-xs text-[var(--muted)] channel-help">1. Open <a href="https://t.me/BotFather" target="_blank" class="text-[var(--accent)]" style="text-decoration:underline;">@BotFather</a> in Telegram</div>
-			            <div class="text-xs text-[var(--muted)]">2. Send /newbot and follow the prompts to choose a name and username</div>
-			            <div class="text-xs text-[var(--muted)]">3. Copy the bot token and paste it below</div>
-			          </div>`
+						bootstrapEndpoint.value &&
+						html`<div class="mt-2">
+	          <div class="text-xs text-[var(--muted)]">Messaging endpoint</div>
+	          <code class="text-xs block break-all">${bootstrapEndpoint.value}</code>
+	        </div>`
 					}
 	      </div>
-		      <label class="text-xs text-[var(--muted)]">${accountLabel}</label>
-		      <input data-field="accountId" type="text"
-		        placeholder=${isTeams ? "Azure App ID or alias" : "e.g. my_assistant_bot"}
-		        value=${accountDraft.value}
-		        onInput=${(e) => {
-							accountDraft.value = e.target.value;
-							refreshBootstrapEndpoint();
-						}}
-		        style=${inputStyle} />
-		      <label class="text-xs text-[var(--muted)]">${credentialLabel}</label>
-		      <input data-field="credential" type="password" placeholder=${credentialPlaceholder} style=${inputStyle}
-		        autocomplete="new-password"
-		        autocapitalize="none"
-		        autocorrect="off"
-		        spellcheck="false"
-		        name="telegram_bot_token" />
-		      ${
-						isTeams &&
-						html`<div>
-				          <label class="text-xs text-[var(--muted)]">Webhook Secret (optional)</label>
-				          <input type="text" placeholder="shared secret for ?secret=..." style=${inputStyle}
-				            value=${webhookSecret.value}
-				            onInput=${(e) => {
-											webhookSecret.value = e.target.value;
-											refreshBootstrapEndpoint();
-										}} />
-				          <label class="text-xs text-[var(--muted)]" style="margin-top:8px;">Public Base URL (for Teams webhook)</label>
-				          <input type="text" placeholder="https://bot.example.com" style=${inputStyle}
-				            value=${baseUrlDraft.value}
-				            onInput=${(e) => {
-											baseUrlDraft.value = e.target.value;
-											refreshBootstrapEndpoint();
-										}} />
-				          <div class="flex gap-2" style="margin-top:8px;">
-				            <button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${onBootstrapTeams}>
-				              Bootstrap Teams
-				            </button>
-				            ${
-											bootstrapEndpoint.value &&
-											html`<button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${copyBootstrapEndpoint}>
-											      Copy Endpoint
-											    </button>`
-										}
-				          </div>
-				          ${
-										bootstrapEndpoint.value &&
-										html`<div style="margin-top:8px;">
-										      <div class="text-xs text-[var(--muted)]">Messaging endpoint</div>
-										      <code class="text-xs" style="display:block;word-break:break-all;">${bootstrapEndpoint.value}</code>
-										    </div>`
-									}
-				        </div>`
-					}
-	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
-	      <select data-field="dmPolicy" style=${selectStyle}>
-	        <option value="allowlist">Allowlist only</option>
-        <option value="open">Open (anyone)</option>
-        <option value="disabled">Disabled</option>
-      </select>
-      <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
-      <select data-field="mentionMode" style=${selectStyle}>
-        <option value="mention">Must @mention bot</option>
-        <option value="always">Always respond</option>
-        <option value="none">Don't respond in groups</option>
-      </select>
-      <label class="text-xs text-[var(--muted)]">Default Model</label>
-      <${ModelSelect} models=${modelsSig.value} value=${addModel.value}
-        onChange=${(v) => {
-					addModel.value = v;
-				}}
-        placeholder=${defaultPlaceholder} />
-      <label class="text-xs text-[var(--muted)]">DM Allowlist</label>
-      <${AllowlistInput} value=${allowlistItems.value} onChange=${(v) => {
-				allowlistItems.value = v;
-			}} />
-      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
-	      <button class="provider-btn"
-	        onClick=${onSubmit} disabled=${saving.value}>
-	        ${saving.value ? "Connecting\u2026" : "Connect Channel"}
+	      <${SharedChannelFields} addModel=${addModel} allowlistItems=${allowlistItems} />
+	      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
+	      <button class="provider-btn" onClick=${onSubmit} disabled=${saving.value}>
+	        ${saving.value ? "Connecting\u2026" : "Connect Microsoft Teams"}
 	      </button>
 	    </div>
 	  </${Modal}>`;
@@ -598,11 +628,6 @@ function EditChannelModal() {
 			? `(default: ${modelsSig.value[0].displayName || modelsSig.value[0].id})`
 			: "(server default)";
 
-	var selectStyle =
-		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;cursor:pointer;";
-	var inputStyle =
-		"font-family:var(--font-body);background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:8px 12px;font-size:.85rem;";
-
 	return html`<${Modal} show=${true} onClose=${() => {
 		editingChannel.value = null;
 	}} title=${`Edit ${channelLabel(ch.type)} Channel`}>
@@ -612,7 +637,7 @@ function EditChannelModal() {
 					isTeams &&
 					html`<div>
 				        <label class="text-xs text-[var(--muted)]">App Password (optional: leave blank to keep existing)</label>
-				        <input type="password" style=${inputStyle} value=${editCredential.value}
+				        <input type="password" class="channel-input" value=${editCredential.value}
 				          onInput=${(e) => {
 										editCredential.value = e.target.value;
 									}} />
@@ -622,20 +647,20 @@ function EditChannelModal() {
 					isTeams &&
 					html`<div>
 				        <label class="text-xs text-[var(--muted)]">Webhook Secret</label>
-				        <input type="text" style=${inputStyle} value=${editWebhookSecret.value}
+				        <input type="text" class="channel-input" value=${editWebhookSecret.value}
 				          onInput=${(e) => {
 										editWebhookSecret.value = e.target.value;
 									}} />
 				      </div>`
 				}
 	      <label class="text-xs text-[var(--muted)]">DM Policy</label>
-	      <select data-field="dmPolicy" style=${selectStyle} value=${cfg.dm_policy || "allowlist"}>
+	      <select data-field="dmPolicy" class="channel-select" value=${cfg.dm_policy || "allowlist"}>
 	        <option value="allowlist">Allowlist only</option>
         <option value="open">Open (anyone)</option>
         <option value="disabled">Disabled</option>
       </select>
       <label class="text-xs text-[var(--muted)]">Group Mention Mode</label>
-      <select data-field="mentionMode" style=${selectStyle} value=${cfg.mention_mode || "mention"}>
+      <select data-field="mentionMode" class="channel-select" value=${cfg.mention_mode || "mention"}>
         <option value="mention">Must @mention bot</option>
         <option value="always">Always respond</option>
         <option value="none">Don't respond in groups</option>
@@ -650,7 +675,7 @@ function EditChannelModal() {
       <${AllowlistInput} value=${allowlistItems.value} onChange=${(v) => {
 				allowlistItems.value = v;
 			}} />
-      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error" style="display:block;">${error.value}</div>`}
+      ${error.value && html`<div class="text-xs text-[var(--error)] channel-error block">${error.value}</div>`}
 	      <button class="provider-btn"
 	        onClick=${onSave} disabled=${saving.value}>
 	        ${saving.value ? "Saving\u2026" : "Save Changes"}
@@ -690,7 +715,7 @@ function ChannelsPage() {
 
 	return html`
     <div class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-3 flex-wrap">
         <h2 class="text-lg font-medium text-[var(--text-strong)]">Channels</h2>
         <div style="display:flex;gap:4px;margin-left:12px;">
           <button class="session-action-btn" style=${activeTab.value === "channels" ? "font-weight:600;" : ""}
@@ -702,19 +727,12 @@ function ChannelsPage() {
 							activeTab.value = "senders";
 						}}>Senders</button>
         </div>
-        ${
-					activeTab.value === "channels" &&
-					html`
-	          <button class="provider-btn"
-	            onClick=${() => {
-								if (connected.value) showAddModal.value = true;
-							}}>+ Add Channel</button>
-	        `
-				}
+        ${activeTab.value === "channels" && channels.value.length > 0 && html`<${ConnectButtons} />`}
       </div>
       ${activeTab.value === "channels" ? html`<${ChannelsTab} />` : html`<${SendersTab} />`}
     </div>
-    <${AddChannelModal} />
+    <${AddTelegramModal} />
+    <${AddTeamsModal} />
     <${EditChannelModal} />
     <${ConfirmDialog} />
   `;
@@ -726,7 +744,8 @@ export function initChannels(container) {
 	_channelsContainer = container;
 	container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
 	activeTab.value = "channels";
-	showAddModal.value = false;
+	showAddTelegram.value = false;
+	showAddTeams.value = false;
 	editingChannel.value = null;
 	sendersAccount.value = "";
 	senders.value = [];
