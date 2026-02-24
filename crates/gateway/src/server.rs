@@ -2970,7 +2970,7 @@ pub async fn start_gateway(
     let mut app = finalize_gateway_app(router, app_state, config.server.http_request_logs);
 
     app = app.route(
-        "/api/channels/msteams/:account_id/webhook",
+        "/api/channels/msteams/{account_id}/webhook",
         axum::routing::post(
             move |axum::extract::Path(account_id): axum::extract::Path<String>,
                   axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
