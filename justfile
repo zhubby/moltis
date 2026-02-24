@@ -245,4 +245,4 @@ swift-poc-run: swift-poc-build-rust swift-poc-generate
 
 # Open generated project in Xcode.
 swift-poc-open: swift-poc-build-rust swift-poc-generate
-    open examples/swift-poc/MoltisPOC.xcodeproj
+    open examples/swift-poc/Moltis.xcodeproj

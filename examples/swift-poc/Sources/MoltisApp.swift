@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MoltisPOCApp: App {
+struct MoltisApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var chatStore: ChatStore
     @StateObject private var onboardingState: OnboardingState
@@ -15,7 +15,7 @@ struct MoltisPOCApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Moltis Swift POC") {
+        WindowGroup("Moltis") {
             Group {
                 if onboardingState.isCompleted {
                     ContentView(chatStore: chatStore, settings: settings)

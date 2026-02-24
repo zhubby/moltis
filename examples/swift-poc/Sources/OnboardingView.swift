@@ -52,44 +52,31 @@ private extension OnboardingView {
 // MARK: - Detail
 
 private extension OnboardingView {
-    @ViewBuilder
     var detailContent: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                if currentStep == .summary {
-                    summaryPane
-                } else if let section = currentStep.settingsSection {
+        Form {
+            if currentStep == .summary {
+                summarySection
+            } else if let section = currentStep.settingsSection {
+                Section(currentStep.title) {
                     SettingsSectionContent(
                         section: section,
                         settings: settings
                     )
                 }
             }
-            .toggleStyle(MoltisFormToggleStyle())
-            .padding(20)
-            .frame(maxWidth: 600, alignment: .leading)
         }
-        .scrollContentBackground(.hidden)
-        .background {
-            VisualEffectBackground(material: .underPageBackground)
-        }
+        .formStyle(.grouped)
     }
 
-    var summaryPane: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Everything looks good. You're all set.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            MoltisSection {
-                LabeledContent("Provider", value: settings.llmProvider.capitalized)
-                Divider()
-                LabeledContent("Model", value: settings.llmModel)
-                Divider()
-                LabeledContent("Voice", value: settings.voiceEnabled ? "Enabled" : "Disabled")
-                Divider()
-                LabeledContent("Name", value: settings.identityName.isEmpty ? "Default" : settings.identityName)
-            }
+    var summarySection: some View {
+        Section("Ready to Go") {
+            LabeledContent("Provider", value: settings.llmProvider.capitalized)
+            LabeledContent("Model", value: settings.llmModel)
+            LabeledContent("Voice", value: settings.voiceEnabled ? "Enabled" : "Disabled")
+            LabeledContent(
+                "Name",
+                value: settings.identityName.isEmpty ? "Default" : settings.identityName
+            )
         }
     }
 }

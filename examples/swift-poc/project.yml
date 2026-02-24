@@ -1,4 +1,4 @@
-name: MoltisPOC
+name: Moltis
 options:
   minimumXcodeGenVersion: 2.42.0
   deploymentTarget:
@@ -22,7 +22,7 @@ settings:
 packages: {}
 
 targets:
-  MoltisPOC:
+  Moltis:
     type: application
     platform: macOS
     sources:
@@ -37,15 +37,15 @@ targets:
           - "-lmoltis_bridge"
     scheme:
       testTargets:
-        - MoltisPOCTests
+        - MoltisTests
 
-  MoltisPOCTests:
+  MoltisTests:
     type: bundle.unit-test
     platform: macOS
     sources:
       - path: Tests
     dependencies:
-      - target: MoltisPOC
+      - target: Moltis
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.moltis.poc.tests

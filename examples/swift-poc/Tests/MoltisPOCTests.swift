@@ -1,7 +1,7 @@
-@testable import MoltisPOC
+@testable import Moltis
 import XCTest
 
-final class MoltisPOCTests: XCTestCase {
+final class MoltisTests: XCTestCase {
     func testVersionPayloadDecodesCoreFields() throws {
         let client = MoltisClient()
         let payload = try client.version()

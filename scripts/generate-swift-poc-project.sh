@@ -13,4 +13,4 @@ fi
 cd "${SWIFT_POC_DIR}"
 xcodegen generate --spec project.yml
 
-echo "Generated ${SWIFT_POC_DIR}/MoltisPOC.xcodeproj"
+echo "Generated ${SWIFT_POC_DIR}/Moltis.xcodeproj"

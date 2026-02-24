@@ -1,10 +1,25 @@
 import SwiftUI
 
+// MARK: - Enums
+
 enum SettingsGroup: String, CaseIterable, Hashable {
     case general = "General"
     case security = "Security"
     case integrations = "Integrations"
     case systems = "Systems"
+
+    var icon: String {
+        switch self {
+        case .general: return "gearshape"
+        case .security: return "lock.shield"
+        case .integrations: return "puzzlepiece.extension"
+        case .systems: return "wrench.and.screwdriver"
+        }
+    }
+
+    var sections: [SettingsSection] {
+        SettingsSection.allCases.filter { $0.group == self }
+    }
 }
 
 enum SettingsSection: String, CaseIterable, Hashable {
@@ -29,9 +44,7 @@ enum SettingsSection: String, CaseIterable, Hashable {
     case graphql = "GraphQL"
     case configuration = "Configuration"
 
-    var title: String {
-        rawValue
-    }
+    var title: String { rawValue }
 
     var icon: String {
         Self.iconMap[self] ?? "gearshape"
@@ -88,45 +101,41 @@ enum SettingsSection: String, CaseIterable, Hashable {
     ]
 }
 
+// MARK: - Settings View (toolbar tabs like System Settings)
+
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
-    @State private var selectedSection = SettingsSection.identity
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedSection) {
-                ForEach(SettingsGroup.allCases, id: \.self) { group in
-                    Section(group.rawValue) {
-                        ForEach(sections(for: group), id: \.self) { section in
-                            Label(section.title, systemImage: section.icon)
-                                .tag(section)
-                        }
+        TabView {
+            ForEach(SettingsGroup.allCases, id: \.self) { group in
+                SettingsGroupTab(group: group, settings: settings)
+                    .tabItem {
+                        Label(group.rawValue, systemImage: group.icon)
                     }
-                }
             }
-            .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
-        } detail: {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
+        }
+        .frame(minWidth: 580, minHeight: 460)
+    }
+}
+
+// MARK: - Tab Content (Form + .grouped like System Settings)
+
+private struct SettingsGroupTab: View {
+    let group: SettingsGroup
+    @ObservedObject var settings: AppSettings
+
+    var body: some View {
+        Form {
+            ForEach(group.sections, id: \.self) { section in
+                Section(section.title) {
                     SettingsSectionContent(
-                        section: selectedSection,
+                        section: section,
                         settings: settings
                     )
                 }
-                .toggleStyle(MoltisFormToggleStyle())
-                .padding(20)
-                .frame(maxWidth: 600, alignment: .leading)
-            }
-            .scrollContentBackground(.hidden)
-            .background {
-                VisualEffectBackground(material: .underPageBackground)
             }
         }
-        .frame(minWidth: 900, minHeight: 625)
-    }
-
-    private func sections(for group: SettingsGroup) -> [SettingsSection] {
-        SettingsSection.allCases.filter { $0.group == group }
+        .formStyle(.grouped)
     }
 }

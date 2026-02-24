@@ -43,13 +43,22 @@ private struct SessionsSidebarView: View {
             }
             .padding(.horizontal, 12)
 
-            List(selection: $chatStore.selectedSessionID) {
-                ForEach(chatStore.sessions) { session in
-                    SessionRowView(session: session)
-                        .tag(Optional(session.id))
+            ScrollViewReader { proxy in
+                List(selection: $chatStore.selectedSessionID) {
+                    ForEach(chatStore.sessions) { session in
+                        SessionRowView(session: session)
+                            .tag(Optional(session.id))
+                            .id(session.id)
+                    }
+                }
+                .listStyle(.sidebar)
+                .onChange(of: chatStore.selectedSessionID) { _, newID in
+                    guard let newID else { return }
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        proxy.scrollTo(newID, anchor: .top)
+                    }
                 }
             }
-            .listStyle(.sidebar)
         }
         .padding(.top, 12)
     }
@@ -176,7 +185,7 @@ private struct ChatDetailView: View {
     }
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             TextField(
                 "Message...",
                 text: $chatStore.draftMessage,
@@ -196,14 +205,16 @@ private struct ChatDetailView: View {
             Button {
                 chatStore.sendDraftMessage()
             } label: {
-                Image(systemName: chatStore.isSending ? "ellipsis.circle" : "arrow.up.circle.fill")
-                    .font(.title2)
+                Image(systemName: chatStore.isSending ? "ellipsis.circle.fill" : "arrow.up.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(canSendMessage ? .blue : .secondary.opacity(0.4))
             }
             .buttonStyle(.borderless)
             .disabled(!canSendMessage)
             .help("Send message")
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }
 
