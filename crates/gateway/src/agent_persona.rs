@@ -6,13 +6,43 @@
 //! root workspace for backward compatibility.
 
 use {
-    anyhow::Result,
     serde::{Deserialize, Serialize},
     std::{
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     },
 };
+
+/// Errors from agent persona operations.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentError {
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    InvalidRequest(String),
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Config(#[from] moltis_config::Error),
+}
+
+impl From<AgentError> for moltis_protocol::ErrorShape {
+    fn from(err: AgentError) -> Self {
+        use moltis_protocol::error_codes;
+        match &err {
+            AgentError::NotFound(_) | AgentError::InvalidRequest(_) => {
+                Self::new(error_codes::INVALID_REQUEST, err.to_string())
+            },
+            AgentError::Db(_) | AgentError::Io(_) | AgentError::Config(_) => {
+                Self::new(error_codes::UNAVAILABLE, err.to_string())
+            },
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, AgentError>;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -100,21 +130,29 @@ impl From<AgentRow> for AgentPersona {
 }
 
 /// Validate an agent ID: lowercase alphanumeric + hyphens, 1-50 chars, not "main".
-pub fn validate_agent_id(id: &str) -> Result<(), String> {
+pub fn validate_agent_id(id: &str) -> Result<()> {
     if id == "main" {
-        return Err("cannot use reserved id 'main'".into());
+        return Err(AgentError::InvalidRequest(
+            "cannot use reserved id 'main'".into(),
+        ));
     }
     if id.is_empty() || id.len() > 50 {
-        return Err("id must be 1-50 characters".into());
+        return Err(AgentError::InvalidRequest(
+            "id must be 1-50 characters".into(),
+        ));
     }
     if !id
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err("id must contain only lowercase letters, digits, and hyphens".into());
+        return Err(AgentError::InvalidRequest(
+            "id must contain only lowercase letters, digits, and hyphens".into(),
+        ));
     }
     if id.starts_with('-') || id.ends_with('-') {
-        return Err("id must not start or end with a hyphen".into());
+        return Err(AgentError::InvalidRequest(
+            "id must not start or end with a hyphen".into(),
+        ));
     }
     Ok(())
 }
@@ -144,7 +182,7 @@ impl AgentPersonaStore {
     /// Set the default agent ID. `"main"` is always valid.
     pub async fn set_default(&self, id: &str) -> Result<String> {
         if id != "main" && self.get(id).await?.is_none() {
-            anyhow::bail!("agent '{id}' not found");
+            return Err(AgentError::NotFound(format!("agent '{id}' not found")));
         }
 
         let mut tx = self.pool.begin().await?;
@@ -161,7 +199,7 @@ impl AgentPersonaStore {
                     .execute(&mut *tx)
                     .await?;
             if updated.rows_affected() == 0 {
-                anyhow::bail!("agent '{id}' not found");
+                return Err(AgentError::NotFound(format!("agent '{id}' not found")));
             }
         }
 
@@ -231,7 +269,7 @@ impl AgentPersonaStore {
 
     /// Create a new agent persona and its workspace directory.
     pub async fn create(&self, params: CreateAgentParams) -> Result<AgentPersona> {
-        validate_agent_id(&params.id).map_err(|e| anyhow::anyhow!("{e}"))?;
+        validate_agent_id(&params.id)?;
 
         let now = now_ms();
         sqlx::query(
@@ -276,13 +314,15 @@ impl AgentPersonaStore {
     /// Update an existing agent persona.
     pub async fn update(&self, id: &str, params: UpdateAgentParams) -> Result<AgentPersona> {
         if id == "main" {
-            anyhow::bail!("cannot modify 'main' agent through this API; use identity settings");
+            return Err(AgentError::InvalidRequest(
+                "cannot modify 'main' agent through this API; use identity settings".into(),
+            ));
         }
 
         let existing = self
             .get(id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("agent '{id}' not found"))?;
+            .ok_or_else(|| AgentError::NotFound(format!("agent '{id}' not found")))?;
 
         let name = params.name.unwrap_or(existing.name);
         let emoji = params.emoji.or(existing.emoji);
@@ -329,10 +369,14 @@ impl AgentPersonaStore {
     /// Delete an agent persona. Cannot delete "main".
     pub async fn delete(&self, id: &str) -> Result<()> {
         if id == "main" {
-            anyhow::bail!("cannot delete the main agent");
+            return Err(AgentError::InvalidRequest(
+                "cannot delete the main agent".into(),
+            ));
         }
         if self.default_id().await? == id {
-            anyhow::bail!("cannot delete the default agent");
+            return Err(AgentError::InvalidRequest(
+                "cannot delete the default agent".into(),
+            ));
         }
 
         let result = sqlx::query("DELETE FROM agents WHERE id = ?")
@@ -341,7 +385,7 @@ impl AgentPersonaStore {
             .await?;
 
         if result.rows_affected() == 0 {
-            anyhow::bail!("agent '{id}' not found");
+            return Err(AgentError::NotFound(format!("agent '{id}' not found")));
         }
 
         // Archive the workspace directory by renaming it.

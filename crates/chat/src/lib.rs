@@ -45,12 +45,13 @@ use {
 };
 
 pub mod chat_error;
+pub mod error;
 pub mod runtime;
 
 pub use runtime::{ChatRuntime, TtsOverride};
 use {
     chat_error::parse_chat_error,
-    moltis_service_traits::{ChatService, ModelService, ServiceResult},
+    moltis_service_traits::{ChatService, ModelService, ServiceError, ServiceResult},
 };
 
 /// Extract preview text from a single message JSON value.
@@ -1348,8 +1349,8 @@ impl DisabledModelsStore {
     }
 
     /// Save disabled models to config file.
-    pub fn save(&self) -> anyhow::Result<()> {
-        let path = Self::config_path().ok_or_else(|| anyhow::anyhow!("no config directory"))?;
+    pub fn save(&self) -> error::Result<()> {
+        let path = Self::config_path().ok_or(error::Error::NoConfigDirectory)?;
         let content = serde_json::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
@@ -1770,7 +1771,7 @@ impl ModelService for LiveModelService {
             Arc::clone(&self.detect_gate)
                 .acquire_owned()
                 .await
-                .map_err(|_| "model probe gate closed".to_string())?
+                .map_err(|_| ServiceError::message("model probe gate closed"))?
         };
 
         let state = self.state.get().cloned();
@@ -2105,7 +2106,7 @@ impl ModelService for LiveModelService {
                 } else {
                     format!(". did you mean: {}", suggestions.join(", "))
                 };
-                return Err(format!("unknown model: {model_id}{suggestion_hint}"));
+                return Err(format!("unknown model: {model_id}{suggestion_hint}").into());
             }
         };
         let started = Instant::now();
@@ -2161,7 +2162,7 @@ impl ModelService for LiveModelService {
                     error = %detail,
                     "model probe failed"
                 );
-                Err(detail)
+                Err(detail.into())
             },
             Err(_) => {
                 warn!(
@@ -2170,7 +2171,7 @@ impl ModelService for LiveModelService {
                     elapsed_ms = started.elapsed().as_millis(),
                     "model probe timed out after 10s"
                 );
-                Err("Connection timed out after 10 seconds".to_string())
+                Err("Connection timed out after 10 seconds".into())
             },
         }
     }
@@ -2334,7 +2335,7 @@ impl LiveChatService {
         &self,
         session_key: &str,
         history: &[Value],
-    ) -> Result<Arc<dyn moltis_agents::model::LlmProvider>, String> {
+    ) -> error::Result<Arc<dyn moltis_agents::model::LlmProvider>> {
         let reg = self.providers.read().await;
         let session_model = self
             .session_metadata
@@ -2350,7 +2351,7 @@ impl LiveChatService {
         model_id
             .and_then(|id| reg.get(&id))
             .or_else(|| reg.first())
-            .ok_or_else(|| "no LLM providers configured".to_string())
+            .ok_or_else(|| error::Error::message("no LLM providers configured"))
     }
 
     /// Resolve the active session key for a connection.
@@ -2928,7 +2929,7 @@ impl ChatService for LiveChatService {
                 "checking local model cache"
             );
             if let Err(e) = self.state.ensure_local_model_cached(&model_to_check).await {
-                return Err(format!("Failed to prepare local model: {}", e));
+                return Err(format!("Failed to prepare local model: {}", e).into());
             }
         }
 
@@ -3727,7 +3728,7 @@ impl ChatService for LiveChatService {
                     self.session_metadata.touch(&session_key, count).await;
                 }
 
-                Err(error_msg)
+                Err(error_msg.into())
             },
         }
     }
@@ -3736,7 +3737,7 @@ impl ChatService for LiveChatService {
         let run_id = params.get("runId").and_then(|v| v.as_str());
         let session_key = params.get("sessionKey").and_then(|v| v.as_str());
         if run_id.is_none() && session_key.is_none() {
-            return Err("missing 'runId' or 'sessionKey'".to_string());
+            return Err("missing 'runId' or 'sessionKey'".into());
         }
 
         let (resolved_run_id, aborted) = Self::abort_run_handle(
@@ -3796,7 +3797,7 @@ impl ChatService for LiveChatService {
             .session_store
             .read(&session_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
         // Filter out empty assistant messages — they are kept in storage for LLM
         // history coherence but should not be shown in the UI.
         let visible: Vec<Value> = messages
@@ -3831,7 +3832,7 @@ impl ChatService for LiveChatService {
         self.session_store
             .clear(&session_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         // Reset client sequence tracking for this session. A cleared chat starts
         // a fresh sequence from the web UI.
@@ -3878,7 +3879,7 @@ impl ChatService for LiveChatService {
             .session_store
             .read(&session_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         if history.is_empty() {
             return Err("nothing to compact".into());
@@ -3938,7 +3939,10 @@ impl ChatService for LiveChatService {
 
         // Use the session's model if available, otherwise fall back to the model
         // from the last assistant message, then to the first registered provider.
-        let provider = self.resolve_provider(&session_key, &history).await?;
+        let provider = self
+            .resolve_provider(&session_key, &history)
+            .await
+            .map_err(ServiceError::message)?;
 
         info!(session = %session_key, messages = history.len(), "chat.compact: summarizing");
 
@@ -3948,7 +3952,9 @@ impl ChatService for LiveChatService {
             match event {
                 StreamEvent::Delta(delta) => summary.push_str(&delta),
                 StreamEvent::Done(_) => break,
-                StreamEvent::Error(e) => return Err(format!("compact summarization failed: {e}")),
+                StreamEvent::Error(e) => {
+                    return Err(format!("compact summarization failed: {e}").into());
+                },
                 // Tool events not expected in summarization stream.
                 StreamEvent::ToolCallStart { .. }
                 | StreamEvent::ToolCallArgumentsDelta { .. }
@@ -3988,7 +3994,7 @@ impl ChatService for LiveChatService {
         self.session_store
             .replace_history(&session_key, compacted.clone())
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         self.session_metadata.touch(&session_key, 1).await;
 
@@ -4310,7 +4316,10 @@ impl ChatService for LiveChatService {
             .read(&session_key)
             .await
             .unwrap_or_default();
-        let provider = self.resolve_provider(&session_key, &history).await?;
+        let provider = self
+            .resolve_provider(&session_key, &history)
+            .await
+            .map_err(ServiceError::message)?;
         let native_tools = provider.supports_tools();
 
         // Build runtime context.
@@ -4426,7 +4435,10 @@ impl ChatService for LiveChatService {
             .read(&session_key)
             .await
             .unwrap_or_default();
-        let provider = self.resolve_provider(&session_key, &history).await?;
+        let provider = self
+            .resolve_provider(&session_key, &history)
+            .await
+            .map_err(ServiceError::message)?;
         let native_tools = provider.supports_tools();
 
         // Build runtime context.
@@ -4911,7 +4923,11 @@ async fn run_explicit_shell_command(
 
     let exec_result = match exec_tool {
         Some(tool) => tool.execute(exec_params).await,
-        None => Err(anyhow::anyhow!("exec tool is not registered")),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "exec tool is not registered",
+        )
+        .into()),
     };
 
     let has_channel_targets = !state.peek_channel_replies(session_key).await.is_empty();
@@ -6047,6 +6063,7 @@ async fn run_with_tools(
                         }
                     },
                     Err(error) => {
+                        let error = error.to_string();
                         warn!(run_id, error = %error, "voice reply generation skipped");
                         audio_warning = Some(error);
                         None
@@ -6139,10 +6156,13 @@ async fn compact_session(
     store: &Arc<SessionStore>,
     session_key: &str,
     provider: &Arc<dyn moltis_agents::model::LlmProvider>,
-) -> Result<(), String> {
-    let history = store.read(session_key).await.map_err(|e| e.to_string())?;
+) -> error::Result<()> {
+    let history = store
+        .read(session_key)
+        .await
+        .map_err(|source| error::Error::external("failed to read session history", source))?;
     if history.is_empty() {
-        return Err("nothing to compact".into());
+        return Err(error::Error::message("nothing to compact"));
     }
 
     // Use structured ChatMessage objects so role boundaries are maintained via
@@ -6162,7 +6182,11 @@ async fn compact_session(
         match event {
             StreamEvent::Delta(delta) => summary.push_str(&delta),
             StreamEvent::Done(_) => break,
-            StreamEvent::Error(e) => return Err(format!("compact summarization failed: {e}")),
+            StreamEvent::Error(e) => {
+                return Err(error::Error::message(format!(
+                    "compact summarization failed: {e}"
+                )));
+            },
             // Tool events not expected in summarization stream.
             StreamEvent::ToolCallStart { .. }
             | StreamEvent::ToolCallArgumentsDelta { .. }
@@ -6176,7 +6200,7 @@ async fn compact_session(
     }
 
     if summary.is_empty() {
-        return Err("compact produced empty summary".into());
+        return Err(error::Error::message("compact produced empty summary"));
     }
 
     let compacted_msg = PersistedMessage::Assistant {
@@ -6201,7 +6225,7 @@ async fn compact_session(
     store
         .replace_history(session_key, compacted)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|source| error::Error::external("failed to replace compacted history", source))?;
 
     Ok(())
 }
@@ -6474,6 +6498,7 @@ async fn run_streaming(
                                 }
                             },
                             Err(error) => {
+                                let error = error.to_string();
                                 warn!(run_id, error = %error, "voice reply generation skipped");
                                 audio_warning = Some(error);
                                 None
@@ -7076,25 +7101,25 @@ async fn generate_tts_audio(
     state: &Arc<dyn ChatRuntime>,
     session_key: &str,
     text: &str,
-) -> Result<Vec<u8>, String> {
+) -> error::Result<Vec<u8>> {
     use base64::Engine;
 
     let tts_status = state
         .tts_service()
         .status()
         .await
-        .map_err(|e| e.to_string())?;
-    let status: TtsStatusResponse =
-        serde_json::from_value(tts_status).map_err(|_| "invalid tts.status response")?;
+        .map_err(error::Error::message)?;
+    let status: TtsStatusResponse = serde_json::from_value(tts_status)
+        .map_err(|_| error::Error::message("invalid tts.status response"))?;
     if !status.enabled {
-        return Err("TTS is disabled or not configured".to_string());
+        return Err(error::Error::message("TTS is disabled or not configured"));
     }
 
     // Layer 2: strip markdown/URLs the LLM may have included despite the prompt.
     let text = moltis_voice::tts::sanitize_text_for_tts(text);
     let text = text.trim();
     if text.is_empty() {
-        return Err("response has no speakable text".to_string());
+        return Err(error::Error::message("response has no speakable text"));
     }
 
     let (_, session_override) = state.tts_overrides(session_key, "").await;
@@ -7108,18 +7133,18 @@ async fn generate_tts_audio(
     };
 
     let request_value = serde_json::to_value(request)
-        .map_err(|_| "failed to build tts.convert request".to_string())?;
+        .map_err(|_| error::Error::message("failed to build tts.convert request"))?;
     let tts_result = state
         .tts_service()
         .convert(request_value)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(error::Error::message)?;
 
-    let response: TtsConvertResponse =
-        serde_json::from_value(tts_result).map_err(|_| "invalid tts.convert response")?;
+    let response: TtsConvertResponse = serde_json::from_value(tts_result)
+        .map_err(|_| error::Error::message("invalid tts.convert response"))?;
     base64::engine::general_purpose::STANDARD
         .decode(&response.audio)
-        .map_err(|_| "invalid base64 audio returned by TTS provider".to_string())
+        .map_err(|_| error::Error::message("invalid base64 audio returned by TTS provider"))
 }
 
 async fn build_tts_payload(
@@ -7718,11 +7743,11 @@ mod tests {
             _body: &str,
             _url: Option<&str>,
             _session_key: Option<&str>,
-        ) -> Result<usize> {
+        ) -> error::Result<usize> {
             Ok(0)
         }
 
-        async fn ensure_local_model_cached(&self, _model_id: &str) -> Result<bool, String> {
+        async fn ensure_local_model_cached(&self, _model_id: &str) -> error::Result<bool> {
             Ok(false)
         }
     }
@@ -7963,7 +7988,7 @@ mod tests {
             _to: &str,
             _text: &str,
             _reply_to: Option<&str>,
-        ) -> Result<()> {
+        ) -> moltis_channels::Result<()> {
             tokio::time::sleep(self.delay).await;
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -7975,7 +8000,7 @@ mod tests {
             _to: &str,
             _payload: &ReplyPayload,
             _reply_to: Option<&str>,
-        ) -> Result<()> {
+        ) -> moltis_channels::Result<()> {
             Ok(())
         }
     }
@@ -7988,9 +8013,9 @@ mod tests {
             _to: &str,
             reply_to: Option<&str>,
             mut stream: moltis_channels::StreamReceiver,
-        ) -> Result<()> {
+        ) -> moltis_channels::Result<()> {
             if self.fail {
-                anyhow::bail!("stream failed");
+                return Err(moltis_channels::Error::unavailable("stream failed"));
             }
             self.reply_tos
                 .lock()
@@ -9610,7 +9635,12 @@ mod tests {
         );
         let result = service.test(serde_json::json!({})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("missing 'modelId'"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing 'modelId'")
+        );
     }
 
     #[tokio::test]
@@ -9626,7 +9656,7 @@ mod tests {
             .test(serde_json::json!({"modelId": "nonexistent::model-xyz"}))
             .await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown model"));
+        assert!(result.unwrap_err().to_string().contains("unknown model"));
     }
 
     #[tokio::test]
@@ -9667,7 +9697,7 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        let error = result.unwrap_err();
+        let error = result.unwrap_err().to_string();
         assert!(error.contains("unknown model: openai::gpt-5.2"));
         assert!(error.contains("did you mean"));
         assert!(error.contains("openai::gpt-5.2-codex"));

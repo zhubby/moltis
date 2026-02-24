@@ -20,7 +20,7 @@ use {
 
 use crate::{
     agent_persona::AgentPersonaStore,
-    services::{ServiceResult, SessionService, TtsService},
+    services::{ServiceError, ServiceResult, SessionService, TtsService},
     session_types::{PatchParams, VoiceGenerateParams, VoiceTarget, parse_params},
     share_store::{
         ShareSnapshot, ShareStore, ShareVisibility, SharedImageAsset, SharedImageSet,
@@ -108,6 +108,18 @@ fn message_text(msg: &Value) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+fn sanitize_tts_text(text: &str) -> String {
+    #[cfg(feature = "voice")]
+    {
+        moltis_voice::tts::sanitize_text_for_tts(text).to_string()
+    }
+
+    #[cfg(not(feature = "voice"))]
+    {
+        text.to_string()
     }
 }
 
@@ -998,7 +1010,7 @@ impl SessionService for LiveSessionService {
             .store
             .read_last_n(key, limit)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
         Ok(serde_json::json!({ "messages": filter_ui_history(messages) }))
     }
 
@@ -1015,12 +1027,12 @@ impl SessionService for LiveSessionService {
         self.metadata
             .upsert(key, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
         let entry = self
             .ensure_entry_agent_id(key, inherit_from_key)
             .await
             .ok_or_else(|| format!("session '{key}' not found after resolve"))?;
-        let history = self.store.read(key).await.map_err(|e| e.to_string())?;
+        let history = self.store.read(key).await.map_err(ServiceError::message)?;
 
         // Recompute preview from combined messages every time resolve runs,
         // so sessions get the latest multi-message preview algorithm.
@@ -1077,7 +1089,7 @@ impl SessionService for LiveSessionService {
             .ok_or_else(|| format!("session '{key}' not found"))?;
         if p.label.is_some() {
             if entry.channel_binding.is_some() {
-                return Err("cannot rename a channel-bound session".to_string());
+                return Err("cannot rename a channel-bound session".into());
             }
             let _ = self.metadata.upsert(key, p.label).await;
         }
@@ -1167,16 +1179,16 @@ impl SessionService for LiveSessionService {
     async fn voice_generate(&self, params: Value) -> ServiceResult {
         let p: VoiceGenerateParams = parse_params(params)?;
         let key = &p.key;
-        let target = p.target().map_err(|e| e.to_string())?;
+        let target = p.target().map_err(ServiceError::message)?;
 
         let tts = self
             .tts_service
             .as_ref()
             .ok_or_else(|| "session voice generation is not configured".to_string())?;
 
-        let mut history = self.store.read(key).await.map_err(|e| e.to_string())?;
+        let mut history = self.store.read(key).await.map_err(ServiceError::message)?;
         if history.is_empty() {
-            return Err(format!("session '{key}' has no messages"));
+            return Err(format!("session '{key}' has no messages").into());
         }
 
         let target_index = match &target {
@@ -1193,7 +1205,7 @@ impl SessionService for LiveSessionService {
             .get(target_index)
             .ok_or_else(|| format!("message index {target_index} is out of range"))?;
         if target_msg.get("role").and_then(|v| v.as_str()) != Some("assistant") {
-            return Err("target message is not an assistant response".to_string());
+            return Err("target message is not an assistant response".into());
         }
 
         if let Some(existing_audio) = target_msg.get("audio").and_then(|v| v.as_str())
@@ -1211,11 +1223,9 @@ impl SessionService for LiveSessionService {
 
         let text = message_text(target_msg)
             .ok_or_else(|| "assistant message has no text content to synthesize".to_string())?;
-        let sanitized = moltis_voice::tts::sanitize_text_for_tts(&text)
-            .trim()
-            .to_string();
+        let sanitized = sanitize_tts_text(&text).trim().to_string();
         if sanitized.is_empty() {
-            return Err("assistant message has no speakable text for TTS".to_string());
+            return Err("assistant message has no speakable text for TTS".into());
         }
 
         let status_value = tts
@@ -1223,9 +1233,9 @@ impl SessionService for LiveSessionService {
             .await
             .map_err(|e| format!("failed to check TTS status: {e}"))?;
         let status: TtsStatusPayload = serde_json::from_value(status_value)
-            .map_err(|_| "invalid TTS status payload".to_string())?;
+            .map_err(|_| ServiceError::message("invalid TTS status payload"))?;
         if !status.enabled {
-            return Err("TTS is disabled or provider is not configured".to_string());
+            return Err("TTS is disabled or provider is not configured".into());
         }
         if let Some(max_text_length) = status.max_text_length
             && sanitized.len() > max_text_length
@@ -1234,7 +1244,8 @@ impl SessionService for LiveSessionService {
                 "text exceeds max length ({} > {})",
                 sanitized.len(),
                 max_text_length
-            ));
+            )
+            .into());
         }
 
         let convert_value = tts
@@ -1245,17 +1256,19 @@ impl SessionService for LiveSessionService {
             .await
             .map_err(|e| format!("TTS convert failed: {e}"))?;
         let convert: TtsConvertPayload = serde_json::from_value(convert_value)
-            .map_err(|_| "invalid TTS convert payload".to_string())?;
+            .map_err(|_| ServiceError::message("invalid TTS convert payload"))?;
         let audio_bytes = general_purpose::STANDARD
             .decode(convert.audio.trim())
-            .map_err(|_| "invalid base64 audio payload returned by TTS provider".to_string())?;
+            .map_err(|_| {
+                ServiceError::message("invalid base64 audio payload returned by TTS provider")
+            })?;
 
         let filename = format!("voice-msg-{target_index}.ogg");
         let audio_path = self
             .store
             .save_media(key, &filename, &audio_bytes)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         let target_mut = history
             .get_mut(target_index)
@@ -1269,7 +1282,7 @@ impl SessionService for LiveSessionService {
         self.store
             .replace_history(key, history)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
         self.metadata.touch(key, message_count).await;
 
         Ok(serde_json::json!({
@@ -1302,7 +1315,7 @@ impl SessionService for LiveSessionService {
             .get(key)
             .await
             .ok_or_else(|| format!("session '{key}' not found"))?;
-        let history = self.store.read(key).await.map_err(|e| e.to_string())?;
+        let history = self.store.read(key).await.map_err(ServiceError::message)?;
 
         let snapshot = ShareSnapshot {
             session_key: key.to_string(),
@@ -1322,7 +1335,7 @@ impl SessionService for LiveSessionService {
                 shared_messages
             },
         };
-        let snapshot_json = serde_json::to_string(&snapshot).map_err(|e| e.to_string())?;
+        let snapshot_json = serde_json::to_string(&snapshot)?;
 
         let created = share_store
             .create_or_replace(
@@ -1332,7 +1345,7 @@ impl SessionService for LiveSessionService {
                 snapshot.cutoff_message_count,
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         // Persist a UI-only notice in the source session so users can see
         // the exact cutoff marker without affecting future LLM context.
@@ -1353,7 +1366,7 @@ impl SessionService for LiveSessionService {
                 "failed to persist share boundary notice; revoking share"
             );
             let _ = share_store.revoke(&created.share.id).await;
-            return Err(format!("failed to persist share boundary notice: {e}"));
+            return Err(format!("failed to persist share boundary notice: {e}").into());
         }
         match self.store.count(key).await {
             Ok(message_count) => {
@@ -1391,7 +1404,7 @@ impl SessionService for LiveSessionService {
         let shares = share_store
             .list_for_session(key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         let items: Vec<Value> = shares
             .into_iter()
@@ -1421,7 +1434,10 @@ impl SessionService for LiveSessionService {
             .as_ref()
             .ok_or_else(|| "session share store not configured".to_string())?;
 
-        let revoked = share_store.revoke(id).await.map_err(|e| e.to_string())?;
+        let revoked = share_store
+            .revoke(id)
+            .await
+            .map_err(ServiceError::message)?;
 
         // Remove pre-rendered static files.
         let shares_dir = moltis_config::data_dir().join("shares");
@@ -1437,7 +1453,7 @@ impl SessionService for LiveSessionService {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "missing 'key' parameter".to_string())?;
 
-        self.store.clear(key).await.map_err(|e| e.to_string())?;
+        self.store.clear(key).await.map_err(ServiceError::message)?;
         self.metadata.touch(key, 0).await;
         self.metadata.set_preview(key, None).await;
 
@@ -1451,7 +1467,7 @@ impl SessionService for LiveSessionService {
             .ok_or_else(|| "missing 'key' parameter".to_string())?;
 
         if key == "main" {
-            return Err("cannot delete the main session".to_string());
+            return Err("cannot delete the main session".into());
         }
 
         let force = params
@@ -1476,8 +1492,7 @@ impl SessionService for LiveSessionService {
                     moltis_projects::WorktreeManager::has_uncommitted_changes(&wt_dir).await
             {
                 return Err(
-                    "worktree has uncommitted changes; use force: true to delete anyway"
-                        .to_string(),
+                    "worktree has uncommitted changes; use force: true to delete anyway".into(),
                 );
             }
 
@@ -1496,7 +1511,7 @@ impl SessionService for LiveSessionService {
             }
         }
 
-        self.store.clear(key).await.map_err(|e| e.to_string())?;
+        self.store.clear(key).await.map_err(ServiceError::message)?;
 
         // Clean up sandbox resources for this session.
         if let Some(ref router) = self.sandbox_router
@@ -1545,7 +1560,7 @@ impl SessionService for LiveSessionService {
             .store
             .read(parent_key)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
         let msg_count = messages.len();
 
         let fork_point = params
@@ -1555,9 +1570,7 @@ impl SessionService for LiveSessionService {
             .unwrap_or(msg_count);
 
         if fork_point > msg_count {
-            return Err(format!(
-                "forkPoint {fork_point} exceeds message count {msg_count}"
-            ));
+            return Err(format!("forkPoint {fork_point} exceeds message count {msg_count}").into());
         }
 
         let new_key = format!("session:{}", uuid::Uuid::new_v4());
@@ -1566,13 +1579,13 @@ impl SessionService for LiveSessionService {
         self.store
             .replace_history(&new_key, forked_messages)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         let _entry = self
             .metadata
             .upsert(&new_key, label)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         self.metadata.touch(&new_key, fork_point as u32).await;
 
@@ -1670,7 +1683,7 @@ impl SessionService for LiveSessionService {
             .store
             .search(query, max)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(ServiceError::message)?;
 
         let enriched: Vec<Value> = {
             let mut out = Vec::with_capacity(results.len());
@@ -2284,7 +2297,7 @@ mod tests {
         }
 
         async fn enable(&self, _params: Value) -> ServiceResult {
-            Err("mock".to_string())
+            Err("mock".into())
         }
 
         async fn disable(&self) -> ServiceResult {
@@ -2294,15 +2307,15 @@ mod tests {
         async fn convert(&self, _params: Value) -> ServiceResult {
             self.convert_calls.fetch_add(1, Ordering::SeqCst);
             if let Some(ref error) = self.convert_error {
-                return Err(error.clone());
+                return Err(error.clone().into());
             }
             self.convert_payload
                 .clone()
-                .ok_or_else(|| "mock missing convert payload".to_string())
+                .ok_or_else(|| ServiceError::message("mock missing convert payload"))
         }
 
         async fn set_provider(&self, _params: Value) -> ServiceResult {
-            Err("mock".to_string())
+            Err("mock".into())
         }
     }
 
@@ -2437,7 +2450,7 @@ mod tests {
             .voice_generate(serde_json::json!({ "key": "main", "messageIndex": 0 }))
             .await
             .expect_err("should reject non-assistant target");
-        assert!(error.contains("not an assistant"));
+        assert!(error.to_string().contains("not an assistant"));
     }
 
     #[tokio::test]
