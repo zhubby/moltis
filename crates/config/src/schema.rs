@@ -1015,7 +1015,10 @@ pub struct McpOAuthOverrideEntry {
 pub struct ChannelsConfig {
     /// Which channel types are offered in the web UI (onboarding + channels page).
     /// Defaults to `["telegram"]`. Set to `["telegram", "msteams"]` to opt in to Teams.
-    #[serde(default = "default_channels_offered", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default = "default_channels_offered",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub offered: Vec<String>,
     /// Telegram bot accounts, keyed by account ID.
     #[serde(default)]
@@ -1966,9 +1969,9 @@ OPENROUTER_API_KEY = "sk-or-test"
     fn channels_config_explicit_offered() {
         let config: ChannelsConfig =
             toml::from_str(r#"offered = ["telegram", "msteams"]"#).unwrap();
-        assert_eq!(
-            config.offered,
-            vec!["telegram".to_string(), "msteams".to_string()]
-        );
+        assert_eq!(config.offered, vec![
+            "telegram".to_string(),
+            "msteams".to_string()
+        ]);
     }
 }

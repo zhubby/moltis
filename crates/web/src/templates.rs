@@ -269,7 +269,10 @@ pub(crate) async fn build_gon_data(gw: &GatewayState) -> GonData {
         .unwrap_or_default();
     let (heartbeat_config, channels_offered) = {
         let inner = gw.inner.read().await;
-        (inner.heartbeat_config.clone(), inner.channels_offered.clone())
+        (
+            inner.heartbeat_config.clone(),
+            inner.channels_offered.clone(),
+        )
     };
 
     let heartbeat_runs: Vec<moltis_cron::types::CronRunRecord> = gw

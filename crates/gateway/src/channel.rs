@@ -122,8 +122,14 @@ impl LiveChannelService {
         }
 
         let ct = channel_type.as_str();
-        let bound = self.session_metadata.list_account_sessions(ct, account_id).await;
-        let active_map = self.session_metadata.list_active_sessions(ct, account_id).await;
+        let bound = self
+            .session_metadata
+            .list_account_sessions(ct, account_id)
+            .await;
+        let active_map = self
+            .session_metadata
+            .list_active_sessions(ct, account_id)
+            .await;
         let sessions: Vec<_> = bound
             .iter()
             .map(|s| {
@@ -303,7 +309,11 @@ impl ChannelService for LiveChannelService {
             .cloned()
             .unwrap_or(Value::Object(Default::default()));
 
-        info!(account_id, channel_type = channel_type.as_str(), "adding channel account");
+        info!(
+            account_id,
+            channel_type = channel_type.as_str(),
+            "adding channel account"
+        );
         self.start_plugin_account(channel_type, account_id, config.clone())
             .await?;
 
@@ -337,7 +347,11 @@ impl ChannelService for LiveChannelService {
             .resolve_channel_type(&params, account_id, ChannelType::Telegram)
             .await?;
 
-        info!(account_id, channel_type = channel_type.as_str(), "removing channel account");
+        info!(
+            account_id,
+            channel_type = channel_type.as_str(),
+            "removing channel account"
+        );
         self.stop_plugin_account(channel_type, account_id).await?;
 
         if let Err(e) = self.store.delete(channel_type.as_str(), account_id).await {
@@ -367,7 +381,11 @@ impl ChannelService for LiveChannelService {
             .cloned()
             .ok_or_else(|| "missing 'config'".to_string())?;
 
-        info!(account_id, channel_type = channel_type.as_str(), "updating channel account");
+        info!(
+            account_id,
+            channel_type = channel_type.as_str(),
+            "updating channel account"
+        );
         self.stop_plugin_account(channel_type, account_id).await?;
         self.start_plugin_account(channel_type, account_id, config.clone())
             .await?;

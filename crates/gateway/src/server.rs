@@ -2166,7 +2166,7 @@ pub async fn start_gateway(
         ));
 
         services = services.with_channel_outbound(
-            Arc::clone(&multi_router) as Arc<dyn moltis_channels::ChannelOutbound>,
+            Arc::clone(&multi_router) as Arc<dyn moltis_channels::ChannelOutbound>
         );
         services = services.with_channel_stream_outbound(
             multi_router as Arc<dyn moltis_channels::ChannelStreamOutbound>,
