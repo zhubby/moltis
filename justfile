@@ -219,30 +219,30 @@ ui-e2e-headed:
 # Build all Linux packages (deb + rpm + arch + appimage) for all architectures
 packages-all: deb-all rpm-all arch-pkg-all
 
-# Build Rust static library and generated C header used by swift-poc.
-swift-poc-build-rust:
-    ./scripts/build-swift-poc-bridge.sh
+# Build Rust static library and generated C header for the macOS app.
+swift-build-rust:
+    ./scripts/build-swift-bridge.sh
 
-# Generate Xcode project from YAML spec for swift-poc.
-swift-poc-generate:
-    ./scripts/generate-swift-poc-project.sh
+# Generate Xcode project from YAML spec in apps/macos.
+swift-generate:
+    ./scripts/generate-swift-project.sh
 
-# Lint swift-poc Swift sources with SwiftLint.
-swift-poc-lint:
-    ./scripts/lint-swift-poc.sh
+# Lint macOS app sources with SwiftLint.
+swift-lint:
+    ./scripts/lint-swift.sh
 
-# Build swift-poc macOS app.
-swift-poc-build: swift-poc-build-rust swift-poc-generate
-    ./scripts/build-swift-poc.sh
+# Build Swift macOS app.
+swift-build: swift-build-rust swift-generate
+    ./scripts/build-swift.sh
 
-# Run swift-poc unit tests.
-swift-poc-test: swift-poc-build-rust swift-poc-generate
-    ./scripts/test-swift-poc.sh
+# Run Swift app unit tests.
+swift-test: swift-build-rust swift-generate
+    ./scripts/test-swift.sh
 
-# Build and launch the swift-poc macOS app locally.
-swift-poc-run: swift-poc-build-rust swift-poc-generate
-    ./scripts/run-swift-poc.sh
+# Build and launch the Swift macOS app locally.
+swift-run: swift-build-rust swift-generate
+    ./scripts/run-swift.sh
 
 # Open generated project in Xcode.
-swift-poc-open: swift-poc-build-rust swift-poc-generate
-    open examples/swift-poc/Moltis.xcodeproj
+swift-open: swift-build-rust swift-generate
+    open apps/macos/Moltis.xcodeproj

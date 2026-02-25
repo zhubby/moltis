@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BRIDGE_CRATE_DIR="${REPO_ROOT}/crates/swift-bridge"
-OUTPUT_DIR="${REPO_ROOT}/examples/swift-poc/Generated"
+MACOS_APP_DIR="${REPO_ROOT}/apps/macos"
+OUTPUT_DIR="${MACOS_APP_DIR}/Generated"
 UNIVERSAL_DIR="${REPO_ROOT}/target/universal-macos/release"
 
 if ! command -v cbindgen >/dev/null 2>&1; then

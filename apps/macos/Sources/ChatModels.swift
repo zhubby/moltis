@@ -25,17 +25,32 @@ struct ChatMessage: Identifiable, Equatable {
     let role: ChatMessageRole
     let text: String
     let createdAt: Date
+    var provider: String?
+    var model: String?
+    var inputTokens: UInt32?
+    var outputTokens: UInt32?
+    var durationMs: UInt64?
 
     init(
         id: UUID = UUID(),
         role: ChatMessageRole,
         text: String,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        provider: String? = nil,
+        model: String? = nil,
+        inputTokens: UInt32? = nil,
+        outputTokens: UInt32? = nil,
+        durationMs: UInt64? = nil
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.createdAt = createdAt
+        self.provider = provider
+        self.model = model
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.durationMs = durationMs
     }
 }
 

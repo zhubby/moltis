@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SWIFT_POC_DIR="${REPO_ROOT}/examples/swift-poc"
+MACOS_APP_DIR="${REPO_ROOT}/apps/macos"
 
 if ! command -v swiftlint >/dev/null 2>&1; then
   echo "error: swiftlint is required (install with: brew install swiftlint)" >&2
@@ -15,7 +15,7 @@ if [ -z "${DEVELOPER_DIR:-}" ] && [ -d "/Applications/Xcode.app/Contents/Develop
   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 fi
 
-cd "${SWIFT_POC_DIR}"
+cd "${MACOS_APP_DIR}"
 swiftlint lint --config .swiftlint.yml --strict
 
-echo "SwiftLint passed for swift-poc"
+echo "SwiftLint passed for swift app"

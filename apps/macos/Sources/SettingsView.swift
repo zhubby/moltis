@@ -134,7 +134,7 @@ private struct SettingsGroupTab: View {
                     SettingsSectionContent(
                         section: section,
                         settings: settings,
-                        providerStore: section == .llms ? providerStore : nil
+                        providerStore: (section == .llms || section == .voice) ? providerStore : nil
                     )
                 }
             }

@@ -1,6 +1,6 @@
-# Moltis Swift POC
+# Moltis macOS App
 
-This proof-of-concept embeds Moltis Rust code into a native macOS SwiftUI app.
+This app embeds Moltis Rust code into a native macOS SwiftUI app.
 
 On first launch, the app opens an AppKit onboarding wizard to configure identity
 and model defaults before entering the chat UI.
@@ -17,15 +17,15 @@ and model defaults before entering the chat UI.
 From the repository root:
 
 ```bash
-just swift-poc-build-rust
-just swift-poc-generate
-just swift-poc-lint
-just swift-poc-build
-just swift-poc-run
+just swift-build-rust
+just swift-generate
+just swift-lint
+just swift-build
+just swift-run
 ```
 
 Run the app from Xcode:
 
 ```bash
-just swift-poc-open
+just swift-open
 ```

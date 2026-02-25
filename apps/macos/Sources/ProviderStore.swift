@@ -1,6 +1,26 @@
 import Combine
 import Foundation
 
+// MARK: - Voice Provider
+
+struct VoiceProvider: Identifiable {
+    let name: String
+    let displayName: String
+    let requiresApiKey: Bool
+
+    var id: String { name }
+
+    static let all: [VoiceProvider] = [
+        VoiceProvider(name: "openai", displayName: "OpenAI TTS", requiresApiKey: true),
+        VoiceProvider(name: "elevenlabs", displayName: "ElevenLabs", requiresApiKey: true),
+        VoiceProvider(name: "google", displayName: "Google Cloud TTS", requiresApiKey: true),
+        VoiceProvider(name: "piper", displayName: "Piper (Local)", requiresApiKey: false),
+        VoiceProvider(name: "coqui", displayName: "Coqui (Local)", requiresApiKey: false),
+    ]
+}
+
+// MARK: - Provider Store
+
 final class ProviderStore: ObservableObject {
     @Published private(set) var knownProviders: [BridgeKnownProvider] = []
     @Published private(set) var detectedSources: [BridgeDetectedSource] = []
@@ -11,6 +31,10 @@ final class ProviderStore: ObservableObject {
     @Published var selectedModelID: String?
     @Published var apiKeyDraft = ""
     @Published var baseUrlDraft = ""
+
+    // Voice provider state
+    @Published var selectedVoiceProviderName: String?
+    @Published var voiceApiKeyDraft = ""
 
     private let client: MoltisClient
 

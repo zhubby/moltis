@@ -64,6 +64,13 @@ private extension OnboardingView {
                 Section(currentStep.title) {
                     ProviderGridPane(providerStore: providerStore)
                 }
+            } else if currentStep == .voice {
+                Section(currentStep.title) {
+                    VoiceProviderGridPane(
+                        providerStore: providerStore,
+                        settings: settings
+                    )
+                }
             } else if let section = currentStep.settingsSection {
                 Section(currentStep.title) {
                     SettingsSectionContent(

@@ -69,19 +69,19 @@ Safety checklist:
 
 Use YAML-generated Xcode projects for the POC (no hand-maintained `.xcodeproj`):
 
-1. Define app targets in `examples/swift-poc/project.yml`.
+1. Define app targets in `apps/macos/project.yml`.
 2. Generate project with XcodeGen.
 3. Link `Generated/libmoltis_bridge.a` and include `Generated/moltis_bridge.h`.
 4. Use a Swift facade (`MoltisClient`) to own pointer and lifetime rules.
-5. Keep Swift linted via `examples/swift-poc/.swiftlint.yml`.
+5. Keep Swift linted via `apps/macos/.swiftlint.yml`.
 
 From repo root:
 
 ```bash
-just swift-poc-build-rust
-just swift-poc-generate
-just swift-poc-lint
-just swift-poc-build
+just swift-build-rust
+just swift-generate
+just swift-lint
+just swift-build
 ```
 
 The UI remains purely SwiftUI while core requests/responses flow through the Rust bridge.

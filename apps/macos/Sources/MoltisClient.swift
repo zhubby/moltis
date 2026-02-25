@@ -59,6 +59,9 @@ struct BridgeChatPayload: Decodable {
     let configDir: String
     let defaultSoul: String
     let validation: BridgeValidationPayload?
+    let inputTokens: UInt32?
+    let outputTokens: UInt32?
+    let durationMs: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case reply
@@ -67,6 +70,9 @@ struct BridgeChatPayload: Decodable {
         case configDir = "config_dir"
         case defaultSoul = "default_soul"
         case validation
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case durationMs = "duration_ms"
     }
 }
 

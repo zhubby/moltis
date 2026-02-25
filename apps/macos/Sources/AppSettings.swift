@@ -40,6 +40,10 @@ final class AppSettings: ObservableObject {
     @Published var terminalEnabled = false
     @Published var terminalShell = "/bin/zsh"
 
+    @Published var sandboxEnabled = false
+    @Published var containerImage = ""
+    @Published var debugEnabled = false
+
     @Published var sandboxBackend = "auto"
     @Published var sandboxImage = "moltis/sandbox:latest"
 
@@ -56,7 +60,6 @@ final class AppSettings: ObservableObject {
     @Published var configurationToml = "[server]\nport = \"invalid\""
 
     let memoryModes = ["workspace", "global", "off"]
-    let voiceProviders = ["none", "openai", "elevenlabs"]
     let sandboxBackends = ["auto", "docker", "apple-container"]
     let logLevels = ["trace", "debug", "info", "warn", "error"]
 }

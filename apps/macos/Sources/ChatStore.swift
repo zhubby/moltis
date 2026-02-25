@@ -117,7 +117,15 @@ final class ChatStore: ObservableObject {
                         self.settings.llmProvider = provider
                     }
 
-                    self.appendMessage(role: .assistant, text: payload.reply)
+                    self.appendMessage(
+                        role: .assistant,
+                        text: payload.reply,
+                        provider: payload.provider,
+                        model: payload.model,
+                        inputTokens: payload.inputTokens,
+                        outputTokens: payload.outputTokens,
+                        durationMs: payload.durationMs
+                    )
                     self.appendValidationSummary(payload.validation)
                     self.statusText = "Received response via \(payload.provider ?? "unknown")."
 
@@ -143,13 +151,29 @@ final class ChatStore: ObservableObject {
         appendMessage(role: role, text: summary)
     }
 
-    private func appendMessage(role: ChatMessageRole, text: String) {
+    private func appendMessage(
+        role: ChatMessageRole,
+        text: String,
+        provider: String? = nil,
+        model: String? = nil,
+        inputTokens: UInt32? = nil,
+        outputTokens: UInt32? = nil,
+        durationMs: UInt64? = nil
+    ) {
         guard let index = selectedSessionIndex() else {
             return
         }
 
         var session = sessions[index]
-        session.messages.append(ChatMessage(role: role, text: text))
+        session.messages.append(ChatMessage(
+            role: role,
+            text: text,
+            provider: provider,
+            model: model,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            durationMs: durationMs
+        ))
         session.updatedAt = Date()
         sessions[index] = session
     }
