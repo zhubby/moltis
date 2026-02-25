@@ -213,6 +213,7 @@ onboarding-ready configs.</li>
 <li>GraphQL gateway now builds its schema once at startup and reuses it for HTTP and WebSocket requests</li>
 <li>GraphQL resolvers now share common RPC helper macros and use typed response objects for <code>node.describe</code>, <code>voice.config</code>, <code>voice.voxtral_requirements</code>, <code>skills.security_status</code>, <code>skills.security_scan</code>, and <code>memory.config</code></li>
 <li>GraphQL <code>logs.ack</code> mutation now matches backend behavior and no longer takes an <code>ids</code> argument</li>
+<li>Providers now support <code>stream_transport = "sse" | "websocket" | "auto"</code> in config. OpenAI can stream via Responses API WebSocket mode, and <code>auto</code> falls back to SSE when WebSocket setup is unavailable.</li>
 <li>Agent Identity emoji picker now includes 🐰 🐹 🦀 🦞 🦝 🦭 🧠 🧭 options</li>
 </ul>
 <h3 id="deprecated"><a class="header" href="#deprecated">Deprecated</a></h3>
