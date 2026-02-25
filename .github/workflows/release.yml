@@ -684,6 +684,84 @@ jobs:
             *.tar.gz.sig
             *.tar.gz.crt
 
+  build-macos-app:
+    needs: [clippy, test, e2e]
+    runs-on: macos-latest
+    name: Build macOS app
+    permissions:
+      contents: read
+      id-token: write # Required for Sigstore keyless signing
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+        with:
+          toolchain: stable
+
+      - name: Install Swift build dependencies
+        run: brew install xcodegen cbindgen
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
+
+      - name: Build Swift bridge artifacts and generate Xcode project
+        run: |
+          ./scripts/build-swift-bridge.sh
+          ./scripts/generate-swift-project.sh
+
+      - name: Build macOS app
+        env:
+          DERIVED_DATA_DIR: apps/macos/.derivedData-ci
+        run: |
+          xcodebuild \
+            -project apps/macos/Moltis.xcodeproj \
+            -scheme Moltis \
+            -configuration Release \
+            -destination "platform=macOS" \
+            -derivedDataPath "$DERIVED_DATA_DIR" \
+            build
+
+      - name: Determine package version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package macOS app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          APP_PATH: apps/macos/.derivedData-ci/Build/Products/Release/Moltis.app
+        run: |
+          if [ ! -d "$APP_PATH" ]; then
+            echo "expected app bundle not found at $APP_PATH" >&2
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "moltis-${VERSION}-macos.app.zip"
+
+      - name: Sign with Sigstore and generate checksums
+        uses: ./.github/actions/sign-artifacts
+        with:
+          files: moltis-${{ steps.version.outputs.version }}-macos.app.zip
+
+      - name: Upload macOS app artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: moltis-macos-app
+          path: |
+            *.app.zip
+            *.app.zip.sha256
+            *.app.zip.sha512
+            *.app.zip.sig
+            *.app.zip.crt
+
   build-windows-exe:
     needs: [clippy, test, e2e]
     runs-on: windows-latest
@@ -983,6 +1061,7 @@ jobs:
       - build-appimage
       - build-snap
       - build-homebrew-binaries
+      - build-macos-app
       - build-windows-exe
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
@@ -1008,7 +1087,7 @@ jobs:
           mkdir -p release-files
           find artifacts -type f \( \
             -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \
-            -o -name '*.AppImage' -o -name '*.snap' -o -name '*.tar.gz' -o -name '*.exe' \
+            -o -name '*.AppImage' -o -name '*.snap' -o -name '*.tar.gz' -o -name '*.zip' -o -name '*.exe' \
             -o -name '*.sha256' -o -name '*.sha512' -o -name '*.sig' -o -name '*.crt' \
           \) -exec cp {} release-files/ \;
           echo "Files to upload:"
