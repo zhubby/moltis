@@ -396,9 +396,9 @@ impl std::fmt::Display for WorkspaceMount {
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum HomePersistence {
-    #[default]
     Off,
     Session,
+    #[default]
     Shared,
 }
 
@@ -3547,13 +3547,35 @@ mod tests {
 
     #[test]
     fn test_docker_home_persistence_args_off() {
-        let config = SandboxConfig::default();
+        let config = SandboxConfig {
+            home_persistence: HomePersistence::Off,
+            ..Default::default()
+        };
         let docker = DockerSandbox::new(config);
         let id = SandboxId {
             scope: SandboxScope::Session,
             key: "sess-1".into(),
         };
         assert!(docker.home_persistence_args(&id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_docker_home_persistence_args_default_shared() {
+        let config = SandboxConfig::default();
+        let docker = DockerSandbox::new(config);
+        let id = SandboxId {
+            scope: SandboxScope::Session,
+            key: "sess-1".into(),
+        };
+        let args = docker.home_persistence_args(&id).unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-v");
+        let expected_host_dir = moltis_config::data_dir()
+            .join("sandbox")
+            .join("home")
+            .join("shared");
+        let expected_volume = format!("{}:/home/sandbox:rw", expected_host_dir.display());
+        assert_eq!(args[1], expected_volume);
     }
 
     #[test]

@@ -62,7 +62,7 @@ Commands run inside isolated containers for security:
 mode = "all"                    # "off", "non-main", or "all"
 scope = "session"               # "command", "session", or "global"
 workspace_mount = "ro"          # "ro", "rw", or "none"
-home_persistence = "off"        # "off", "session", or "shared"
+home_persistence = "shared"     # "off", "session", or "shared" (default: "shared")
 backend = "auto"                # "auto", "docker", or "apple-container"
 no_network = true
 

@@ -228,10 +228,10 @@ workspace_mount = "ro"            # How to mount workspace in sandbox:
                                   #   "ro"   - Read-only (safe)
                                   #   "rw"   - Read-write (can modify files)
                                   #   "none" - No mount
-home_persistence = "off"          # Persist /home/sandbox across container recreation:
-                                  #   "off"     - Ephemeral home (default)
+home_persistence = "shared"       # Persist /home/sandbox across container recreation:
+                                  #   "off"     - Ephemeral home
                                   #   "session" - Per-session persisted home
-                                  #   "shared"  - One shared persisted home
+                                  #   "shared"  - One shared persisted home (default)
 backend = "auto"                  # Container backend:
                                   #   "auto"            - Auto-detect (prefers Apple Container on macOS)
                                   #   "docker"          - Use Docker

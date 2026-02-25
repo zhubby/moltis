@@ -1408,9 +1408,9 @@ pub struct ResourceLimitsConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum HomePersistenceConfig {
-    #[default]
     Off,
     Session,
+    #[default]
     Shared,
 }
 
@@ -1953,6 +1953,6 @@ OPENROUTER_API_KEY = "sk-or-test"
     fn sandbox_defaults_include_go_runtime() {
         let sandbox = SandboxConfig::default();
         assert!(sandbox.packages.iter().any(|pkg| pkg == "golang-go"));
-        assert_eq!(sandbox.home_persistence, HomePersistenceConfig::Off);
+        assert_eq!(sandbox.home_persistence, HomePersistenceConfig::Shared);
     }
 }

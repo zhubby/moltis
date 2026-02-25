@@ -84,7 +84,7 @@ Sandbox homes are ephemeral by default. To persist files under `/home/sandbox`
 
 ```toml
 [tools.exec.sandbox]
-home_persistence = "session"   # "off" (default), "session", or "shared"
+home_persistence = "session"   # "off", "session", or "shared" (default)
 ```
 
 - `off`: no home mount, container home is ephemeral
