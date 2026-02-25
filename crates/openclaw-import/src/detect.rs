@@ -98,6 +98,38 @@ fn resolve_workspace_dir(home: &Path) -> PathBuf {
     }
 }
 
+/// Resolve the sessions directory for one agent, supporting both historical
+/// and current OpenClaw layouts.
+pub(crate) fn resolve_agent_sessions_dir(agent_dir: &Path) -> Option<PathBuf> {
+    let nested = agent_dir.join("agent").join("sessions");
+    if nested.is_dir() {
+        return Some(nested);
+    }
+
+    let flat = agent_dir.join("sessions");
+    if flat.is_dir() {
+        return Some(flat);
+    }
+
+    None
+}
+
+/// Resolve auth-profiles path for one agent, supporting both historical and
+/// current OpenClaw layouts.
+pub(crate) fn resolve_agent_auth_profiles_path(agent_dir: &Path) -> Option<PathBuf> {
+    let nested = agent_dir.join("agent").join("auth-profiles.json");
+    if nested.is_file() {
+        return Some(nested);
+    }
+
+    let flat = agent_dir.join("auth-profiles.json");
+    if flat.is_file() {
+        return Some(flat);
+    }
+
+    None
+}
+
 /// Scan `agents/` directory for agent IDs, session counts, and credentials.
 fn scan_agents(home: &Path) -> (Vec<String>, usize, bool) {
     let agents_dir = home.join("agents");
@@ -110,16 +142,15 @@ fn scan_agents(home: &Path) -> (Vec<String>, usize, bool) {
     };
 
     for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
+        let agent_dir = entry.path();
+        if !agent_dir.is_dir() {
             continue;
         }
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if let Some(name) = agent_dir.file_name().and_then(|n| n.to_str()) {
             agent_ids.push(name.to_string());
 
             // Count sessions
-            let sessions_dir = path.join("agent").join("sessions");
-            if sessions_dir.is_dir()
+            if let Some(sessions_dir) = resolve_agent_sessions_dir(&agent_dir)
                 && let Ok(session_entries) = std::fs::read_dir(&sessions_dir)
             {
                 session_count += session_entries
@@ -129,7 +160,7 @@ fn scan_agents(home: &Path) -> (Vec<String>, usize, bool) {
             }
 
             // Check for auth-profiles.json
-            if path.join("agent").join("auth-profiles.json").is_file() {
+            if resolve_agent_auth_profiles_path(&agent_dir).is_some() {
                 has_credentials = true;
             }
         }
@@ -243,6 +274,31 @@ mod tests {
         assert!(detection.has_config);
         assert!(detection.has_memory);
         assert!(detection.has_skills);
+        assert!(detection.has_credentials);
+        assert_eq!(detection.agent_ids, vec!["main"]);
+        assert_eq!(detection.session_count, 1);
+    }
+
+    #[test]
+    fn detect_at_flat_agent_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        std::fs::create_dir_all(home.join("agents").join("main").join("sessions")).unwrap();
+        std::fs::write(
+            home.join("agents")
+                .join("main")
+                .join("sessions")
+                .join("main.jsonl"),
+            r#"{"type":"message","message":{"role":"user","content":"Hello"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("agents").join("main").join("auth-profiles.json"),
+            r#"{"version":1,"profiles":{}}"#,
+        )
+        .unwrap();
+
+        let detection = detect_at(home).expect("should detect");
         assert!(detection.has_credentials);
         assert_eq!(detection.agent_ids, vec!["main"]);
         assert_eq!(detection.session_count, 1);

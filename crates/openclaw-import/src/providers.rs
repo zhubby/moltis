@@ -11,7 +11,7 @@ use {
 };
 
 use crate::{
-    detect::OpenClawDetection,
+    detect::{OpenClawDetection, resolve_agent_auth_profiles_path},
     report::{CategoryReport, ImportCategory, ImportStatus},
     types::{OpenClawAuthProfile, OpenClawAuthProfileStore, OpenClawConfig},
 };
@@ -77,14 +77,10 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
     // 1. Load auth profiles from all agents
     let mut provider_keys: HashMap<String, String> = HashMap::new();
     for agent_id in &detection.agent_ids {
-        let profiles_path = detection
-            .home_dir
-            .join("agents")
-            .join(agent_id)
-            .join("agent")
-            .join("auth-profiles.json");
-
-        if let Some(store) = load_auth_profiles(&profiles_path) {
+        let agent_dir = detection.home_dir.join("agents").join(agent_id);
+        if let Some(profiles_path) = resolve_agent_auth_profiles_path(&agent_dir)
+            && let Some(store) = load_auth_profiles(&profiles_path)
+        {
             for profile in store.profiles.values() {
                 let provider = map_provider_name(profile.provider());
                 if let Some(key) = extract_api_key(profile)

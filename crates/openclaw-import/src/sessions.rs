@@ -1,6 +1,9 @@
 //! Import session JSONL files from OpenClaw to Moltis format.
 //!
-//! OpenClaw sessions live at `~/.openclaw/agents/<id>/sessions/<key>.jsonl`.
+//! OpenClaw sessions live at either:
+//! - `~/.openclaw/agents/<id>/sessions/<key>.jsonl` (legacy layout), or
+//! - `~/.openclaw/agents/<id>/agent/sessions/<key>.jsonl` (newer layout).
+//!
 //! Moltis sessions live at `<data_dir>/sessions/<key>.jsonl` with metadata in
 //! `session-metadata.json`.
 
@@ -16,7 +19,7 @@ use {
 };
 
 use crate::{
-    detect::OpenClawDetection,
+    detect::{OpenClawDetection, resolve_agent_sessions_dir},
     report::{CategoryReport, ImportCategory, ImportStatus},
     types::{OpenClawContent, OpenClawRole, OpenClawSessionRecord},
 };
@@ -122,16 +125,10 @@ pub fn import_sessions(
         ));
     }
 
-    let sessions_dir = detection
-        .home_dir
-        .join("agents")
-        .join(import_agent)
-        .join("agent")
-        .join("sessions");
-
-    if !sessions_dir.is_dir() {
+    let agent_dir = detection.home_dir.join("agents").join(import_agent);
+    let Some(sessions_dir) = resolve_agent_sessions_dir(&agent_dir) else {
         return CategoryReport::skipped(ImportCategory::Sessions);
-    }
+    };
 
     let Ok(dir_entries) = std::fs::read_dir(&sessions_dir) else {
         return CategoryReport::failed(
@@ -522,6 +519,13 @@ mod tests {
         std::fs::write(dir.join(format!("{key}.jsonl")), content).unwrap();
     }
 
+    fn setup_session_legacy_layout(home: &Path, agent: &str, key: &str, lines: &[&str]) {
+        let dir = home.join("agents").join(agent).join("sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        let content = lines.join("\n");
+        std::fs::write(dir.join(format!("{key}.jsonl")), content).unwrap();
+    }
+
     #[test]
     fn convert_basic_session() {
         let tmp = tempfile::tempdir().unwrap();
@@ -557,6 +561,27 @@ mod tests {
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["role"], "assistant");
         assert_eq!(second["content"], "Hi there!");
+    }
+
+    #[test]
+    fn convert_basic_session_legacy_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dest = tmp.path().join("sessions");
+        let mem = tmp.path().join("memory").join("sessions");
+
+        setup_session_legacy_layout(home, "main", "legacy-session", &[
+            r#"{"type":"session-meta","agentId":"main"}"#,
+            r#"{"type":"message","message":{"role":"user","content":"Hello"}}"#,
+            r#"{"type":"message","message":{"role":"assistant","content":"Hi there!"}}"#,
+        ]);
+
+        let detection = make_detection(home);
+        let report = import_sessions(&detection, &dest, &mem);
+
+        assert_eq!(report.status, ImportStatus::Success);
+        assert_eq!(report.items_imported, 1);
+        assert!(dest.join("oc:main:legacy-session.jsonl").is_file());
     }
 
     #[test]
