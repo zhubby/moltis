@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use {
     anyhow::Result,
@@ -391,6 +391,37 @@ impl std::fmt::Display for WorkspaceMount {
     }
 }
 
+/// Persistence mode for `/home/sandbox` in container backends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum HomePersistence {
+    #[default]
+    Off,
+    Session,
+    Shared,
+}
+
+impl std::fmt::Display for HomePersistence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::Session => f.write_str("session"),
+            Self::Shared => f.write_str("shared"),
+        }
+    }
+}
+
+impl From<&moltis_config::schema::HomePersistenceConfig> for HomePersistence {
+    fn from(value: &moltis_config::schema::HomePersistenceConfig) -> Self {
+        match value {
+            moltis_config::schema::HomePersistenceConfig::Off => Self::Off,
+            moltis_config::schema::HomePersistenceConfig::Session => Self::Session,
+            moltis_config::schema::HomePersistenceConfig::Shared => Self::Shared,
+        }
+    }
+}
+
 /// Resource limits for sandboxed execution.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -410,6 +441,8 @@ pub struct SandboxConfig {
     pub mode: SandboxMode,
     pub scope: SandboxScope,
     pub workspace_mount: WorkspaceMount,
+    /// Persistence strategy for `/home/sandbox`.
+    pub home_persistence: HomePersistence,
     pub image: Option<String>,
     pub container_prefix: Option<String>,
     pub no_network: bool,
@@ -430,6 +463,7 @@ impl Default for SandboxConfig {
             mode: SandboxMode::default(),
             scope: SandboxScope::default(),
             workspace_mount: WorkspaceMount::default(),
+            home_persistence: HomePersistence::default(),
             image: None,
             container_prefix: None,
             no_network: false,
@@ -459,6 +493,7 @@ impl From<&moltis_config::schema::SandboxConfig> for SandboxConfig {
                 "none" => WorkspaceMount::None,
                 _ => WorkspaceMount::Ro,
             },
+            home_persistence: HomePersistence::from(&cfg.home_persistence),
             image: cfg.image.clone(),
             container_prefix: cfg.container_prefix.clone(),
             no_network: cfg.no_network,
@@ -547,6 +582,48 @@ const GOGCLI_VERSION: &str = "latest";
 #[cfg(target_os = "macos")]
 const APPLE_CONTAINER_SAFE_WORKDIR: &str = "/tmp";
 
+fn sanitize_path_component(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    if out.is_empty() {
+        "default".to_string()
+    } else {
+        out
+    }
+}
+
+fn sandbox_home_persistence_base_dir() -> PathBuf {
+    moltis_config::data_dir().join("sandbox").join("home")
+}
+
+fn sandbox_home_persistence_host_dir(config: &SandboxConfig, id: &SandboxId) -> Option<PathBuf> {
+    let base = sandbox_home_persistence_base_dir();
+    match config.home_persistence {
+        HomePersistence::Off => None,
+        HomePersistence::Shared => Some(base.join("shared")),
+        HomePersistence::Session => {
+            Some(base.join("session").join(sanitize_path_component(&id.key)))
+        },
+    }
+}
+
+fn ensure_sandbox_home_persistence_host_dir(
+    config: &SandboxConfig,
+    id: &SandboxId,
+) -> Result<Option<PathBuf>> {
+    let Some(path) = sandbox_home_persistence_host_dir(config, id) else {
+        return Ok(None);
+    };
+    std::fs::create_dir_all(&path)?;
+    Ok(Some(path))
+}
+
 fn sandbox_image_dockerfile(base: &str, packages: &[String]) -> String {
     let pkg_list = canonical_sandbox_packages(packages).join(" ");
     format!(
@@ -571,7 +648,12 @@ fn apple_container_bootstrap_command() -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn apple_container_run_args(name: &str, image: &str, tz: Option<&str>) -> Vec<String> {
+fn apple_container_run_args(
+    name: &str,
+    image: &str,
+    tz: Option<&str>,
+    home_volume: Option<&str>,
+) -> Vec<String> {
     let mut args = vec![
         "run".to_string(),
         "-d".to_string(),
@@ -583,6 +665,9 @@ fn apple_container_run_args(name: &str, image: &str, tz: Option<&str>) -> Vec<St
 
     if let Some(tz) = tz {
         args.extend(["-e".to_string(), format!("TZ={tz}")]);
+    }
+    if let Some(volume) = home_volume {
+        args.extend(["--volume".to_string(), volume.to_string()]);
     }
 
     args.push(image.to_string());
@@ -1360,6 +1445,14 @@ impl DockerSandbox {
         }
     }
 
+    fn home_persistence_args(&self, id: &SandboxId) -> Result<Vec<String>> {
+        let Some(host_dir) = ensure_sandbox_home_persistence_host_dir(&self.config, id)? else {
+            return Ok(Vec::new());
+        };
+        let volume = format!("{}:{SANDBOX_HOME_DIR}:rw", host_dir.display());
+        Ok(vec!["-v".to_string(), volume])
+    }
+
     async fn resolve_local_image(&self, requested_image: &str) -> Result<String> {
         if sandbox_image_exists("docker", requested_image).await {
             return Ok(requested_image.to_string());
@@ -1436,6 +1529,7 @@ impl Sandbox for DockerSandbox {
 
         args.extend(self.resource_args());
         args.extend(self.workspace_args());
+        args.extend(self.home_persistence_args(id)?);
 
         let requested_image = image_override.unwrap_or_else(|| self.image());
         let image = self.resolve_local_image(requested_image).await?;
@@ -1787,6 +1881,13 @@ impl AppleContainerSandbox {
         self.container_prefix()
     }
 
+    fn home_persistence_volume(&self, id: &SandboxId) -> Result<Option<String>> {
+        let Some(host_dir) = ensure_sandbox_home_persistence_host_dir(&self.config, id)? else {
+            return Ok(None);
+        };
+        Ok(Some(format!("{}:{SANDBOX_HOME_DIR}", host_dir.display())))
+    }
+
     async fn resolve_local_image(&self, requested_image: &str) -> Result<String> {
         if sandbox_image_exists("container", requested_image).await {
             return Ok(requested_image.to_string());
@@ -2030,8 +2131,13 @@ impl AppleContainerSandbox {
 
     /// Try to create and start a container. Classifies errors into
     /// `CreateError` variants so the caller can decide the right recovery.
-    async fn run_container(name: &str, image: &str, tz: Option<&str>) -> Result<(), CreateError> {
-        let args = apple_container_run_args(name, image, tz);
+    async fn run_container(
+        name: &str,
+        image: &str,
+        tz: Option<&str>,
+        home_volume: Option<&str>,
+    ) -> Result<(), CreateError> {
+        let args = apple_container_run_args(name, image, tz, home_volume);
 
         let output = tokio::process::Command::new("container")
             .args(&args)
@@ -2511,6 +2617,7 @@ impl Sandbox for AppleContainerSandbox {
         let requested_image = image_override.unwrap_or_else(|| self.image());
         let image = self.resolve_local_image(requested_image).await?;
         let tz = self.config.timezone.as_deref();
+        let home_volume = self.home_persistence_volume(id)?;
 
         const MAX_ATTEMPTS: usize = 3;
         let mut daemon_restarted = false;
@@ -2573,7 +2680,7 @@ impl Sandbox for AppleContainerSandbox {
 
             // Phase 2: Create a new container.
             info!(name, image = %image, attempt, "creating apple container");
-            match Self::run_container(&name, &image, tz).await {
+            match Self::run_container(&name, &image, tz, home_volume.as_deref()).await {
                 Ok(()) => {},
                 Err(CreateError::AlreadyExists) => {
                     warn!(
@@ -3354,6 +3461,13 @@ mod tests {
     }
 
     #[test]
+    fn test_home_persistence_display() {
+        assert_eq!(HomePersistence::Off.to_string(), "off");
+        assert_eq!(HomePersistence::Session.to_string(), "session");
+        assert_eq!(HomePersistence::Shared.to_string(), "shared");
+    }
+
+    #[test]
     fn test_resource_limits_default() {
         let limits = ResourceLimits::default();
         assert!(limits.memory_limit.is_none());
@@ -3429,6 +3543,40 @@ mod tests {
         };
         let docker = DockerSandbox::new(config);
         assert!(docker.workspace_args().is_empty());
+    }
+
+    #[test]
+    fn test_docker_home_persistence_args_off() {
+        let config = SandboxConfig::default();
+        let docker = DockerSandbox::new(config);
+        let id = SandboxId {
+            scope: SandboxScope::Session,
+            key: "sess-1".into(),
+        };
+        assert!(docker.home_persistence_args(&id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_docker_home_persistence_args_session() {
+        let config = SandboxConfig {
+            home_persistence: HomePersistence::Session,
+            ..Default::default()
+        };
+        let docker = DockerSandbox::new(config);
+        let id = SandboxId {
+            scope: SandboxScope::Session,
+            key: "sess:/weird key".into(),
+        };
+        let args = docker.home_persistence_args(&id).unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-v");
+        let expected_host_dir = moltis_config::data_dir()
+            .join("sandbox")
+            .join("home")
+            .join("session")
+            .join("sess--weird-key");
+        let expected_volume = format!("{}:/home/sandbox:rw", expected_host_dir.display());
+        assert_eq!(args[1], expected_volume);
     }
 
     #[test]
@@ -3996,7 +4144,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_apple_container_run_args_pin_workdir_and_bootstrap_home() {
-        let args = apple_container_run_args("moltis-sandbox-test", "ubuntu:25.10", Some("UTC"));
+        let args =
+            apple_container_run_args("moltis-sandbox-test", "ubuntu:25.10", Some("UTC"), None);
         let expected = vec![
             "run",
             "-d",
@@ -4006,6 +4155,37 @@ mod tests {
             "/tmp",
             "-e",
             "TZ=UTC",
+            "ubuntu:25.10",
+            "sh",
+            "-c",
+            "mkdir -p /home/sandbox && exec sleep infinity",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert_eq!(args, expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_apple_container_run_args_with_home_volume() {
+        let args = apple_container_run_args(
+            "moltis-sandbox-test",
+            "ubuntu:25.10",
+            Some("UTC"),
+            Some("/tmp/home:/home/sandbox"),
+        );
+        let expected = vec![
+            "run",
+            "-d",
+            "--name",
+            "moltis-sandbox-test",
+            "--workdir",
+            "/tmp",
+            "-e",
+            "TZ=UTC",
+            "--volume",
+            "/tmp/home:/home/sandbox",
             "ubuntu:25.10",
             "sh",
             "-c",

@@ -62,6 +62,7 @@ Commands run inside isolated containers for security:
 mode = "all"                    # "off", "non-main", or "all"
 scope = "session"               # "command", "session", or "global"
 workspace_mount = "ro"          # "ro", "rw", or "none"
+home_persistence = "off"        # "off", "session", or "shared"
 backend = "auto"                # "auto", "docker", or "apple-container"
 no_network = true
 
@@ -291,6 +292,7 @@ offered = ["openai", "anthropic", "local-llm"]
 mode = "all"
 scope = "session"
 workspace_mount = "ro"
+home_persistence = "session"
 backend = "auto"
 no_network = true
 packages = ["curl", "git", "jq", "python3", "nodejs", "golang-go"]
