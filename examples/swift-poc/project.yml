@@ -29,7 +29,7 @@ targets:
       - path: Sources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.poc
+        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.app
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_EMIT_LOC_STRINGS: NO
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridging-Header.h
@@ -50,5 +50,5 @@ targets:
       - target: Moltis
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.poc.tests
+        PRODUCT_BUNDLE_IDENTIFIER: org.moltis.app.tests
         GENERATE_INFOPLIST_FILE: YES

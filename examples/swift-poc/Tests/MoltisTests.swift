@@ -56,7 +56,7 @@ final class MoltisTests: XCTestCase {
     }
 
     func testOnboardingStatePersistsCompletion() throws {
-        let suiteName = "moltis.swift-poc.tests.\(UUID().uuidString)"
+        let suiteName = "moltis.tests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             XCTFail("Failed to create isolated UserDefaults suite")
             return
