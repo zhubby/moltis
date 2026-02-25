@@ -13,8 +13,8 @@ use {
     moltis_agents::model::{ChatMessage as AgentChatMessage, LlmProvider, UserContent},
     moltis_config::{schema::ProvidersConfig, validate::Severity},
     moltis_provider_setup::{
-        KeyStore, config_with_saved_keys,
-        detect_auto_provider_sources_with_overrides, known_providers,
+        KeyStore, config_with_saved_keys, detect_auto_provider_sources_with_overrides,
+        known_providers,
     },
     moltis_providers::ProviderRegistry,
     serde::{Deserialize, Serialize},
@@ -223,9 +223,7 @@ fn config_dir_string() -> String {
 
 // ── Chat with real LLM ────────────────────────────────────────────────────
 
-fn resolve_provider(
-    request: &ChatRequest,
-) -> Option<std::sync::Arc<dyn LlmProvider>> {
+fn resolve_provider(request: &ChatRequest) -> Option<std::sync::Arc<dyn LlmProvider>> {
     let registry = BRIDGE.registry.read().unwrap_or_else(|e| e.into_inner());
 
     // Try explicit model first
@@ -404,11 +402,7 @@ pub extern "C" fn moltis_detect_providers() -> *mut c_char {
     with_ffi_boundary(|| {
         let config = ProvidersConfig::default();
         let env_overrides = HashMap::new();
-        let sources = detect_auto_provider_sources_with_overrides(
-            &config,
-            None,
-            &env_overrides,
-        );
+        let sources = detect_auto_provider_sources_with_overrides(&config, None, &env_overrides);
         let bridge_sources: Vec<BridgeDetectedSource> = sources
             .into_iter()
             .map(|s| BridgeDetectedSource {
@@ -422,9 +416,7 @@ pub extern "C" fn moltis_detect_providers() -> *mut c_char {
 
 /// Saves provider configuration (API key, base URL, models).
 #[unsafe(no_mangle)]
-pub extern "C" fn moltis_save_provider_config(
-    request_json: *const c_char,
-) -> *mut c_char {
+pub extern "C" fn moltis_save_provider_config(request_json: *const c_char) -> *mut c_char {
     record_call("moltis_save_provider_config");
     trace_call("moltis_save_provider_config");
 
@@ -491,10 +483,7 @@ pub extern "C" fn moltis_refresh_registry() -> *mut c_char {
 
     with_ffi_boundary(|| {
         let new_registry = build_registry();
-        let mut guard = BRIDGE
-            .registry
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = BRIDGE.registry.write().unwrap_or_else(|e| e.into_inner());
         *guard = new_registry;
         encode_json(&OkResponse { ok: true })
     })
