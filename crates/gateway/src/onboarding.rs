@@ -1,5 +1,7 @@
 //! Gateway adapter: wraps `LiveOnboardingService` to implement `OnboardingService`.
 
+use std::{path::Path, sync::Arc};
+
 use {async_trait::async_trait, serde_json::Value};
 
 use crate::services::{OnboardingService, ServiceError, ServiceResult};
@@ -7,11 +9,73 @@ use crate::services::{OnboardingService, ServiceError, ServiceResult};
 /// Gateway-side onboarding service backed by `moltis_onboarding::service::LiveOnboardingService`.
 pub struct GatewayOnboardingService {
     inner: moltis_onboarding::service::LiveOnboardingService,
+    session_metadata: Arc<moltis_sessions::metadata::SqliteSessionMetadata>,
 }
 
 impl GatewayOnboardingService {
-    pub fn new(inner: moltis_onboarding::service::LiveOnboardingService) -> Self {
-        Self { inner }
+    pub fn new(
+        inner: moltis_onboarding::service::LiveOnboardingService,
+        session_metadata: Arc<moltis_sessions::metadata::SqliteSessionMetadata>,
+    ) -> Self {
+        Self {
+            inner,
+            session_metadata,
+        }
+    }
+
+    #[cfg(feature = "openclaw-import")]
+    async fn sync_imported_sessions_to_sqlite(&self, data_dir: &Path) -> Result<(), String> {
+        let metadata_path = data_dir.join("sessions").join("metadata.json");
+        if !metadata_path.is_file() {
+            return Ok(());
+        }
+
+        let legacy_metadata = moltis_sessions::metadata::SessionMetadata::load(metadata_path)
+            .map_err(|e| format!("failed to load imported metadata.json: {e}"))?;
+
+        for entry in legacy_metadata.list() {
+            self.session_metadata
+                .upsert(&entry.key, entry.label.clone())
+                .await
+                .map_err(|e| format!("failed to upsert session '{}': {e}", entry.key))?;
+
+            self.session_metadata
+                .set_model(&entry.key, entry.model.clone())
+                .await;
+            self.session_metadata
+                .touch(&entry.key, entry.message_count)
+                .await;
+            self.session_metadata
+                .set_project_id(&entry.key, entry.project_id.clone())
+                .await;
+            self.session_metadata
+                .set_sandbox_enabled(&entry.key, entry.sandbox_enabled)
+                .await;
+            self.session_metadata
+                .set_sandbox_image(&entry.key, entry.sandbox_image.clone())
+                .await;
+            self.session_metadata
+                .set_worktree_branch(&entry.key, entry.worktree_branch.clone())
+                .await;
+            self.session_metadata
+                .set_channel_binding(&entry.key, entry.channel_binding.clone())
+                .await;
+            self.session_metadata
+                .set_parent(
+                    &entry.key,
+                    entry.parent_session_key.clone(),
+                    entry.fork_point,
+                )
+                .await;
+            self.session_metadata
+                .set_mcp_disabled(&entry.key, entry.mcp_disabled)
+                .await;
+            self.session_metadata
+                .set_preview(&entry.key, entry.preview.as_deref())
+                .await;
+        }
+
+        Ok(())
     }
 }
 
@@ -72,7 +136,6 @@ impl OnboardingService for GatewayOnboardingService {
                     "channels_available": scan.channels_available,
                     "telegram_accounts": scan.telegram_accounts,
                     "sessions_count": scan.sessions_count,
-                    "mcp_servers_count": scan.mcp_servers_count,
                     "unsupported_channels": scan.unsupported_channels,
                     "agent_ids": scan.agent_ids,
                 }))
@@ -126,10 +189,6 @@ impl OnboardingService for GatewayOnboardingService {
                 .get("sessions")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
-            mcp_servers: params
-                .get("mcp_servers")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false),
         };
 
         let config_dir = moltis_config::config_dir()
@@ -137,6 +196,12 @@ impl OnboardingService for GatewayOnboardingService {
         let data_dir = moltis_config::data_dir();
 
         let report = moltis_openclaw_import::import(&detection, &selection, &config_dir, &data_dir);
+
+        if selection.sessions
+            && let Err(e) = self.sync_imported_sessions_to_sqlite(&data_dir).await
+        {
+            tracing::warn!(error = %e, "openclaw import: failed to sync sessions to sqlite metadata");
+        }
 
         Ok(serde_json::to_value(&report)?)
     }

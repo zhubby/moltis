@@ -536,6 +536,21 @@ function IdentityStep({ onNext, onBack }) {
 	var [saving, setSaving] = useState(false);
 	var [error, setError] = useState(null);
 
+	useEffect(() => {
+		var cancelled = false;
+		refreshGon().then(() => {
+			if (cancelled) return;
+			var refreshed = getGon("identity") || {};
+			if (refreshed.user_name) setUserName((prev) => prev || refreshed.user_name);
+			if (refreshed.name) setName((prev) => (prev && prev !== "Moltis" ? prev : refreshed.name));
+			if (refreshed.emoji) setEmoji((prev) => (prev && prev !== "\u{1f916}" ? prev : refreshed.emoji));
+			if (refreshed.theme) setTheme((prev) => prev || refreshed.theme);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
 	function onSubmit(e) {
 		e.preventDefault();
 		var v = validateIdentityFields(name, userName);
@@ -2219,7 +2234,6 @@ function OpenClawImportStep({ onNext, onBack }) {
 		memory: true,
 		channels: true,
 		sessions: true,
-		mcp_servers: true,
 	});
 
 	useEffect(() => {
@@ -2268,7 +2282,7 @@ function OpenClawImportStep({ onNext, onBack }) {
 	}
 
 	if (done && result) {
-		var total = result.total_imported || 0;
+		var total = (result.categories || []).reduce((sum, cat) => sum + (Number(cat.items_imported) || 0), 0);
 		return html`<div class="flex flex-col gap-4">
 			<h2 class="text-lg font-medium text-[var(--text-strong)]">Import Complete</h2>
 			<p class="text-xs text-[var(--muted)] leading-relaxed">${total} item(s) imported from OpenClaw.</p>
@@ -2304,7 +2318,7 @@ function OpenClawImportStep({ onNext, onBack }) {
 			<h2 class="text-lg font-medium text-[var(--text-strong)]">Import from OpenClaw</h2>
 			<p class="text-xs text-[var(--muted)]">Could not scan OpenClaw installation.</p>
 			<div class="flex flex-wrap items-center gap-3 mt-1">
-				<button class="provider-btn provider-btn-secondary" onClick=${onBack}>Back</button>
+				${onBack ? html`<button class="provider-btn provider-btn-secondary" onClick=${onBack}>Back</button>` : null}
 				<button class="provider-btn" onClick=${onNext}>Skip</button>
 			</div>
 		</div>`;
@@ -2331,12 +2345,6 @@ function OpenClawImportStep({ onNext, onBack }) {
 			label: "Sessions",
 			available: scan.sessions_count > 0,
 			detail: `${scan.sessions_count} session(s)`,
-		},
-		{
-			key: "mcp_servers",
-			label: "MCP Servers",
-			available: scan.mcp_servers_count > 0,
-			detail: `${scan.mcp_servers_count} server(s)`,
 		},
 	];
 	var anySelected = categories.some((c) => c.available && selection[c.key]);
@@ -2373,7 +2381,7 @@ function OpenClawImportStep({ onNext, onBack }) {
 				: null
 		}
 		<div class="flex flex-wrap items-center gap-3 mt-1">
-			<button class="provider-btn provider-btn-secondary" onClick=${onBack} disabled=${importing}>Back</button>
+			${onBack ? html`<button class="provider-btn provider-btn-secondary" onClick=${onBack} disabled=${importing}>Back</button>` : null}
 			<button class="provider-btn" onClick=${doImport} disabled=${!anySelected || importing}>
 				${importing ? "Importing\u2026" : "Import Selected"}
 			</button>
@@ -2660,17 +2668,19 @@ function OnboardingPage() {
 
 	// Build step list dynamically based on auth + voice + openclaw availability
 	var openclawDetected = getGon("openclaw_detected") === true;
-	var allLabels = ["Security", "LLM"];
+	var allLabels = ["Security"];
 	if (openclawDetected) allLabels.push("Import");
+	allLabels.push("LLM");
 	if (voiceAvailable) allLabels.push("Voice");
 	allLabels.push("Channel", "Identity", "Summary");
 
 	var steps = authNeeded ? allLabels : allLabels.slice(1);
 	var stepIndex = authNeeded ? step : step - 1;
 
-	// Compute dynamic step indices: Auth(0) → LLM(1) → Import? → Voice? → Channel → Identity → Summary
-	var nextIdx = 2;
+	// Compute dynamic step indices: Auth(0) → Import? → LLM → Voice? → Channel → Identity → Summary
+	var nextIdx = 1;
 	var importStep = openclawDetected ? nextIdx++ : -1;
+	var llmStep = nextIdx++;
 	var voiceStep = voiceAvailable ? nextIdx++ : -1;
 	var channelStep = nextIdx++;
 	var identityStep = nextIdx++;
@@ -2703,8 +2713,8 @@ function OnboardingPage() {
 		<${StepIndicator} steps=${steps} current=${stepIndex} />
 		<div class="mt-6">
 			${step === 0 && html`<${AuthStep} onNext=${goNext} skippable=${authSkippable} />`}
-			${step === 1 && html`<${ProviderStep} onNext=${goNext} onBack=${authNeeded ? goBack : null} />`}
-			${step === importStep && html`<${OpenClawImportStep} onNext=${goNext} onBack=${goBack} />`}
+			${step === importStep && html`<${OpenClawImportStep} onNext=${goNext} onBack=${authNeeded ? goBack : null} />`}
+			${step === llmStep && html`<${ProviderStep} onNext=${goNext} onBack=${authNeeded || openclawDetected ? goBack : null} />`}
 			${step === voiceStep && html`<${VoiceStep} onNext=${goNext} onBack=${goBack} />`}
 			${step === channelStep && html`<${ChannelStep} onNext=${goNext} onBack=${goBack} />`}
 			${step === identityStep && html`<${IdentityStep} onNext=${goNext} onBack=${goBack} />`}

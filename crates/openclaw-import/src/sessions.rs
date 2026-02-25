@@ -4,8 +4,8 @@
 //! - `~/.openclaw/agents/<id>/sessions/<key>.jsonl` (legacy layout), or
 //! - `~/.openclaw/agents/<id>/agent/sessions/<key>.jsonl` (newer layout).
 //!
-//! Moltis sessions live at `<data_dir>/sessions/<key>.jsonl` with metadata in
-//! `session-metadata.json`.
+//! Moltis sessions live at `<data_dir>/sessions/<safe-key>.jsonl` with metadata
+//! in `metadata.json`.
 
 use std::{
     collections::HashMap,
@@ -24,7 +24,7 @@ use crate::{
     types::{OpenClawContent, OpenClawRole, OpenClawSessionRecord},
 };
 
-/// Minimal session metadata for the Moltis `session-metadata.json` index.
+/// Minimal session metadata for the Moltis `metadata.json` index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedSessionEntry {
     pub id: String,
@@ -145,7 +145,7 @@ pub fn import_sessions(
     }
 
     // Load existing metadata to detect incremental changes
-    let metadata_path = dest_sessions_dir.join("session-metadata.json");
+    let metadata_path = dest_sessions_dir.join("metadata.json");
     let existing_metadata = load_session_metadata(&metadata_path);
 
     for entry in dir_entries.flatten() {
@@ -159,7 +159,8 @@ pub fn import_sessions(
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
         let dest_key = format!("oc:{import_agent}:{stem}");
-        let dest_file = dest_sessions_dir.join(format!("{dest_key}.jsonl"));
+        let dest_file =
+            dest_sessions_dir.join(format!("{}.jsonl", sanitize_session_key(&dest_key)));
 
         let source_lines = count_lines(&path);
 
@@ -249,7 +250,7 @@ pub fn import_sessions(
     if !entries.is_empty()
         && let Err(e) = merge_session_metadata(&metadata_path, &entries)
     {
-        errors.push(format!("failed to update session-metadata.json: {e}"));
+        errors.push(format!("failed to update metadata.json: {e}"));
     }
 
     let total_changed = imported + updated;
@@ -405,6 +406,10 @@ fn count_lines(path: &Path) -> u32 {
     BufReader::new(file).lines().count() as u32
 }
 
+fn sanitize_session_key(key: &str) -> String {
+    key.replace(':', "_")
+}
+
 /// Load existing session metadata from disk.
 fn load_session_metadata(path: &Path) -> HashMap<String, ImportedSessionEntry> {
     if !path.is_file() {
@@ -547,7 +552,7 @@ mod tests {
         assert_eq!(report.items_imported, 1);
 
         // Verify converted JSONL
-        let converted_path = dest.join("oc:main:test-session.jsonl");
+        let converted_path = dest.join("oc_main_test-session.jsonl");
         assert!(converted_path.is_file());
 
         let content = std::fs::read_to_string(&converted_path).unwrap();
@@ -581,7 +586,7 @@ mod tests {
 
         assert_eq!(report.status, ImportStatus::Success);
         assert_eq!(report.items_imported, 1);
-        assert!(dest.join("oc:main:legacy-session.jsonl").is_file());
+        assert!(dest.join("oc_main_legacy-session.jsonl").is_file());
     }
 
     #[test]
@@ -601,7 +606,7 @@ mod tests {
 
         assert_eq!(report.items_imported, 1);
 
-        let content = std::fs::read_to_string(dest.join("oc:main:tools.jsonl")).unwrap();
+        let content = std::fs::read_to_string(dest.join("oc_main_tools.jsonl")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 2);
 
@@ -693,7 +698,7 @@ mod tests {
         let detection = make_detection(home);
         import_sessions(&detection, &dest, &mem);
 
-        let metadata_path = dest.join("session-metadata.json");
+        let metadata_path = dest.join("metadata.json");
         assert!(metadata_path.is_file());
 
         let content = std::fs::read_to_string(&metadata_path).unwrap();
@@ -718,7 +723,7 @@ mod tests {
         let report = import_sessions(&detection, &dest, &mem);
 
         assert_eq!(report.items_imported, 1);
-        let content = std::fs::read_to_string(dest.join("oc:main:messy.jsonl")).unwrap();
+        let content = std::fs::read_to_string(dest.join("oc_main_messy.jsonl")).unwrap();
         assert_eq!(content.lines().count(), 1);
     }
 
@@ -768,7 +773,7 @@ mod tests {
         let detection = make_detection(home);
         import_sessions(&detection, &dest, &mem);
 
-        let metadata_path = dest.join("session-metadata.json");
+        let metadata_path = dest.join("metadata.json");
         let content = std::fs::read_to_string(&metadata_path).unwrap();
         let metadata: HashMap<String, serde_json::Value> = serde_json::from_str(&content).unwrap();
         let entry = metadata.get("oc:main:model-test").unwrap();
@@ -792,7 +797,7 @@ mod tests {
         assert_eq!(report1.items_imported, 1);
         assert_eq!(report1.items_updated, 0);
 
-        let content1 = std::fs::read_to_string(dest.join("oc:main:growing.jsonl")).unwrap();
+        let content1 = std::fs::read_to_string(dest.join("oc_main_growing.jsonl")).unwrap();
         assert_eq!(content1.lines().count(), 1);
 
         // Append a new message to the source
@@ -808,7 +813,7 @@ mod tests {
         assert_eq!(report2.items_skipped, 0);
 
         // Destination should now have 2 messages
-        let content2 = std::fs::read_to_string(dest.join("oc:main:growing.jsonl")).unwrap();
+        let content2 = std::fs::read_to_string(dest.join("oc_main_growing.jsonl")).unwrap();
         assert_eq!(content2.lines().count(), 2);
     }
 
@@ -849,7 +854,7 @@ mod tests {
         import_sessions(&detection, &dest, &mem);
 
         // Read original metadata
-        let metadata_path = dest.join("session-metadata.json");
+        let metadata_path = dest.join("metadata.json");
         let content = std::fs::read_to_string(&metadata_path).unwrap();
         let metadata: HashMap<String, ImportedSessionEntry> =
             serde_json::from_str(&content).unwrap();
@@ -937,14 +942,14 @@ mod tests {
             }
         });
         std::fs::write(
-            dest.join("session-metadata.json"),
+            dest.join("metadata.json"),
             serde_json::to_string_pretty(&legacy_metadata).unwrap(),
         )
         .unwrap();
 
         // Also write a destination JSONL so it looks like a previous import happened
         std::fs::write(
-            dest.join("oc:main:legacy.jsonl"),
+            dest.join("oc_main_legacy.jsonl"),
             r#"{"role":"user","content":"old message"}"#,
         )
         .unwrap();
@@ -956,7 +961,7 @@ mod tests {
         assert_eq!(report.items_imported, 0);
 
         // Verify metadata now has source_line_count set
-        let metadata_path = dest.join("session-metadata.json");
+        let metadata_path = dest.join("metadata.json");
         let content = std::fs::read_to_string(&metadata_path).unwrap();
         let metadata: HashMap<String, ImportedSessionEntry> =
             serde_json::from_str(&content).unwrap();

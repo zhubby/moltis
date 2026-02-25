@@ -15,6 +15,8 @@ use crate::{
 pub struct ImportedIdentity {
     /// Agent display name (from `ui.assistant.name` or first agent's name).
     pub agent_name: Option<String>,
+    /// User display name (from `agents.defaults.userName`).
+    pub user_name: Option<String>,
     /// User timezone (from `agents.defaults.userTimezone`).
     pub user_timezone: Option<String>,
 }
@@ -49,6 +51,13 @@ pub fn import_identity(detection: &OpenClawDetection) -> (CategoryReport, Import
     if let Some(tz) = &config.agents.defaults.user_timezone {
         debug!(timezone = tz, "importing user timezone");
         identity.user_timezone = Some(tz.clone());
+        items += 1;
+    }
+
+    // User name
+    if let Some(name) = &config.agents.defaults.user_name {
+        debug!(user_name = name, "importing user name");
+        identity.user_name = Some(name.clone());
         items += 1;
     }
 
@@ -130,6 +139,19 @@ mod tests {
 
         let (_, identity) = import_identity(&make_detection(tmp.path()));
         assert_eq!(identity.user_timezone.as_deref(), Some("Europe/Paris"));
+    }
+
+    #[test]
+    fn import_user_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("openclaw.json"),
+            r#"{"agents":{"defaults":{"userName":"Alice"}}}"#,
+        )
+        .unwrap();
+
+        let (_, identity) = import_identity(&make_detection(tmp.path()));
+        assert_eq!(identity.user_name.as_deref(), Some("Alice"));
     }
 
     #[test]

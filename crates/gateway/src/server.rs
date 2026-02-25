@@ -1268,9 +1268,6 @@ pub async fn start_gateway(
     let onboarding_config_path = moltis_config::find_or_default_config_path();
     let live_onboarding =
         moltis_onboarding::service::LiveOnboardingService::new(onboarding_config_path);
-    services = services.with_onboarding(Arc::new(
-        crate::onboarding::GatewayOnboardingService::new(live_onboarding),
-    ));
     // Wire live local-llm service when the feature is enabled.
     #[cfg(feature = "local-llm")]
     let local_llm_service: Option<Arc<crate::local_llm_setup::LiveLocalLlmService>> = {
@@ -1629,6 +1626,12 @@ pub async fn start_gateway(
     let session_state_store = Arc::new(moltis_sessions::state_store::SessionStateStore::new(
         db_pool.clone(),
     ));
+
+    services =
+        services.with_onboarding(Arc::new(crate::onboarding::GatewayOnboardingService::new(
+            live_onboarding,
+            Arc::clone(&session_metadata),
+        )));
 
     // Session service wired below after sandbox_router is created.
 

@@ -1577,7 +1577,6 @@ function OpenClawImportSection() {
 		memory: true,
 		channels: true,
 		sessions: true,
-		mcp_servers: true,
 	});
 
 	useEffect(() => {
@@ -1653,12 +1652,6 @@ function OpenClawImportSection() {
 			available: scan.sessions_count > 0,
 			detail: `${scan.sessions_count} session(s)`,
 		},
-		{
-			key: "mcp_servers",
-			label: "MCP Servers",
-			available: scan.mcp_servers_count > 0,
-			detail: `${scan.mcp_servers_count} server(s)`,
-		},
 	];
 	var anySelected = categories.some((c) => c.available && selection[c.key]);
 
@@ -1674,13 +1667,13 @@ function OpenClawImportSection() {
 		</div>`
 				: null
 		}
-		${
-			done && result
-				? html`<div class="flex flex-col gap-2" style="max-width:600px;">
-					<div class="text-sm font-medium text-[var(--ok)]">Import complete: ${result.total_imported || 0} item(s) imported.</div>
-					${
-						result.categories
-							? html`<div class="flex flex-col gap-1">
+			${
+				done && result
+					? html`<div class="flex flex-col gap-2" style="max-width:600px;">
+						<div class="text-sm font-medium text-[var(--ok)]">Import complete: ${(result.categories || []).reduce((sum, cat) => sum + (Number(cat.items_imported) || 0), 0)} item(s) imported.</div>
+						${
+							result.categories
+								? html`<div class="flex flex-col gap-1">
 								${result.categories.map(
 									(cat) => html`<div key=${cat.category} class="text-xs text-[var(--text)]">
 										<span class="font-mono">[${cat.status === "success" ? "\u2713" : cat.status === "partial" ? "~" : cat.status === "skipped" ? "-" : "!"}]</span>
@@ -1688,8 +1681,8 @@ function OpenClawImportSection() {
 									</div>`,
 								)}
 							</div>`
-							: null
-					}
+								: null
+						}
 					<button class="provider-btn provider-btn-secondary mt-2" style="width:fit-content;" onClick=${() => {
 						setDone(false);
 						setResult(null);
@@ -1698,7 +1691,7 @@ function OpenClawImportSection() {
 						Import Again
 					</button>
 				</div>`
-				: html`<div class="flex flex-col gap-2" style="max-width:400px;">
+					: html`<div class="flex flex-col gap-2" style="max-width:400px;">
 					${categories.map(
 						(cat) => html`<label
 							key=${cat.key}
@@ -1730,7 +1723,7 @@ function OpenClawImportSection() {
 				>
 					${importing ? "Importing\u2026" : "Import Selected"}
 				</button>`
-		}
+			}
 	</div>`;
 }
 

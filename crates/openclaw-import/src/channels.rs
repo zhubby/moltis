@@ -67,9 +67,11 @@ pub fn import_channels(detection: &OpenClawDetection) -> (CategoryReport, Import
         }
     }
 
-    // Record unsupported channels as warnings
+    // Record unsupported channels as warnings/skips.
+    let mut skipped = 0;
     for ch in &detection.unsupported_channels {
         warnings.push(format!("channel '{ch}' is not yet supported by Moltis"));
+        skipped += 1;
     }
 
     let status = if imported == 0 {
@@ -83,7 +85,7 @@ pub fn import_channels(detection: &OpenClawDetection) -> (CategoryReport, Import
         status,
         items_imported: imported,
         items_updated: 0,
-        items_skipped: 0,
+        items_skipped: skipped,
         warnings,
         errors: Vec::new(),
     };
@@ -269,6 +271,8 @@ mod tests {
 
         let (report, _) = import_channels(&detection);
         assert_eq!(report.status, ImportStatus::Partial);
+        assert_eq!(report.items_imported, 1);
+        assert_eq!(report.items_skipped, 1);
         assert!(report.warnings.iter().any(|w| w.contains("whatsapp")));
     }
 }

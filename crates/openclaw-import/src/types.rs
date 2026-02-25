@@ -38,6 +38,8 @@ pub struct OpenClawAgentDefaults {
     pub model: OpenClawModelConfig,
     #[serde(rename = "userTimezone")]
     pub user_timezone: Option<String>,
+    #[serde(rename = "userName")]
+    pub user_name: Option<String>,
 }
 
 /// Model selection: `{primary, fallbacks}`.

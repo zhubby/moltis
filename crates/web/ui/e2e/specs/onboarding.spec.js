@@ -201,7 +201,21 @@ test.describe("Onboarding wizard", () => {
 		const activeStepLabel = (
 			await page.locator(".onboarding-step.active .onboarding-step-label").first().textContent()
 		)?.trim();
-		expect(["Security", "LLM"]).toContain(activeStepLabel);
+		expect(["Security", "Import", "LLM"]).toContain(activeStepLabel);
+	});
+
+	test("step indicator orders Import before LLM when import is available", async ({ page }) => {
+		await page.goto("/onboarding");
+		await page.waitForLoadState("networkidle");
+
+		const labels = (await page.locator(".onboarding-step-label").allTextContents()).map((v) => v.trim());
+		const importIdx = labels.indexOf("Import");
+		const llmIdx = labels.indexOf("LLM");
+		if (importIdx === -1 || llmIdx === -1) {
+			test.skip(true, "OpenClaw import is not available in this onboarding run");
+		}
+
+		expect(importIdx).toBeLessThan(llmIdx);
 	});
 
 	test("auth step renders actionable controls when shown", async ({ page }) => {

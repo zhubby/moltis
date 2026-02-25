@@ -7,13 +7,11 @@
 //! - Memory (MEMORY.md and daily logs)
 //! - Telegram channel configuration
 //! - Chat sessions (JSONL format)
-//! - MCP server configuration
 
 pub mod channels;
 pub mod detect;
 pub mod error;
 pub mod identity;
-pub mod mcp_servers;
 pub mod memory;
 pub mod providers;
 pub mod report;
@@ -42,7 +40,6 @@ pub struct ImportSelection {
     pub memory: bool,
     pub channels: bool,
     pub sessions: bool,
-    pub mcp_servers: bool,
 }
 
 impl ImportSelection {
@@ -55,7 +52,6 @@ impl ImportSelection {
             memory: true,
             channels: true,
             sessions: true,
-            mcp_servers: true,
         }
     }
 }
@@ -71,7 +67,6 @@ pub struct ImportScan {
     pub channels_available: bool,
     pub telegram_accounts: usize,
     pub sessions_count: usize,
-    pub mcp_servers_count: usize,
     pub unsupported_channels: Vec<String>,
     pub agent_ids: Vec<String>,
 }
@@ -97,7 +92,6 @@ pub fn scan(detection: &OpenClawDetection) -> ImportScan {
         channels_available: telegram_accounts > 0,
         telegram_accounts,
         sessions_count: detection.session_count,
-        mcp_servers_count: count_mcp_servers(&detection.home_dir),
         unsupported_channels: detection.unsupported_channels.clone(),
         agent_ids: detection.agent_ids.clone(),
     }
@@ -181,12 +175,6 @@ pub fn import(
         ));
     }
 
-    // MCP Servers
-    if selection.mcp_servers {
-        let mcp_path = config_dir.join("mcp-servers.json");
-        report.add_category(mcp_servers::import_mcp_servers(detection, &mcp_path));
-    }
-
     // Always add TODO items for unsupported features
     add_todos(&mut report, detection);
 
@@ -263,6 +251,11 @@ fn persist_identity(imported: &identity::ImportedIdentity, config_dir: &Path) ->
         } else {
             warn!(timezone = tz_str, "unknown timezone, skipping");
         }
+    }
+
+    if let Some(ref user_name) = imported.user_name {
+        debug!(user_name, "persisting user name to moltis.toml");
+        config.user.name = Some(user_name.clone());
     }
 
     save_config_to_path(&config_path, &config)
@@ -370,19 +363,6 @@ fn count_memory_files(workspace_dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-fn count_mcp_servers(home_dir: &Path) -> usize {
-    let path = home_dir.join("mcp-servers.json");
-    if !path.is_file() {
-        return 0;
-    }
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return 0;
-    };
-    serde_json::from_str::<std::collections::HashMap<String, serde_json::Value>>(&content)
-        .map(|m| m.len())
-        .unwrap_or(0)
-}
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -405,7 +385,8 @@ mod tests {
                 "agents": {
                     "defaults": {
                         "model": {"primary": "anthropic/claude-opus-4-6"},
-                        "userTimezone": "America/New_York"
+                        "userTimezone": "America/New_York",
+                        "userName": "Penso"
                     },
                     "list": [{"id": "main", "default": true, "name": "Claude"}]
                 },
@@ -444,13 +425,6 @@ mod tests {
             "---\nname: test-skill\n---\nDo stuff.",
         )
         .unwrap();
-
-        // MCP servers
-        std::fs::write(
-            dir.join("mcp-servers.json"),
-            r#"{"test-mcp":{"command":"test","args":[],"env":{},"enabled":true}}"#,
-        )
-        .unwrap();
     }
 
     #[test]
@@ -470,7 +444,6 @@ mod tests {
         assert!(scan_result.channels_available);
         assert_eq!(scan_result.telegram_accounts, 1);
         assert_eq!(scan_result.sessions_count, 1);
-        assert_eq!(scan_result.mcp_servers_count, 1);
     }
 
     #[test]
@@ -500,7 +473,6 @@ mod tests {
                 .join("SKILL.md")
                 .is_file()
         );
-        assert!(config_dir.join("mcp-servers.json").is_file());
 
         // Check import state saved
         assert!(data_dir.join("openclaw-import-state.json").is_file());
@@ -615,6 +587,7 @@ mod tests {
         let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
 
         assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        assert_eq!(config.user.name.as_deref(), Some("Penso"));
         assert_eq!(
             config.user.timezone.as_ref().map(|t| t.name()),
             Some("America/New_York")
@@ -624,6 +597,7 @@ mod tests {
         assert!(report.imported_identity.is_some());
         let id = report.imported_identity.unwrap();
         assert_eq!(id.agent_name.as_deref(), Some("Claude"));
+        assert_eq!(id.user_name.as_deref(), Some("Penso"));
         assert_eq!(id.user_timezone.as_deref(), Some("America/New_York"));
     }
 
@@ -728,6 +702,7 @@ mod tests {
         let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
 
         assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        assert_eq!(config.user.name.as_deref(), Some("Penso"));
         assert!(!config.channels.telegram.is_empty());
 
         // Report should have both
