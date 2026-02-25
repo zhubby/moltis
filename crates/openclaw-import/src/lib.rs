@@ -24,7 +24,7 @@ pub mod watcher;
 use std::path::Path;
 
 use {
-    report::{CategoryReport, ImportCategory, ImportReport},
+    report::{CategoryReport, ImportCategory, ImportReport, ImportStatus},
     serde::{Deserialize, Serialize},
     tracing::{debug, warn},
 };
@@ -80,8 +80,8 @@ pub fn scan(detection: &OpenClawDetection) -> ImportScan {
     let telegram_accounts = channels_result.telegram.len();
 
     // Check for provider keys
-    let (_, providers_result) = providers::import_providers(detection);
-    let providers_available = !providers_result.providers.is_empty();
+    let (providers_report, _) = providers::import_providers(detection);
+    let providers_available = providers_report.items_imported > 0;
 
     ImportScan {
         identity_available: detection.has_config,
@@ -123,20 +123,36 @@ pub fn import(
 
     // Providers
     if selection.providers {
-        let (cat_report, imported_providers) = providers::import_providers(detection);
+        let (mut cat_report, imported_providers) = providers::import_providers(detection);
+        let mut write_errors = Vec::new();
+
         if !imported_providers.providers.is_empty() {
             let keys_path = config_dir.join("provider_keys.json");
             if let Err(e) =
                 providers::write_provider_keys(&imported_providers.providers, &keys_path)
             {
-                report.add_category(CategoryReport::failed(
-                    ImportCategory::Providers,
-                    format!("failed to write provider keys: {e}"),
-                ));
-            } else {
-                report.add_category(cat_report);
+                write_errors.push(format!("failed to write provider keys: {e}"));
             }
+        }
+
+        if !imported_providers.oauth_tokens.is_empty()
+            && let Err(e) = providers::write_oauth_tokens_to_path(
+                &imported_providers.oauth_tokens,
+                &config_dir.join("oauth_tokens.json"),
+            )
+        {
+            write_errors.push(format!("failed to write OAuth tokens: {e}"));
+        }
+
+        if write_errors.is_empty() {
+            report.add_category(cat_report);
         } else {
+            cat_report.errors.extend(write_errors);
+            cat_report.status = if cat_report.items_imported > 0 {
+                ImportStatus::Partial
+            } else {
+                ImportStatus::Failed
+            };
             report.add_category(cat_report);
         }
     }
@@ -213,9 +229,7 @@ fn save_import_state(path: &Path, report: &ImportReport) -> error::Result<()> {
     let imported: Vec<ImportCategory> = report
         .categories
         .iter()
-        .filter(|c| {
-            c.status == report::ImportStatus::Success || c.status == report::ImportStatus::Partial
-        })
+        .filter(|c| c.status == ImportStatus::Success || c.status == ImportStatus::Partial)
         .map(|c| c.category)
         .collect();
 
@@ -242,6 +256,13 @@ fn persist_identity(imported: &identity::ImportedIdentity, config_dir: &Path) ->
     if let Some(ref name) = imported.agent_name {
         debug!(name, "persisting agent name to moltis.toml");
         config.identity.name = Some(name.clone());
+    }
+
+    if config.identity.theme.is_none()
+        && let Some(ref theme) = imported.theme
+    {
+        debug!(theme, "persisting agent theme to moltis.toml");
+        config.identity.theme = Some(theme.clone());
     }
 
     if let Some(ref tz_str) = imported.user_timezone {
@@ -390,7 +411,7 @@ mod tests {
                     },
                     "list": [{"id": "main", "default": true, "name": "Claude"}]
                 },
-                "ui": {"assistant": {"name": "Claude"}},
+                "ui": {"assistant": {"name": "Claude", "creature": "owl", "vibe": "wise"}},
                 "channels": {
                     "telegram": {"botToken": "123:ABC", "allowFrom": [111]}
                 }
@@ -444,6 +465,34 @@ mod tests {
         assert!(scan_result.channels_available);
         assert_eq!(scan_result.telegram_accounts, 1);
         assert_eq!(scan_result.sessions_count, 1);
+    }
+
+    #[test]
+    fn scan_marks_oauth_only_provider_as_available() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+
+        let agent_dir = home.join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("auth-profiles.json"),
+            r#"{
+                "version": 1,
+                "profiles": {
+                    "codex-main": {
+                        "type": "oauth",
+                        "provider": "openai-codex",
+                        "access": "at-123",
+                        "refresh": "rt-456"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let detection = detect::detect_at(home).expect("openclaw install should be detected");
+        let scan_result = scan(&detection);
+        assert!(scan_result.providers_available);
     }
 
     #[test]
@@ -508,6 +557,47 @@ mod tests {
 
         // Provider keys should NOT be written
         assert!(!config_dir.join("provider_keys.json").exists());
+    }
+
+    #[test]
+    fn providers_import_writes_oauth_tokens_without_api_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join(".openclaw");
+        let config_dir = tmp.path().join("config");
+        let data_dir = tmp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let agent_dir = home.join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("auth-profiles.json"),
+            r#"{
+                "version": 1,
+                "profiles": {
+                    "codex-main": {
+                        "type": "oauth",
+                        "provider": "openai-codex",
+                        "access": "at-123",
+                        "refresh": "rt-456"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let detection = detect::detect_at(home).expect("openclaw install should be detected");
+        let selection = ImportSelection {
+            providers: true,
+            ..Default::default()
+        };
+        let report = import(&detection, &selection, &config_dir, &data_dir);
+
+        assert_eq!(report.categories.len(), 1);
+        assert_eq!(report.categories[0].category, ImportCategory::Providers);
+        assert_eq!(report.categories[0].status, ImportStatus::Success);
+        assert!(!config_dir.join("provider_keys.json").exists());
+        assert!(config_dir.join("oauth_tokens.json").exists());
     }
 
     #[test]
@@ -587,6 +677,7 @@ mod tests {
         let config: moltis_config::MoltisConfig = toml::from_str(&content).unwrap();
 
         assert_eq!(config.identity.name.as_deref(), Some("Claude"));
+        assert_eq!(config.identity.theme.as_deref(), Some("wise owl"));
         assert_eq!(config.user.name.as_deref(), Some("Penso"));
         assert_eq!(
             config.user.timezone.as_ref().map(|t| t.name()),
@@ -597,6 +688,7 @@ mod tests {
         assert!(report.imported_identity.is_some());
         let id = report.imported_identity.unwrap();
         assert_eq!(id.agent_name.as_deref(), Some("Claude"));
+        assert_eq!(id.theme.as_deref(), Some("wise owl"));
         assert_eq!(id.user_name.as_deref(), Some("Penso"));
         assert_eq!(id.user_timezone.as_deref(), Some("America/New_York"));
     }

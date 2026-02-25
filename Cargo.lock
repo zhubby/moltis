@@ -5111,6 +5111,7 @@ dependencies = [
  "json5",
  "moltis-common",
  "moltis-config",
+ "moltis-oauth",
  "notify-debouncer-full",
  "secrecy 0.8.0",
  "serde",

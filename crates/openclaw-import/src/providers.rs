@@ -3,9 +3,14 @@
 //! Reads auth-profiles.json for API keys and openclaw.json for model selection,
 //! then maps to the Moltis `provider_keys.json` format.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use {
+    moltis_oauth::{OAuthTokens, TokenStore},
+    secrecy::Secret,
     serde::{Deserialize, Serialize},
     tracing::debug,
 };
@@ -35,6 +40,8 @@ pub struct MoltisProviderConfig {
 pub struct ImportedProviders {
     /// Provider name → config (for `provider_keys.json`).
     pub providers: HashMap<String, MoltisProviderConfig>,
+    /// Provider name → OAuth token set (for `oauth_tokens.json`).
+    pub oauth_tokens: HashMap<String, OAuthTokens>,
     /// Primary model reference (e.g. "claude-opus-4-6").
     pub primary_model: Option<String>,
     /// Primary model provider name.
@@ -72,10 +79,11 @@ pub fn parse_model_ref(model_ref: &str) -> Option<(String, String)> {
 pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, ImportedProviders) {
     let mut result = ImportedProviders::default();
     let warnings = Vec::new();
-    let mut items = 0;
+    let mut imported_providers: HashSet<String> = HashSet::new();
 
     // 1. Load auth profiles from all agents
     let mut provider_keys: HashMap<String, String> = HashMap::new();
+    let mut oauth_tokens: HashMap<String, OAuthTokens> = HashMap::new();
     for agent_id in &detection.agent_ids {
         let agent_dir = detection.home_dir.join("agents").join(agent_id);
         if let Some(profiles_path) = resolve_agent_auth_profiles_path(&agent_dir)
@@ -87,7 +95,10 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
                     && !key.is_empty()
                 {
                     debug!(provider = %provider, "found API key for provider");
-                    provider_keys.entry(provider).or_insert(key);
+                    provider_keys.entry(provider.clone()).or_insert(key);
+                }
+                if let Some(tokens) = extract_oauth_tokens(profile) {
+                    oauth_tokens.entry(provider).or_insert(tokens);
                 }
             }
         }
@@ -101,7 +112,10 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
             if let Some(key) = extract_api_key(profile)
                 && !key.is_empty()
             {
-                provider_keys.entry(provider).or_insert(key);
+                provider_keys.entry(provider.clone()).or_insert(key);
+            }
+            if let Some(tokens) = extract_oauth_tokens(profile) {
+                oauth_tokens.entry(provider).or_insert(tokens);
             }
         }
     }
@@ -118,10 +132,11 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
         result.primary_model = Some(model.clone());
 
         // Ensure provider entry exists with model preference
-        let entry = result.providers.entry(provider).or_default();
+        let entry = result.providers.entry(provider.clone()).or_default();
         if !entry.models.contains(&model) {
             entry.models.push(model);
         }
+        imported_providers.insert(provider);
     }
 
     // 5. Parse fallback models
@@ -130,26 +145,33 @@ pub fn import_providers(detection: &OpenClawDetection) -> (CategoryReport, Impor
             result
                 .fallback_models
                 .push((provider.clone(), model.clone()));
-            let entry = result.providers.entry(provider).or_default();
+            let entry = result.providers.entry(provider.clone()).or_default();
             if !entry.models.contains(&model) {
                 entry.models.push(model);
             }
+            imported_providers.insert(provider);
         }
     }
 
     // 6. Merge API keys into provider configs
     for (provider, key) in provider_keys {
-        let entry = result.providers.entry(provider).or_default();
+        let entry = result.providers.entry(provider.clone()).or_default();
         entry.api_key = Some(key);
-        items += 1;
+        imported_providers.insert(provider);
     }
 
-    // Count model-only entries (no key but with preferences)
-    items += result
-        .providers
-        .values()
-        .filter(|p| p.api_key.is_none() && !p.models.is_empty())
-        .count();
+    // 7. Merge OAuth tokens.
+    for (provider, tokens) in oauth_tokens {
+        result.oauth_tokens.insert(provider.clone(), tokens);
+        imported_providers.insert(provider);
+    }
+
+    // Ensure model-only providers are counted as imported providers.
+    for provider in result.providers.keys() {
+        imported_providers.insert(provider.clone());
+    }
+
+    let items = imported_providers.len();
 
     let status = if items == 0 {
         ImportStatus::Skipped
@@ -230,10 +252,94 @@ fn extract_api_key(profile: &OpenClawAuthProfile) -> Option<String> {
     }
 }
 
+fn extract_oauth_tokens(profile: &OpenClawAuthProfile) -> Option<OAuthTokens> {
+    match profile {
+        OpenClawAuthProfile::Token { token, expires, .. } => {
+            let access = token.as_ref()?.trim();
+            if access.is_empty() {
+                return None;
+            }
+            Some(OAuthTokens {
+                access_token: Secret::new(access.to_string()),
+                refresh_token: None,
+                id_token: None,
+                account_id: None,
+                expires_at: normalize_expiry(*expires),
+            })
+        },
+        OpenClawAuthProfile::Oauth {
+            access_token,
+            refresh_token,
+            expires,
+            account_id,
+            ..
+        } => {
+            let access = access_token.as_ref()?.trim();
+            if access.is_empty() {
+                return None;
+            }
+            Some(OAuthTokens {
+                access_token: Secret::new(access.to_string()),
+                refresh_token: refresh_token
+                    .as_ref()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| Secret::new(s.to_string())),
+                id_token: None,
+                account_id: account_id.clone(),
+                expires_at: normalize_expiry(*expires),
+            })
+        },
+        _ => None,
+    }
+}
+
+fn normalize_expiry(expires: Option<u64>) -> Option<u64> {
+    let value = expires?;
+    if value > 1_000_000_000_000 {
+        Some(value / 1000)
+    } else {
+        Some(value)
+    }
+}
+
+/// Write imported OAuth tokens to Moltis `oauth_tokens.json`.
+pub fn write_oauth_tokens(tokens: &HashMap<String, OAuthTokens>) -> crate::error::Result<()> {
+    let store = TokenStore::new();
+    write_oauth_tokens_with_store(tokens, &store)
+}
+
+/// Write imported OAuth tokens to a specific `oauth_tokens.json` path.
+pub fn write_oauth_tokens_to_path(
+    tokens: &HashMap<String, OAuthTokens>,
+    path: &Path,
+) -> crate::error::Result<()> {
+    let store = TokenStore::with_path(path.to_path_buf());
+    write_oauth_tokens_with_store(tokens, &store)
+}
+
+fn write_oauth_tokens_with_store(
+    tokens: &HashMap<String, OAuthTokens>,
+    store: &TokenStore,
+) -> crate::error::Result<()> {
+    for (provider, token_set) in tokens {
+        store.save(provider, token_set).map_err(|e| {
+            crate::error::Error::message(format!(
+                "failed to write oauth token for '{provider}': {e}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use {super::*, crate::detect::OpenClawDetection};
+    use {
+        super::*,
+        crate::detect::OpenClawDetection,
+        secrecy::{ExposeSecret, Secret},
+    };
 
     #[test]
     fn parse_model_ref_valid() {
@@ -355,5 +461,94 @@ mod tests {
         let loaded: HashMap<String, MoltisProviderConfig> = serde_json::from_str(&content).unwrap();
         assert!(loaded.contains_key("openai"));
         assert!(loaded.contains_key("anthropic"));
+    }
+
+    #[test]
+    fn import_oauth_profile_alias_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        let agent_dir = home.join("agents").join("main").join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        std::fs::write(
+            agent_dir.join("auth-profiles.json"),
+            r#"{
+                "version": 1,
+                "profiles": {
+                    "codex-main": {
+                        "type": "oauth",
+                        "provider": "openai-codex",
+                        "access": "at-123",
+                        "refresh": "rt-456",
+                        "expires": 1770231225962,
+                        "accountId": "acct-1"
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let detection = OpenClawDetection {
+            home_dir: home.to_path_buf(),
+            has_config: false,
+            has_credentials: true,
+            has_mcp_servers: false,
+            workspace_dir: home.join("workspace"),
+            has_memory: false,
+            has_skills: false,
+            agent_ids: vec!["main".to_string()],
+            session_count: 0,
+            unsupported_channels: Vec::new(),
+        };
+
+        let (report, result) = import_providers(&detection);
+        assert_eq!(report.status, ImportStatus::Success);
+        assert_eq!(report.items_imported, 1);
+
+        let tokens = result
+            .oauth_tokens
+            .get("openai-codex")
+            .expect("oauth tokens should be imported");
+        assert_eq!(tokens.access_token.expose_secret(), "at-123");
+        assert_eq!(
+            tokens
+                .refresh_token
+                .as_ref()
+                .map(|token| token.expose_secret().as_str()),
+            Some("rt-456")
+        );
+        // OpenClaw stores milliseconds; Moltis token store expects seconds.
+        assert_eq!(tokens.expires_at, Some(1_770_231_225));
+        assert_eq!(tokens.account_id.as_deref(), Some("acct-1"));
+    }
+
+    #[test]
+    fn write_oauth_tokens_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TokenStore::with_path(tmp.path().join("oauth_tokens.json"));
+
+        let mut tokens = HashMap::new();
+        tokens.insert("openai-codex".to_string(), OAuthTokens {
+            access_token: Secret::new("at-123".to_string()),
+            refresh_token: Some(Secret::new("rt-456".to_string())),
+            id_token: None,
+            account_id: Some("acct-1".to_string()),
+            expires_at: Some(1_770_231_225),
+        });
+
+        write_oauth_tokens_with_store(&tokens, &store).unwrap();
+        let loaded = store
+            .load("openai-codex")
+            .expect("token store should contain openai-codex");
+        assert_eq!(loaded.access_token.expose_secret(), "at-123");
+        assert_eq!(
+            loaded
+                .refresh_token
+                .as_ref()
+                .map(|token| token.expose_secret().as_str()),
+            Some("rt-456")
+        );
+        assert_eq!(loaded.account_id.as_deref(), Some("acct-1"));
+        assert_eq!(loaded.expires_at, Some(1_770_231_225));
     }
 }

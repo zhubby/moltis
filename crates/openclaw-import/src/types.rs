@@ -40,6 +40,7 @@ pub struct OpenClawAgentDefaults {
     pub user_timezone: Option<String>,
     #[serde(rename = "userName")]
     pub user_name: Option<String>,
+    pub workspace: Option<String>,
 }
 
 /// Model selection: `{primary, fallbacks}`.
@@ -141,6 +142,9 @@ pub struct OpenClawUiConfig {
 pub struct OpenClawAssistantConfig {
     pub name: Option<String>,
     pub avatar: Option<String>,
+    pub theme: Option<String>,
+    pub creature: Option<String>,
+    pub vibe: Option<String>,
 }
 
 // ── auth-profiles.json ───────────────────────────────────────────────────────
@@ -175,11 +179,13 @@ pub enum OpenClawAuthProfile {
         #[serde(rename = "clientId")]
         client_id: Option<String>,
         email: Option<String>,
-        #[serde(rename = "accessToken")]
+        #[serde(rename = "accessToken", alias = "access")]
         access_token: Option<String>,
-        #[serde(rename = "refreshToken")]
+        #[serde(rename = "refreshToken", alias = "refresh")]
         refresh_token: Option<String>,
         expires: Option<u64>,
+        #[serde(rename = "accountId")]
+        account_id: Option<String>,
     },
 }
 
@@ -209,6 +215,8 @@ impl OpenClawAuthProfile {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum OpenClawSessionRecord {
     Message {
+        #[serde(default)]
+        timestamp: Option<OpenClawTimestamp>,
         message: OpenClawMessage,
     },
     SessionMeta {
@@ -232,6 +240,57 @@ pub struct OpenClawMessage {
     #[serde(rename = "toolUseId")]
     pub tool_use_id: Option<String>,
     pub name: Option<String>,
+    #[serde(default)]
+    pub timestamp: Option<OpenClawTimestamp>,
+}
+
+/// A timestamp in OpenClaw records.
+///
+/// OpenClaw emits mixed formats:
+/// - integer unix milliseconds (`1769582795764`)
+/// - floating-point seconds or milliseconds
+/// - ISO-8601 strings (`2026-01-28T06:46:35.758Z`)
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum OpenClawTimestamp {
+    Integer(i64),
+    Float(f64),
+    Iso(String),
+}
+
+impl OpenClawTimestamp {
+    /// Convert to unix milliseconds.
+    #[must_use]
+    pub fn to_millis(&self) -> Option<u64> {
+        match self {
+            Self::Integer(v) => normalize_epoch(*v as f64),
+            Self::Float(v) => normalize_epoch(*v),
+            Self::Iso(s) => parse_iso_to_millis(s),
+        }
+    }
+}
+
+fn normalize_epoch(value: f64) -> Option<u64> {
+    if !value.is_finite() || value < 0.0 {
+        return None;
+    }
+    // Treat very large values as milliseconds, otherwise seconds.
+    let ms = if value >= 1_000_000_000_000.0 {
+        value
+    } else {
+        value * 1000.0
+    };
+    Some(ms as u64)
+}
+
+fn parse_iso_to_millis(s: &str) -> Option<u64> {
+    use time::format_description::well_known::Rfc3339;
+    let dt = time::OffsetDateTime::parse(s, &Rfc3339).ok()?;
+    let nanos = dt.unix_timestamp_nanos();
+    if nanos < 0 {
+        return None;
+    }
+    Some((nanos / 1_000_000) as u64)
 }
 
 /// OpenClaw message roles.
@@ -392,7 +451,7 @@ mod tests {
         let line = r#"{"type":"message","message":{"role":"user","content":"Hello"}}"#;
         let record: OpenClawSessionRecord = serde_json::from_str(line).unwrap();
         match record {
-            OpenClawSessionRecord::Message { message } => {
+            OpenClawSessionRecord::Message { message, .. } => {
                 assert_eq!(message.role, OpenClawRole::User);
                 assert_eq!(message.content.unwrap().as_text(), "Hello");
             },

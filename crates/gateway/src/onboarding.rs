@@ -43,9 +43,6 @@ impl GatewayOnboardingService {
                 .set_model(&entry.key, entry.model.clone())
                 .await;
             self.session_metadata
-                .touch(&entry.key, entry.message_count)
-                .await;
-            self.session_metadata
                 .set_project_id(&entry.key, entry.project_id.clone())
                 .await;
             self.session_metadata
@@ -72,6 +69,15 @@ impl GatewayOnboardingService {
                 .await;
             self.session_metadata
                 .set_preview(&entry.key, entry.preview.as_deref())
+                .await;
+            self.session_metadata
+                .set_timestamps_and_counts(
+                    &entry.key,
+                    entry.created_at,
+                    entry.updated_at,
+                    entry.message_count,
+                    entry.last_seen_message_count,
+                )
                 .await;
         }
 
@@ -209,5 +215,72 @@ impl OnboardingService for GatewayOnboardingService {
     #[cfg(not(feature = "openclaw-import"))]
     async fn openclaw_import(&self, _params: Value) -> ServiceResult {
         Err("openclaw import feature not enabled".into())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "openclaw-import")]
+    #[tokio::test]
+    async fn sync_imported_sessions_preserves_timestamps_and_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path();
+        let sessions_dir = data_dir.join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        std::fs::write(
+            sessions_dir.join("metadata.json"),
+            r#"{
+              "oc:main:demo": {
+                "id": "test-id",
+                "key": "oc:main:demo",
+                "label": "Imported demo",
+                "model": "gpt-4o",
+                "preview": "hello from imported session",
+                "created_at": 1769582795764,
+                "updated_at": 1769582801626,
+                "message_count": 2,
+                "last_seen_message_count": 2,
+                "version": 1
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        moltis_sessions::metadata::SqliteSessionMetadata::init(&pool)
+            .await
+            .unwrap();
+
+        let service = GatewayOnboardingService::new(
+            moltis_onboarding::service::LiveOnboardingService::new(dir.path().join("moltis.toml")),
+            Arc::new(moltis_sessions::metadata::SqliteSessionMetadata::new(pool)),
+        );
+
+        service
+            .sync_imported_sessions_to_sqlite(data_dir)
+            .await
+            .expect("sync should succeed");
+
+        let entry = service
+            .session_metadata
+            .get("oc:main:demo")
+            .await
+            .expect("synced session should exist");
+        assert_eq!(entry.created_at, 1769582795764);
+        assert_eq!(entry.updated_at, 1769582801626);
+        assert_eq!(entry.message_count, 2);
+        assert_eq!(entry.last_seen_message_count, 2);
+        assert_eq!(
+            entry.preview.as_deref(),
+            Some("hello from imported session")
+        );
     }
 }

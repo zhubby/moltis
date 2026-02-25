@@ -21,7 +21,7 @@ use {
 use crate::{
     detect::{OpenClawDetection, resolve_agent_sessions_dir},
     report::{CategoryReport, ImportCategory, ImportStatus},
-    types::{OpenClawContent, OpenClawRole, OpenClawSessionRecord},
+    types::{OpenClawContent, OpenClawRole, OpenClawSessionRecord, OpenClawTimestamp},
 };
 
 /// Minimal session metadata for the Moltis `metadata.json` index.
@@ -32,6 +32,8 @@ pub struct ImportedSessionEntry {
     pub label: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     pub message_count: u32,
@@ -225,6 +227,7 @@ pub fn import_sessions(
                     key: dest_key,
                     label: Some(label),
                     model: stats.last_model,
+                    preview: stats.preview,
                     created_at,
                     updated_at: stats.last_timestamp.unwrap_or_else(now_ms),
                     message_count: stats.message_count,
@@ -280,6 +283,7 @@ struct ConvertStats {
     first_timestamp: Option<u64>,
     last_timestamp: Option<u64>,
     last_model: Option<String>,
+    preview: Option<String>,
     /// Collected transcript entries for markdown export.
     transcript: Vec<TranscriptEntry>,
 }
@@ -300,10 +304,9 @@ fn convert_session(src: &Path, dest: &Path) -> crate::error::Result<ConvertStats
         first_timestamp: None,
         last_timestamp: None,
         last_model: None,
+        preview: None,
         transcript: Vec::new(),
     };
-
-    let now = now_ms();
 
     for line in reader.lines() {
         let line = line?;
@@ -317,8 +320,13 @@ fn convert_session(src: &Path, dest: &Path) -> crate::error::Result<ConvertStats
         };
 
         match record {
-            OpenClawSessionRecord::Message { message } => {
-                if let Some(msg) = convert_message(&message, now, &mut stats) {
+            OpenClawSessionRecord::Message { timestamp, message } => {
+                let message_timestamp = message
+                    .timestamp
+                    .as_ref()
+                    .and_then(OpenClawTimestamp::to_millis)
+                    .or_else(|| timestamp.as_ref().and_then(OpenClawTimestamp::to_millis));
+                if let Some(msg) = convert_message(&message, message_timestamp, &mut stats) {
                     let json = serde_json::to_string(&msg)?;
                     writeln!(dest_file, "{json}")?;
                     stats.message_count += 1;
@@ -341,12 +349,14 @@ fn convert_session(src: &Path, dest: &Path) -> crate::error::Result<ConvertStats
         }
     }
 
+    stats.preview = build_preview(&stats.transcript);
+
     Ok(stats)
 }
 
 fn convert_message(
     msg: &crate::types::OpenClawMessage,
-    now: u64,
+    timestamp_ms: Option<u64>,
     stats: &mut ConvertStats,
 ) -> Option<MoltisMessage> {
     let content = msg.content.as_ref().map(OpenClawContent::as_text)?;
@@ -354,10 +364,11 @@ fn convert_message(
         return None;
     }
 
+    let created_at = timestamp_ms.unwrap_or_else(now_ms);
     if stats.first_timestamp.is_none() {
-        stats.first_timestamp = Some(now);
+        stats.first_timestamp = Some(created_at);
     }
-    stats.last_timestamp = Some(now);
+    stats.last_timestamp = Some(created_at);
 
     // Collect user/assistant messages for the markdown transcript
     let role_label = match msg.role {
@@ -375,15 +386,15 @@ fn convert_message(
     match msg.role {
         OpenClawRole::System => Some(MoltisMessage::System {
             content,
-            created_at: Some(now),
+            created_at: Some(created_at),
         }),
         OpenClawRole::User => Some(MoltisMessage::User {
             content,
-            created_at: Some(now),
+            created_at: Some(created_at),
         }),
         OpenClawRole::Assistant => Some(MoltisMessage::Assistant {
             content,
-            created_at: Some(now),
+            created_at: Some(created_at),
             model: None,
             provider: None,
         }),
@@ -392,7 +403,7 @@ fn convert_message(
             Some(MoltisMessage::Tool {
                 tool_call_id,
                 content,
-                created_at: Some(now),
+                created_at: Some(created_at),
             })
         },
     }
@@ -434,6 +445,51 @@ fn merge_session_metadata(
     let json = serde_json::to_string_pretty(&existing)?;
     std::fs::write(path, json)?;
     Ok(())
+}
+
+fn build_preview(transcript: &[TranscriptEntry]) -> Option<String> {
+    const TARGET_CHARS: usize = 140;
+    const MAX_CHARS: usize = 200;
+
+    let mut combined = String::new();
+    for entry in transcript {
+        let normalized = normalize_whitespace(&entry.content);
+        if normalized.is_empty() {
+            continue;
+        }
+        if !combined.is_empty() {
+            combined.push(' ');
+        }
+        combined.push_str(&normalized);
+        if combined.chars().count() >= TARGET_CHARS {
+            break;
+        }
+    }
+
+    if combined.is_empty() {
+        return None;
+    }
+
+    Some(truncate_preview(&combined, MAX_CHARS))
+}
+
+fn normalize_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    let len = text.chars().count();
+    if len <= max_chars {
+        return text.to_string();
+    }
+
+    let cutoff = max_chars.saturating_sub(3);
+    let mut out = String::new();
+    for ch in text.chars().take(cutoff) {
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
 }
 
 /// Write a markdown transcript of a session for memory search indexing.
@@ -969,5 +1025,43 @@ mod tests {
         assert!(entry.source_line_count > 0);
         assert_eq!(entry.id, "legacy-id-123"); // Preserved
         assert_eq!(entry.version, 1); // Bumped
+    }
+
+    #[test]
+    fn preserves_source_timestamps_and_preview() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let dest = tmp.path().join("sessions");
+        let mem = tmp.path().join("memory").join("sessions");
+
+        setup_session(home, "main", "timed", &[
+            r#"{"type":"message","timestamp":"2026-01-28T06:46:35.768Z","message":{"role":"user","content":"hello from old openclaw","timestamp":1769582795764}}"#,
+            r#"{"type":"message","timestamp":"2026-01-28T06:46:41.626Z","message":{"role":"assistant","content":"this is the assistant reply","timestamp":1769582801626}}"#,
+        ]);
+
+        let detection = make_detection(home);
+        let report = import_sessions(&detection, &dest, &mem);
+        assert_eq!(report.status, ImportStatus::Success);
+        assert_eq!(report.items_imported, 1);
+
+        let converted = std::fs::read_to_string(dest.join("oc_main_timed.jsonl")).unwrap();
+        let mut lines = converted.lines();
+        let first: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        let second: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+        assert_eq!(first["created_at"], 1769582795764_u64);
+        assert_eq!(second["created_at"], 1769582801626_u64);
+
+        let metadata: HashMap<String, ImportedSessionEntry> =
+            serde_json::from_str(&std::fs::read_to_string(dest.join("metadata.json")).unwrap())
+                .unwrap();
+        let entry = metadata.get("oc:main:timed").unwrap();
+        assert_eq!(entry.created_at, 1769582795764_u64);
+        assert_eq!(entry.updated_at, 1769582801626_u64);
+        assert!(
+            entry
+                .preview
+                .as_deref()
+                .is_some_and(|p| p.contains("hello from old openclaw"))
+        );
     }
 }
