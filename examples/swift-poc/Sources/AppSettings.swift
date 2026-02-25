@@ -56,7 +56,6 @@ final class AppSettings: ObservableObject {
     @Published var configurationToml = "[server]\nport = \"invalid\""
 
     let memoryModes = ["workspace", "global", "off"]
-    let llmProviders = ["openai", "openrouter", "anthropic", "ollama"]
     let voiceProviders = ["none", "openai", "elevenlabs"]
     let sandboxBackends = ["auto", "docker", "apple-container"]
     let logLevels = ["trace", "debug", "info", "warn", "error"]

@@ -3,13 +3,18 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var chatStore: ChatStore
     @ObservedObject var settings: AppSettings
+    @ObservedObject var providerStore: ProviderStore
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         NavigationSplitView {
             SessionsSidebarView(chatStore: chatStore)
         } detail: {
-            ChatDetailView(chatStore: chatStore, settings: settings) {
+            ChatDetailView(
+                chatStore: chatStore,
+                settings: settings,
+                providerStore: providerStore
+            ) {
                 openSettings()
             }
         }
@@ -20,8 +25,9 @@ struct ContentView: View {
 
 #Preview {
     let settings = AppSettings()
-    let store = ChatStore(settings: settings)
-    return ContentView(chatStore: store, settings: settings)
+    let providerStore = ProviderStore()
+    let store = ChatStore(settings: settings, providerStore: providerStore)
+    return ContentView(chatStore: store, settings: settings, providerStore: providerStore)
 }
 
 private struct SessionsSidebarView: View {
@@ -98,6 +104,7 @@ private struct SessionRowView: View {
 private struct ChatDetailView: View {
     @ObservedObject var chatStore: ChatStore
     @ObservedObject var settings: AppSettings
+    @ObservedObject var providerStore: ProviderStore
     var openSettings: () -> Void
 
     private var sessionTitle: String {
@@ -134,9 +141,16 @@ private struct ChatDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(sessionTitle)
                     .font(.title3.weight(.semibold))
-                Text(chatStore.bridgeSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(chatStore.bridgeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let modelSummary = providerStore.selectedModelSummary {
+                        Text("| \(modelSummary)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             Spacer()

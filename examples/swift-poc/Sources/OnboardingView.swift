@@ -2,6 +2,7 @@ import SwiftUI
 
 struct OnboardingView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var providerStore: ProviderStore
     let onFinish: () -> Void
 
     @State private var currentStep = OnboardingStep.llm
@@ -19,6 +20,9 @@ struct OnboardingView: View {
             footerBar
         }
         .frame(minWidth: 780, minHeight: 520)
+        .onAppear {
+            providerStore.loadAll()
+        }
     }
 }
 
@@ -56,6 +60,10 @@ private extension OnboardingView {
         Form {
             if currentStep == .summary {
                 summarySection
+            } else if currentStep == .llm {
+                Section(currentStep.title) {
+                    ProviderGridPane(providerStore: providerStore)
+                }
             } else if let section = currentStep.settingsSection {
                 Section(currentStep.title) {
                     SettingsSectionContent(
@@ -77,6 +85,23 @@ private extension OnboardingView {
                 "Name",
                 value: settings.identityName.isEmpty ? "Default" : settings.identityName
             )
+
+            if !providerStore.detectedSources.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Detected providers:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(providerStore.detectedSources, id: \.source) { source in
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                            Text("\(source.provider)")
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
         }
     }
 }

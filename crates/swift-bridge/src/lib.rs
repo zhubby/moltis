@@ -3,18 +3,67 @@
 #![allow(unsafe_code)]
 
 use std::{
+    collections::HashMap,
     ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::{LazyLock, RwLock},
 };
 
 use {
-    moltis_config::validate::Severity,
+    moltis_agents::model::{ChatMessage as AgentChatMessage, LlmProvider, UserContent},
+    moltis_config::{schema::ProvidersConfig, validate::Severity},
+    moltis_provider_setup::{
+        KeyStore, config_with_saved_keys,
+        detect_auto_provider_sources_with_overrides, known_providers,
+    },
+    moltis_providers::ProviderRegistry,
     serde::{Deserialize, Serialize},
 };
+
+// ── Global bridge state ────────────────────────────────────────────────────
+
+struct BridgeState {
+    runtime: tokio::runtime::Runtime,
+    registry: RwLock<ProviderRegistry>,
+}
+
+impl BridgeState {
+    fn new() -> Self {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"));
+
+        let registry = build_registry();
+        Self {
+            runtime,
+            registry: RwLock::new(registry),
+        }
+    }
+}
+
+fn build_registry() -> ProviderRegistry {
+    let base = ProvidersConfig::default();
+    let key_store = KeyStore::new();
+    let config = config_with_saved_keys(&base, &key_store, &[]);
+    ProviderRegistry::from_env_with_config(&config)
+}
+
+static BRIDGE: LazyLock<BridgeState> = LazyLock::new(BridgeState::new);
+
+// ── Request / Response types ───────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct ChatRequest {
     message: String,
+    #[serde(default)]
+    model: Option<String>,
+    /// Reserved for future provider-hint resolution; deserialized so Swift
+    /// can pass it but not yet used for routing.
+    #[serde(default)]
+    #[allow(dead_code)]
+    provider: Option<String>,
     #[serde(default)]
     config_toml: Option<String>,
 }
@@ -22,6 +71,8 @@ struct ChatRequest {
 #[derive(Debug, Serialize)]
 struct ChatResponse {
     reply: String,
+    model: Option<String>,
+    provider: Option<String>,
     config_dir: String,
     default_soul: String,
     validation: Option<ValidationSummary>,
@@ -52,6 +103,51 @@ struct ErrorPayload<'a> {
     code: &'a str,
     message: &'a str,
 }
+
+// ── Bridge serde types for provider data ───────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct BridgeKnownProvider {
+    name: &'static str,
+    display_name: &'static str,
+    auth_type: &'static str,
+    env_key: Option<&'static str>,
+    default_base_url: Option<&'static str>,
+    requires_model: bool,
+    key_optional: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct BridgeDetectedSource {
+    provider: String,
+    source: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BridgeModelInfo {
+    id: String,
+    provider: String,
+    display_name: String,
+    created_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveProviderRequest {
+    provider: String,
+    #[serde(default)]
+    api_key: Option<String>,
+    #[serde(default)]
+    base_url: Option<String>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+struct OkResponse {
+    ok: bool,
+}
+
+// ── Encoding helpers ───────────────────────────────────────────────────────
 
 fn encode_json<T: Serialize>(value: &T) -> String {
     match serde_json::to_string(value) {
@@ -122,15 +218,69 @@ fn config_dir_string() -> String {
     }
 }
 
+// ── Chat with real LLM ────────────────────────────────────────────────────
+
+fn resolve_provider(
+    request: &ChatRequest,
+) -> Option<std::sync::Arc<dyn LlmProvider>> {
+    let registry = BRIDGE.registry.read().unwrap_or_else(|e| e.into_inner());
+
+    // Try explicit model first
+    if let Some(model_id) = &request.model {
+        if let Some(provider) = registry.get(model_id) {
+            return Some(provider);
+        }
+    }
+
+    // Fall back to first available provider
+    registry.first()
+}
+
 fn build_chat_response(request: ChatRequest) -> String {
+    let validation = build_validation_summary(request.config_toml.as_deref());
+
+    let (reply, model, provider_name) = match resolve_provider(&request) {
+        Some(provider) => {
+            let model_id = provider.id().to_string();
+            let provider_name = provider.name().to_string();
+            let messages = vec![AgentChatMessage::User {
+                content: UserContent::text(&request.message),
+            }];
+
+            match BRIDGE.runtime.block_on(provider.complete(&messages, &[])) {
+                Ok(response) => {
+                    let text = response
+                        .text
+                        .unwrap_or_else(|| "(empty response)".to_owned());
+                    (text, Some(model_id), Some(provider_name))
+                },
+                Err(error) => {
+                    let msg = format!("LLM error: {error}");
+                    (msg, Some(model_id), Some(provider_name))
+                },
+            }
+        },
+        None => {
+            let msg = format!(
+                "No LLM provider configured. Rust bridge received: {}",
+                request.message
+            );
+            (msg, None, None)
+        },
+    };
+
     let response = ChatResponse {
-        reply: format!("Rust bridge received: {}", request.message),
+        reply,
+        model,
+        provider: provider_name,
         config_dir: config_dir_string(),
         default_soul: moltis_config::DEFAULT_SOUL.to_owned(),
-        validation: build_validation_summary(request.config_toml.as_deref()),
+        validation,
     };
     encode_json(&response)
 }
+
+// ── Metrics / tracing helpers ──────────────────────────────────────────────
 
 #[cfg(feature = "metrics")]
 fn record_call(function: &'static str) {
@@ -160,6 +310,8 @@ fn trace_call(function: &'static str) {
 
 #[cfg(not(feature = "tracing"))]
 fn trace_call(_function: &'static str) {}
+
+// ── FFI exports ────────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
 pub extern "C" fn moltis_version() -> *mut c_char {
@@ -202,12 +354,140 @@ pub extern "C" fn moltis_chat_json(request_json: *const c_char) -> *mut c_char {
     })
 }
 
+/// Returns JSON array of all known providers.
+#[unsafe(no_mangle)]
+pub extern "C" fn moltis_known_providers() -> *mut c_char {
+    record_call("moltis_known_providers");
+    trace_call("moltis_known_providers");
+
+    with_ffi_boundary(|| {
+        let providers: Vec<BridgeKnownProvider> = known_providers()
+            .into_iter()
+            .map(|p| BridgeKnownProvider {
+                name: p.name,
+                display_name: p.display_name,
+                auth_type: p.auth_type,
+                env_key: p.env_key,
+                default_base_url: p.default_base_url,
+                requires_model: p.requires_model,
+                key_optional: p.key_optional,
+            })
+            .collect();
+        encode_json(&providers)
+    })
+}
+
+/// Returns JSON array of auto-detected provider sources.
+#[unsafe(no_mangle)]
+pub extern "C" fn moltis_detect_providers() -> *mut c_char {
+    record_call("moltis_detect_providers");
+    trace_call("moltis_detect_providers");
+
+    with_ffi_boundary(|| {
+        let config = ProvidersConfig::default();
+        let env_overrides = HashMap::new();
+        let sources = detect_auto_provider_sources_with_overrides(
+            &config,
+            None,
+            &env_overrides,
+        );
+        let bridge_sources: Vec<BridgeDetectedSource> = sources
+            .into_iter()
+            .map(|s| BridgeDetectedSource {
+                provider: s.provider,
+                source: s.source,
+            })
+            .collect();
+        encode_json(&bridge_sources)
+    })
+}
+
+/// Saves provider configuration (API key, base URL, models).
+#[unsafe(no_mangle)]
+pub extern "C" fn moltis_save_provider_config(
+    request_json: *const c_char,
+) -> *mut c_char {
+    record_call("moltis_save_provider_config");
+    trace_call("moltis_save_provider_config");
+
+    with_ffi_boundary(|| {
+        let raw = match read_c_string(request_json) {
+            Ok(value) => value,
+            Err(message) => {
+                record_error(
+                    "moltis_save_provider_config",
+                    "null_pointer_or_invalid_utf8",
+                );
+                return encode_error("null_pointer_or_invalid_utf8", &message);
+            },
+        };
+
+        let request = match serde_json::from_str::<SaveProviderRequest>(&raw) {
+            Ok(request) => request,
+            Err(error) => {
+                record_error("moltis_save_provider_config", "invalid_json");
+                return encode_error("invalid_json", &error.to_string());
+            },
+        };
+
+        let key_store = KeyStore::new();
+        match key_store.save_config(
+            &request.provider,
+            request.api_key,
+            request.base_url,
+            request.models,
+        ) {
+            Ok(()) => encode_json(&OkResponse { ok: true }),
+            Err(error) => encode_error("save_failed", &error),
+        }
+    })
+}
+
+/// Lists all discovered models from the current provider registry.
+#[unsafe(no_mangle)]
+pub extern "C" fn moltis_list_models() -> *mut c_char {
+    record_call("moltis_list_models");
+    trace_call("moltis_list_models");
+
+    with_ffi_boundary(|| {
+        let registry = BRIDGE.registry.read().unwrap_or_else(|e| e.into_inner());
+        let models: Vec<BridgeModelInfo> = registry
+            .list_models()
+            .iter()
+            .map(|m| BridgeModelInfo {
+                id: m.id.clone(),
+                provider: m.provider.clone(),
+                display_name: m.display_name.clone(),
+                created_at: m.created_at,
+            })
+            .collect();
+        encode_json(&models)
+    })
+}
+
+/// Rebuilds the global provider registry from saved config + env.
+#[unsafe(no_mangle)]
+pub extern "C" fn moltis_refresh_registry() -> *mut c_char {
+    record_call("moltis_refresh_registry");
+    trace_call("moltis_refresh_registry");
+
+    with_ffi_boundary(|| {
+        let new_registry = build_registry();
+        let mut guard = BRIDGE
+            .registry
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
+        *guard = new_registry;
+        encode_json(&OkResponse { ok: true })
+    })
+}
+
 #[unsafe(no_mangle)]
 /// # Safety
 ///
-/// `ptr` must either be null or a pointer previously returned by
-/// `moltis_version` or `moltis_chat_json` from this crate. Passing any other
-/// pointer, or freeing the same pointer more than once, is undefined behavior.
+/// `ptr` must either be null or a pointer previously returned by one of the
+/// `moltis_*` FFI functions from this crate. Passing any other pointer, or
+/// freeing the same pointer more than once, is undefined behavior.
 pub unsafe extern "C" fn moltis_free_string(ptr: *mut c_char) {
     record_call("moltis_free_string");
 
@@ -289,11 +569,11 @@ mod tests {
 
         let payload = json_from_ptr(moltis_chat_json(c_request.as_ptr()));
 
-        let reply = payload
-            .get("reply")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        assert!(reply.contains("hello from swift"));
+        // Chat response should have a reply (either from LLM or fallback)
+        assert!(
+            payload.get("reply").and_then(Value::as_str).is_some(),
+            "response should contain a reply field"
+        );
 
         let has_errors = payload
             .get("validation")
@@ -301,6 +581,66 @@ mod tests {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         assert!(has_errors, "validation should detect invalid config value");
+    }
+
+    #[test]
+    fn known_providers_returns_array() {
+        let payload = json_from_ptr(moltis_known_providers());
+
+        let providers = payload.as_array();
+        assert!(
+            providers.is_some(),
+            "known_providers should return a JSON array"
+        );
+        let providers = providers.unwrap_or_else(|| panic!("not an array"));
+        assert!(!providers.is_empty(), "should have at least one provider");
+
+        // Check first provider has expected fields
+        let first = &providers[0];
+        assert!(first.get("name").and_then(Value::as_str).is_some());
+        assert!(first.get("display_name").and_then(Value::as_str).is_some());
+        assert!(first.get("auth_type").and_then(Value::as_str).is_some());
+    }
+
+    #[test]
+    fn detect_providers_returns_array() {
+        let payload = json_from_ptr(moltis_detect_providers());
+
+        // Should always return a JSON array (possibly empty)
+        assert!(
+            payload.as_array().is_some(),
+            "detect_providers should return a JSON array"
+        );
+    }
+
+    #[test]
+    fn save_provider_config_returns_error_for_null() {
+        let payload = json_from_ptr(moltis_save_provider_config(std::ptr::null()));
+
+        let code = payload
+            .get("error")
+            .and_then(|value| value.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(code, "null_pointer_or_invalid_utf8");
+    }
+
+    #[test]
+    fn list_models_returns_array() {
+        let payload = json_from_ptr(moltis_list_models());
+
+        assert!(
+            payload.as_array().is_some(),
+            "list_models should return a JSON array"
+        );
+    }
+
+    #[test]
+    fn refresh_registry_returns_ok() {
+        let payload = json_from_ptr(moltis_refresh_registry());
+
+        let ok = payload.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        assert!(ok, "refresh_registry should return ok: true");
     }
 
     #[test]

@@ -5191,10 +5191,15 @@ dependencies = [
 name = "moltis-swift-bridge"
 version = "0.9.10"
 dependencies = [
+ "anyhow",
  "metrics 0.24.3",
+ "moltis-agents",
  "moltis-config",
+ "moltis-provider-setup",
+ "moltis-providers",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 

@@ -15,8 +15,13 @@ metrics = ["dep:metrics"]
 tracing = ["dep:tracing"]
 
 [dependencies]
+anyhow = { workspace = true }
 metrics = { workspace = true, optional = true }
+moltis-agents = { workspace = true }
 moltis-config = { workspace = true }
+moltis-provider-setup = { workspace = true }
+moltis-providers = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true, optional = true }

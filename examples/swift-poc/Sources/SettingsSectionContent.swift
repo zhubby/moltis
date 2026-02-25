@@ -5,6 +5,7 @@ import SwiftUI
 struct SettingsSectionContent: View {
     let section: SettingsSection
     @ObservedObject var settings: AppSettings
+    var providerStore: ProviderStore?
 
     var body: some View {
         switch section {
@@ -112,15 +113,16 @@ private extension SettingsSectionContent {
         editorRow("Hooks config", text: $settings.hooksConfig)
     }
 
+    @ViewBuilder
     var llmsPane: some View {
-        Group {
-            Picker("Provider", selection: $settings.llmProvider) {
-                ForEach(settings.llmProviders, id: \.self) { provider in
-                    Text(provider.capitalized).tag(provider)
-                }
+        if let providerStore {
+            ProviderGridPane(providerStore: providerStore)
+        } else {
+            Group {
+                TextField("Provider", text: $settings.llmProvider)
+                TextField("Model", text: $settings.llmModel)
+                SecureField("API key", text: $settings.llmApiKey)
             }
-            TextField("Model", text: $settings.llmModel)
-            SecureField("API key", text: $settings.llmApiKey)
         }
     }
 
@@ -211,5 +213,46 @@ private extension SettingsSectionContent {
                 .foregroundStyle(.secondary)
             MoltisEditorField(text: text, minHeight: minHeight)
         }
+    }
+}
+
+// MARK: - Provider grid pane (used in LLMs section)
+
+struct ProviderGridPane: View {
+    @ObservedObject var providerStore: ProviderStore
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 10),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(providerStore.knownProviders) { provider in
+                    ProviderCardView(
+                        provider: provider,
+                        isConfigured: providerStore.isConfigured(provider.name),
+                        isSelected: providerStore.selectedProviderName == provider.name,
+                        onSelect: {
+                            selectProvider(provider)
+                        }
+                    )
+                }
+            }
+
+            ProviderConfigForm(providerStore: providerStore)
+        }
+        .onAppear {
+            if providerStore.knownProviders.isEmpty {
+                providerStore.loadAll()
+            }
+        }
+    }
+
+    private func selectProvider(_ provider: BridgeKnownProvider) {
+        providerStore.selectedProviderName = provider.name
+        providerStore.apiKeyDraft = ""
+        providerStore.baseUrlDraft = provider.defaultBaseUrl ?? ""
+        providerStore.selectedModelID = nil
     }
 }

@@ -105,11 +105,12 @@ enum SettingsSection: String, CaseIterable, Hashable {
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var providerStore: ProviderStore
 
     var body: some View {
         TabView {
             ForEach(SettingsGroup.allCases, id: \.self) { group in
-                SettingsGroupTab(group: group, settings: settings)
+                SettingsGroupTab(group: group, settings: settings, providerStore: providerStore)
                     .tabItem {
                         Label(group.rawValue, systemImage: group.icon)
                     }
@@ -124,6 +125,7 @@ struct SettingsView: View {
 private struct SettingsGroupTab: View {
     let group: SettingsGroup
     @ObservedObject var settings: AppSettings
+    @ObservedObject var providerStore: ProviderStore
 
     var body: some View {
         Form {
@@ -131,7 +133,8 @@ private struct SettingsGroupTab: View {
                 Section(section.title) {
                     SettingsSectionContent(
                         section: section,
-                        settings: settings
+                        settings: settings,
+                        providerStore: section == .llms ? providerStore : nil
                     )
                 }
             }

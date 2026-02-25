@@ -11,10 +11,16 @@ final class ChatStore: ObservableObject {
 
     private let client: MoltisClient
     let settings: AppSettings
+    let providerStore: ProviderStore
 
-    init(client: MoltisClient = MoltisClient(), settings: AppSettings) {
+    init(
+        client: MoltisClient = MoltisClient(),
+        settings: AppSettings,
+        providerStore: ProviderStore
+    ) {
         self.client = client
         self.settings = settings
+        self.providerStore = providerStore
 
         let initialSession = ChatSession(
             title: "Session 1",
@@ -86,21 +92,43 @@ final class ChatStore: ObservableObject {
         let configToml: String? = rawConfig.isEmpty ? nil : rawConfig
 
         isSending = true
-        do {
-            let payload = try client.chat(message: trimmed, configToml: configToml)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let result: Result<BridgeChatPayload, Error>
+            do {
+                let payload = try self.client.chat(
+                    message: trimmed,
+                    model: self.providerStore.selectedModelID,
+                    configToml: configToml
+                )
+                result = .success(payload)
+            } catch {
+                result = .failure(error)
+            }
 
-            settings.environmentConfigDir = payload.configDir
-            settings.identitySoul = payload.defaultSoul
+            DispatchQueue.main.async {
+                switch result {
+                case let .success(payload):
+                    self.settings.environmentConfigDir = payload.configDir
+                    self.settings.identitySoul = payload.defaultSoul
 
-            appendMessage(role: .assistant, text: payload.reply)
-            appendValidationSummary(payload.validation)
-            statusText = "Received Rust response."
-        } catch {
-            let text = error.localizedDescription
-            statusText = text
-            appendMessage(role: .error, text: text)
+                    if let model = payload.model, let provider = payload.provider {
+                        self.settings.llmModel = model
+                        self.settings.llmProvider = provider
+                    }
+
+                    self.appendMessage(role: .assistant, text: payload.reply)
+                    self.appendValidationSummary(payload.validation)
+                    self.statusText = "Received response via \(payload.provider ?? "unknown")."
+
+                case let .failure(error):
+                    let text = error.localizedDescription
+                    self.statusText = text
+                    self.appendMessage(role: .error, text: text)
+                }
+                self.isSending = false
+            }
         }
-        isSending = false
     }
 
     private func appendValidationSummary(_ validation: BridgeValidationPayload?) {
