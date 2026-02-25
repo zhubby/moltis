@@ -1012,8 +1012,18 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=("-t" "$tag")
+          done
+
+          image_refs=()
+          for digest in *; do
+            image_refs+=("ghcr.io/${{ github.repository }}@sha256:${digest}")
+          done
+
+          docker buildx imagetools create "${tag_args[@]}" "${image_refs[@]}"
 
       - name: Inspect manifest
         env:
@@ -1037,11 +1047,13 @@ jobs:
           DIGEST: ${{ steps.manifest.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          images=""
-          for tag in ${TAGS}; do
-            images+="${tag}@${DIGEST} "
+          mapfile -t tags < <(printf '%s\n' "$TAGS")
+          images=()
+          for tag in "${tags[@]}"; do
+            [ -n "$tag" ] || continue
+            images+=("${tag}@${DIGEST}")
           done
-          cosign sign --yes ${images}
+          cosign sign --yes "${images[@]}"
 
       - name: Verify container signature
         if: github.event_name != 'pull_request'
