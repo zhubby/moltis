@@ -74,6 +74,7 @@ packages = [
     "python3-pip",
     "nodejs",
     "npm",
+    "golang-go",
 ]
 ```
 
@@ -292,7 +293,7 @@ scope = "session"
 workspace_mount = "ro"
 backend = "auto"
 no_network = true
-packages = ["curl", "git", "jq", "python3", "nodejs"]
+packages = ["curl", "git", "jq", "python3", "nodejs", "golang-go"]
 
 [memory]
 backend = "builtin"

@@ -258,6 +258,7 @@ packages = [
     "npm",
     "ruby",
     "ruby-dev",
+    "golang-go",
     # Build toolchain & native deps
     "build-essential",
     "clang",

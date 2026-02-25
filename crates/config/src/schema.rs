@@ -1448,6 +1448,7 @@ fn default_sandbox_packages() -> Vec<String> {
         "npm",
         "ruby",
         "ruby-dev",
+        "golang-go",
         // Build toolchain & native deps
         "build-essential",
         "clang",
@@ -1933,5 +1934,11 @@ OPENROUTER_API_KEY = "sk-or-test"
         let entry = ProviderEntry::default();
         assert!(entry.fetch_models);
         assert!(entry.models.is_empty());
+    }
+
+    #[test]
+    fn sandbox_defaults_include_go_runtime() {
+        let sandbox = SandboxConfig::default();
+        assert!(sandbox.packages.iter().any(|pkg| pkg == "golang-go"));
     }
 }

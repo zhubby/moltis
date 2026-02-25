@@ -542,6 +542,8 @@ fn canonical_sandbox_packages(packages: &[String]) -> Vec<String> {
 }
 
 const SANDBOX_HOME_DIR: &str = "/home/sandbox";
+const GOGCLI_MODULE_PATH: &str = "github.com/steipete/gogcli/cmd/gog";
+const GOGCLI_VERSION: &str = "latest";
 #[cfg(target_os = "macos")]
 const APPLE_CONTAINER_SAFE_WORKDIR: &str = "/tmp";
 
@@ -551,6 +553,10 @@ fn sandbox_image_dockerfile(base: &str, packages: &[String]) -> String {
         "FROM {base}\n\
 RUN apt-get update -qq && apt-get install -y -qq {pkg_list} \
     && mkdir -p {SANDBOX_HOME_DIR}\n\
+RUN if command -v go >/dev/null 2>&1; then \
+        GOBIN=/usr/local/bin go install {GOGCLI_MODULE_PATH}@{GOGCLI_VERSION} \
+        && ln -sf /usr/local/bin/gog /usr/local/bin/gogcli; \
+    fi\n\
 RUN curl -fsSL https://mise.jdx.dev/install.sh | sh \
     && echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> /etc/profile.d/mise.sh\n\
 ENV HOME={SANDBOX_HOME_DIR}\n\
@@ -3729,6 +3735,13 @@ mod tests {
             "RUN apt-get update -qq && apt-get install -y -qq curl && mkdir -p /home/sandbox"
         ));
         assert!(!dockerfile.contains("RUN mkdir -p /home/sandbox\n"));
+    }
+
+    #[test]
+    fn test_sandbox_image_dockerfile_installs_gogcli() {
+        let dockerfile = sandbox_image_dockerfile("ubuntu:25.10", &["curl".into()]);
+        assert!(dockerfile.contains(&format!("go install {GOGCLI_MODULE_PATH}@{GOGCLI_VERSION}")));
+        assert!(dockerfile.contains("ln -sf /usr/local/bin/gog /usr/local/bin/gogcli"));
     }
 
     #[test]
