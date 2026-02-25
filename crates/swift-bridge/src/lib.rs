@@ -227,10 +227,10 @@ fn resolve_provider(request: &ChatRequest) -> Option<std::sync::Arc<dyn LlmProvi
     let registry = BRIDGE.registry.read().unwrap_or_else(|e| e.into_inner());
 
     // Try explicit model first
-    if let Some(model_id) = &request.model {
-        if let Some(provider) = registry.get(model_id) {
-            return Some(provider);
-        }
+    if let Some(model_id) = &request.model
+        && let Some(provider) = registry.get(model_id)
+    {
+        return Some(provider);
     }
 
     // Fall back to first available provider
