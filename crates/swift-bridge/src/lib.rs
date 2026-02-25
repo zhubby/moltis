@@ -76,6 +76,9 @@ struct ChatResponse {
     config_dir: String,
     default_soul: String,
     validation: Option<ValidationSummary>,
+    input_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+    duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -239,35 +242,47 @@ fn resolve_provider(
 fn build_chat_response(request: ChatRequest) -> String {
     let validation = build_validation_summary(request.config_toml.as_deref());
 
-    let (reply, model, provider_name) = match resolve_provider(&request) {
-        Some(provider) => {
-            let model_id = provider.id().to_string();
-            let provider_name = provider.name().to_string();
-            let messages = vec![AgentChatMessage::User {
-                content: UserContent::text(&request.message),
-            }];
+    let (reply, model, provider_name, input_tokens, output_tokens, duration_ms) =
+        match resolve_provider(&request) {
+            Some(provider) => {
+                let model_id = provider.id().to_string();
+                let provider_name = provider.name().to_string();
+                let messages = vec![AgentChatMessage::User {
+                    content: UserContent::text(&request.message),
+                }];
 
-            match BRIDGE.runtime.block_on(provider.complete(&messages, &[])) {
-                Ok(response) => {
-                    let text = response
-                        .text
-                        .unwrap_or_else(|| "(empty response)".to_owned());
-                    (text, Some(model_id), Some(provider_name))
-                },
-                Err(error) => {
-                    let msg = format!("LLM error: {error}");
-                    (msg, Some(model_id), Some(provider_name))
-                },
-            }
-        },
-        None => {
-            let msg = format!(
-                "No LLM provider configured. Rust bridge received: {}",
-                request.message
-            );
-            (msg, None, None)
-        },
-    };
+                let start = std::time::Instant::now();
+                match BRIDGE.runtime.block_on(provider.complete(&messages, &[])) {
+                    Ok(response) => {
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        let text = response
+                            .text
+                            .unwrap_or_else(|| "(empty response)".to_owned());
+                        let in_tok = response.usage.input_tokens;
+                        let out_tok = response.usage.output_tokens;
+                        (
+                            text,
+                            Some(model_id),
+                            Some(provider_name),
+                            Some(in_tok),
+                            Some(out_tok),
+                            Some(elapsed),
+                        )
+                    },
+                    Err(error) => {
+                        let msg = format!("LLM error: {error}");
+                        (msg, Some(model_id), Some(provider_name), None, None, None)
+                    },
+                }
+            },
+            None => {
+                let msg = format!(
+                    "No LLM provider configured. Rust bridge received: {}",
+                    request.message
+                );
+                (msg, None, None, None, None, None)
+            },
+        };
 
     let response = ChatResponse {
         reply,
@@ -276,6 +291,9 @@ fn build_chat_response(request: ChatRequest) -> String {
         config_dir: config_dir_string(),
         default_soul: moltis_config::DEFAULT_SOUL.to_owned(),
         validation,
+        input_tokens,
+        output_tokens,
+        duration_ms,
     };
     encode_json(&response)
 }
