@@ -22,7 +22,7 @@ pub enum ImportAction {
     /// Import specific categories from OpenClaw.
     Select {
         /// Comma-separated list of categories to import.
-        /// Valid: identity, providers, skills, memory, channels, sessions, mcp_servers
+        /// Valid: identity, providers, skills, memory, channels, sessions
         #[arg(short, long, value_delimiter = ',')]
         categories: Vec<String>,
         /// Dry-run: show what would be imported without writing anything.
@@ -97,11 +97,6 @@ fn handle_detect(json_output: bool) -> anyhow::Result<()> {
         "Sessions",
         scan.sessions_count > 0,
         Some(format!("{} session(s)", scan.sessions_count)),
-    );
-    print_scan_item(
-        "MCP Servers",
-        scan.mcp_servers_count > 0,
-        Some(format!("{} server(s)", scan.mcp_servers_count)),
     );
 
     if !scan.unsupported_channels.is_empty() {
@@ -242,7 +237,6 @@ fn parse_selection(categories: &[String], warn_unknown: bool) -> ParsedSelection
             "memory" => sel.memory = true,
             "channels" => sel.channels = true,
             "sessions" => sel.sessions = true,
-            "mcp_servers" | "mcp-servers" | "mcp" => sel.mcp_servers = true,
             other => {
                 unknown_categories.push(other.to_string());
                 if warn_unknown {
@@ -297,11 +291,6 @@ fn print_scan_summary(scan: &moltis_openclaw_import::ImportScan) {
         scan.sessions_count > 0,
         Some(format!("{} session(s)", scan.sessions_count)),
     );
-    print_scan_item(
-        "MCP Servers",
-        scan.mcp_servers_count > 0,
-        Some(format!("{} server(s)", scan.mcp_servers_count)),
-    );
 }
 
 fn print_selection(sel: &moltis_openclaw_import::ImportSelection) {
@@ -312,7 +301,6 @@ fn print_selection(sel: &moltis_openclaw_import::ImportSelection) {
         ("Memory", sel.memory),
         ("Channels", sel.channels),
         ("Sessions", sel.sessions),
-        ("MCP Servers", sel.mcp_servers),
     ];
     for (name, enabled) in items {
         let mark = if enabled {
