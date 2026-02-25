@@ -169,7 +169,7 @@ jobs:
           retention-days: 14
 
   build-deb:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
@@ -265,7 +265,7 @@ jobs:
             target/${{ matrix.target }}/debian/*.crt
 
   build-rpm:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
@@ -361,7 +361,7 @@ jobs:
             target/${{ matrix.target }}/generate-rpm/*.crt
 
   build-arch:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
@@ -450,7 +450,7 @@ jobs:
             *.pkg.tar.zst.crt
 
   build-appimage:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
@@ -561,7 +561,7 @@ jobs:
             *.AppImage.crt
 
   build-snap:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     runs-on: ubuntu-latest
     name: Build Snap
     permissions:
@@ -612,7 +612,7 @@ jobs:
             ${{ steps.build-snap.outputs.snap }}.crt
 
   build-homebrew-binaries:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
@@ -763,7 +763,7 @@ jobs:
             *.app.zip.crt
 
   build-windows-exe:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     runs-on: windows-latest
     name: Build .exe (x86_64)
     permissions:
@@ -836,7 +836,7 @@ jobs:
             *.exe.crt
 
   build-docker:
-    needs: [clippy, test, e2e]
+    needs: [clippy, test, e2e, build-macos-app]
     strategy:
       matrix:
         include:
